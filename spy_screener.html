@@ -761,33 +761,31 @@ function buildSpreadTable(spreads, topPicks, m, eventInfo, ivp, rowClass) {
 function renderSpreads(exps, m, eventInfo, ivp) {
   const strategy=selectStrategy(ivp);
   state.strategy=strategy;
-  const isBull=m.callDelta>m.putDelta;
   let allHtml='';
   const allSpreads=[];
 
   for(const exp of exps){
     let sections='';
 
-    if(strategy!=='credit'){
-      // デビット
-      const bullSpreads=generateDebitSpreads(m.spyPrice,m.vixToday,'bull',exp.dte);
-      const bearSpreads=generateDebitSpreads(m.spyPrice,m.vixToday,'bear',exp.dte);
-      allSpreads.push(...bullSpreads,...bearSpreads);
-      sections+=`<div class="sub-section-title bull-title">📈 ブルコールスプレッド（デビット）</div>`;
-      sections+=buildSpreadTable(bullSpreads,state.topPicks,m,eventInfo,ivp,'');
-      sections+=`<div class="sub-section-title bear-title" style="margin-top:14px">📉 ベアプットスプレッド（デビット）</div>`;
-      sections+=buildSpreadTable(bearSpreads,state.topPicks,m,eventInfo,ivp,'');
-    }
-    if(strategy!=='debit'){
-      // クレジット
-      const bullCred=generateCreditSpreads(m.spyPrice,m.vixToday,'bull-credit',exp.dte);
-      const bearCred=generateCreditSpreads(m.spyPrice,m.vixToday,'bear-credit',exp.dte);
-      allSpreads.push(...bullCred,...bearCred);
-      sections+=`<div class="sub-section-title credit-bull-title" style="margin-top:14px">💜 ブルプットスプレッド（クレジット）</div>`;
-      sections+=buildSpreadTable(bullCred,state.topPicks,m,eventInfo,ivp,'');
-      sections+=`<div class="sub-section-title credit-bear-title" style="margin-top:14px">🔴 ベアコールスプレッド（クレジット）</div>`;
-      sections+=buildSpreadTable(bearCred,state.topPicks,m,eventInfo,ivp,'');
-    }
+    // デビット（常に表示）
+    const bullSpreads=generateDebitSpreads(m.spyPrice,m.vixToday,'bull',exp.dte);
+    const bearSpreads=generateDebitSpreads(m.spyPrice,m.vixToday,'bear',exp.dte);
+    allSpreads.push(...bullSpreads,...bearSpreads);
+    console.log(`[デビット DTE${exp.dte}] ブルコール:${bullSpreads.length}件 / ベアプット:${bearSpreads.length}件`);
+    sections+=`<div class="sub-section-title bull-title">📈 ブルコールスプレッド（デビット）</div>`;
+    sections+=buildSpreadTable(bullSpreads,state.topPicks,m,eventInfo,ivp,'');
+    sections+=`<div class="sub-section-title bear-title" style="margin-top:14px">📉 ベアプットスプレッド（デビット）</div>`;
+    sections+=buildSpreadTable(bearSpreads,state.topPicks,m,eventInfo,ivp,'');
+
+    // クレジット（常に表示）
+    const bullCred=generateCreditSpreads(m.spyPrice,m.vixToday,'bull-credit',exp.dte);
+    const bearCred=generateCreditSpreads(m.spyPrice,m.vixToday,'bear-credit',exp.dte);
+    allSpreads.push(...bullCred,...bearCred);
+    console.log(`[クレジット DTE${exp.dte}] ブルプット:${bullCred.length}件 / ベアコール:${bearCred.length}件`);
+    sections+=`<div class="sub-section-title credit-bull-title" style="margin-top:14px">💜 ブルプットスプレッド（クレジット）</div>`;
+    sections+=buildSpreadTable(bullCred,state.topPicks,m,eventInfo,ivp,'');
+    sections+=`<div class="sub-section-title credit-bear-title" style="margin-top:14px">🔴 ベアコールスプレッド（クレジット）</div>`;
+    sections+=buildSpreadTable(bearCred,state.topPicks,m,eventInfo,ivp,'');
 
     allHtml+=`<div class="card">
       <div class="expiry-header">${exp.date} <span class="dte-badge">残存 ${exp.dte} 日</span></div>
