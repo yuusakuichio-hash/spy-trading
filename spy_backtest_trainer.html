@@ -1,0 +1,2179 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>SPY オプション バックテストトレーナー</title>
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#080b0f;color:#e2e8f0;font-size:14px;min-height:100vh}
+.header{background:#0f1318;border-bottom:1px solid #1e2530;padding:14px 20px;display:flex;justify-content:space-between;align-items:center}
+.header h1{font-size:16px;font-weight:700;color:#fff}
+.header-right{display:flex;gap:16px;align-items:center}
+.score-badge{background:#1e2530;border-radius:8px;padding:6px 14px;font-size:13px}
+.score-badge span{color:#f97316;font-weight:700}
+.main{max-width:900px;margin:0 auto;padding:20px}
+.card{background:#0f1318;border:1px solid #1e2530;border-radius:12px;padding:18px;margin-bottom:14px}
+.market-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px}
+.market-item{background:#141920;border-radius:8px;padding:10px 14px;text-align:center}
+.market-label{font-size:10px;color:#475569;margin-bottom:4px}
+.market-value{font-size:20px;font-weight:700}
+.market-sub{font-size:10px;margin-top:2px}
+.event-banner{border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:12px}
+.event-warn{background:#2a1f00;border:1px solid #5a3a00;color:#f59e0b}
+.event-ok{background:#0d2a1a;border:1px solid #1a5a30;color:#10b981}
+.section-title{font-size:11px;font-weight:700;color:#475569;letter-spacing:1px;text-transform:uppercase;margin-bottom:10px}
+.btn{padding:8px 16px;border-radius:8px;border:none;cursor:pointer;font-size:13px;font-weight:600;transition:all 0.15s}
+.btn-primary{background:#f97316;color:#fff}
+.btn-primary:hover{background:#ea6c0e}
+.btn-secondary{background:#1e2530;color:#94a3b8;border:1px solid #2a3340}
+.btn-secondary:hover{background:#2a3340}
+.btn-bull{background:#0d2a1a;color:#10b981;border:1px solid #1a5a30}
+.btn-bull.selected,.btn-bull:hover{background:#10b981;color:#000}
+.btn-bear{background:#2a0d0d;color:#ef4444;border:1px solid #5a1a1a}
+.btn-bear.selected,.btn-bear:hover{background:#ef4444;color:#fff}
+.btn-skip{background:#151c25;color:#64748b;border:1px solid #2a3340}
+.btn-skip.selected,.btn-skip:hover{background:#2a3340;color:#e2e8f0}
+.btn-disabled{opacity:0.4;cursor:not-allowed}
+.spread-table{width:100%;border-collapse:collapse;font-size:12px}
+.spread-table th{padding:7px 10px;text-align:left;color:#475569;border-bottom:1px solid #1e2530;font-weight:500}
+.spread-table td{padding:8px 10px;border-bottom:1px solid #141920}
+.spread-table tr:hover{background:#141920;cursor:pointer}
+.spread-table tr.selected-row{background:#1e2d1e !important;outline:1px solid #10b981}
+.spread-table tr.selected-row-bear{background:#2d1e1e !important;outline:1px solid #ef4444}
+.rr-good{color:#10b981;font-weight:700}
+.rr-ok{color:#f59e0b;font-weight:700}
+.rr-low{color:#ef4444;font-weight:700}
+.result-card{border-radius:12px;padding:20px;text-align:center;margin-bottom:14px}
+.result-win{background:#0d2a1a;border:2px solid #10b981}
+.result-loss{background:#2a0d0d;border:2px solid #ef4444}
+.result-title{font-size:28px;font-weight:700;margin-bottom:8px}
+.result-win .result-title{color:#10b981}
+.result-loss .result-title{color:#ef4444}
+.price-chart-container{position:relative;height:180px;margin-bottom:14px}
+.step-bar{display:flex;gap:6px;margin-bottom:14px}
+.step-dot{width:28px;height:6px;border-radius:3px;background:#1e2530}
+.step-dot.done{background:#10b981}
+.step-dot.current{background:#f97316}
+.step-dot.wrong{background:#ef4444}
+.step-dot.skip{background:#475569}
+.loading{text-align:center;padding:60px;color:#475569}
+.spinner{width:32px;height:32px;border:3px solid #1e2530;border-top-color:#f97316;border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto 12px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.final-screen{text-align:center;padding:40px}
+.final-score{font-size:64px;font-weight:700;color:#f97316;margin:16px 0}
+.history-row{display:flex;justify-content:space-between;padding:8px 12px;border-radius:6px;margin-bottom:4px;font-size:12px}
+.history-win{background:#0d2a1a}
+.history-loss{background:#2a0d0d}
+.tag{display:inline-block;padding:2px 8px;border-radius:12px;font-size:10px;font-weight:600}
+.tag-bull{background:#0d2a1a;color:#10b981}
+.tag-bear{background:#2a0d0d;color:#ef4444}
+.tag-win{background:#10b981;color:#000}
+.tag-loss{background:#ef4444;color:#fff}
+.hint-box{background:#141920;border-radius:8px;padding:12px;margin-top:10px;font-size:12px;color:#64748b;line-height:1.6}
+select{background:#141920;border:1px solid #2a3340;color:#e2e8f0;padding:6px 10px;border-radius:6px;font-size:12px}
+.price-annotation{font-size:11px;color:#64748b}
+#priceChart{height:240px;width:100%;border-radius:6px;overflow:hidden;background:#0a0d12}
+.iv-badge{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700}
+.iv-low{background:#0d2a1a;color:#10b981}
+.iv-mid{background:#2a1f00;color:#f59e0b}
+.iv-high{background:#2a0d0d;color:#ef4444}
+/* オプションチェーン */
+.chain-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.chain-table{width:100%;border-collapse:collapse;font-size:11px;min-width:600px}
+.chain-head-calls{text-align:center;color:#10b981;font-size:10px;font-weight:700;letter-spacing:1.5px;padding:7px 4px;background:#0a1510;border-bottom:1px solid #1a3a25}
+.chain-head-puts{text-align:center;color:#ef4444;font-size:10px;font-weight:700;letter-spacing:1.5px;padding:7px 4px;background:#150a0a;border-bottom:1px solid #3a1a1a}
+.chain-head-mid{text-align:center;color:#475569;font-size:10px;font-weight:700;letter-spacing:1px;padding:7px 4px;background:#0f1318;border-bottom:1px solid #1e2530}
+.chain-subhead th{padding:4px 6px;font-size:10px;font-weight:500;color:#475569;border-bottom:1px solid #1e2530}
+.chain-subhead .ch-call{text-align:right;background:#090e0c}
+.chain-subhead .ch-put{text-align:left;background:#0e0909}
+.chain-subhead .ch-strike{text-align:center;background:#0f1318}
+.chain-row td{padding:4px 6px;border-bottom:1px solid #0d1015}
+.ch-call-cell{text-align:right;color:#94a3b8;background:#090e0c}
+.ch-call-cell.itm{background:#0a1c12;color:#b8d8c4}
+.ch-put-cell{text-align:left;color:#94a3b8;background:#0e0909}
+.ch-put-cell.itm{background:#1c0a0a;color:#d8b8b8}
+.ch-strike-cell{text-align:center;font-weight:700;color:#cbd5e1;background:#0f1318;padding:4px 10px;white-space:nowrap}
+.ch-strike-cell.atm{color:#f97316;background:#1a1100}
+.chain-row.atm-row td{border-top:1px solid rgba(249,115,22,0.5);border-bottom:1px solid rgba(249,115,22,0.5)}
+.ch-bid{color:#60a5fa !important}
+.ch-ask{color:#f87171 !important}
+.chain-row:hover td{filter:brightness(1.15)}
+.chain-row.hl-bull td{background:#0a2015 !important;box-shadow:inset 0 0 0 1px #10b981}
+.chain-row.hl-bear td{background:#20080a !important;box-shadow:inset 0 0 0 1px #ef4444}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>📊 SPY オプション バックテストトレーナー</h1>
+  <div class="header-right">
+    <div class="score-badge">問題 <span id="qNum">1</span>/10</div>
+    <div class="score-badge">成績 <span id="scoreDisplay">0勝0敗</span></div>
+    <div class="score-badge">損益 <span id="pnlDisplay">$0</span></div>
+  </div>
+</div>
+<div class="main">
+  <div id="stepBar" class="step-bar"></div>
+  <div id="appContent">
+    <div class="loading"><div class="spinner"></div>データ読み込み中...</div>
+  </div>
+</div>
+
+<script>
+// ========== 過去シナリオデータ（BS推定）==========
+// 実際の過去のSPY価格・VIX・トレンドから生成
+const SCENARIOS = [
+  // 2020年 コロナ前後
+  {date:'2020-01-15',spy:333.8,sma20:328.1,vix:12.5,trend:'bull',desc:'高値圏での推移。VIX極めて低位。米中貿易協議が一服し市場は楽観的。',events:[],expiryDays:28,endSpy:325.2,shock:'コロナショック初動で急落',ivRank:10,ivPct:12,rate:0.0175},
+  {date:'2020-03-18',spy:240.4,sma20:298.7,vix:75.5,trend:'bear',desc:'コロナショック真っ只中。VIX 75超。株式市場は連日の急落。',events:[{date:'2020-03-18',event:'Fed緊急声明',impact:'high'}],expiryDays:21,endSpy:253.1,shock:'Fed介入で急反発',ivRank:99,ivPct:99,rate:0.0025},
+  {date:'2020-05-20',spy:298.5,sma20:285.4,vix:28.3,trend:'bull',desc:'コロナショック後の反発相場。SMA20を回復。VIX高止まりが続く。',events:[],expiryDays:25,endSpy:314.2,shock:null,ivRank:68,ivPct:72,rate:0.0025},
+  {date:'2020-08-05',spy:329.4,sma20:319.8,vix:23.4,trend:'bull',desc:'V字回復中。7日後にCPIを控える。低VIXが続いているが慎重さも必要。',events:[{date:'2020-08-12',event:'CPI',impact:'high'}],expiryDays:28,endSpy:348.5,shock:null,ivRank:52,ivPct:58,rate:0.0025},
+  // 2021年
+  {date:'2021-01-20',spy:385.7,sma20:374.2,vix:21.6,trend:'bull',desc:'バイデン就任。市場は上昇基調。',events:[],expiryDays:25,endSpy:378.5,shock:'短期調整で下落',ivRank:40,ivPct:45,rate:0.0025},
+  {date:'2021-06-09',spy:420.1,sma20:413.2,vix:15.8,trend:'bull',desc:'ワクチン普及で経済再開。7日後にFOMCを控える。低VIX継続中。',events:[{date:'2021-06-16',event:'FOMC金利発表',impact:'high'}],expiryDays:21,endSpy:431.2,shock:null,ivRank:18,ivPct:22,rate:0.0025},
+  {date:'2021-11-03',spy:462.8,sma20:450.5,vix:17.2,trend:'bull',desc:'インフレ懸念が台頭し始めた時期。7日後にCPIを控える。市場はまだ楽観的。',events:[{date:'2021-11-10',event:'CPI発表',impact:'high'}],expiryDays:28,endSpy:458.3,shock:'CPI高止まりで下落',ivRank:32,ivPct:38,rate:0.0025},
+  // 2022年 利上げ局面
+  {date:'2022-01-19',spy:459.0,sma20:472.1,vix:25.4,trend:'bear',desc:'FRBタカ派転換。利上げ開始前。SMA20下回る。',events:[{date:'2022-01-26',event:'FOMC金利発表',impact:'high'}],expiryDays:21,endSpy:432.5,shock:'FOMC後に加速下落',ivRank:55,ivPct:62,rate:0.0025},
+  {date:'2022-06-08',spy:408.2,sma20:418.5,vix:26.8,trend:'bear',desc:'利上げ局面継続。7日後にFOMC金利発表を控える。インフレ40年ぶり高水準。',events:[{date:'2022-06-15',event:'FOMC金利発表',impact:'high'}],expiryDays:25,endSpy:385.5,shock:'FOMC後に続落加速',ivRank:78,ivPct:82,rate:0.0150},
+  {date:'2022-10-05',spy:361.8,sma20:373.2,vix:31.4,trend:'bear',desc:'年初来-25%。インフレピーク期待が出始める。8日後にCPIを控える。',events:[{date:'2022-10-13',event:'CPI発表',impact:'high'}],expiryDays:21,endSpy:388.2,shock:'CPI発表後に急反発（売り枯れ）',ivRank:80,ivPct:85,rate:0.0325},
+  // 2023年
+  {date:'2023-03-15',spy:391.2,sma20:398.4,vix:26.1,trend:'bear',desc:'SVB破綻直後。銀行危機懸念。',events:[{date:'2023-03-22',event:'FOMC金利発表',impact:'high'}],expiryDays:21,endSpy:405.3,shock:'Fed対応で安心感回復',ivRank:52,ivPct:58,rate:0.0475},
+  {date:'2023-07-20',spy:452.8,sma20:440.1,vix:13.9,trend:'bull',desc:'ソフトランディング期待が高まる。VIX低位継続。6日後にFOMCを控える。',events:[{date:'2023-07-26',event:'FOMC金利発表',impact:'high'}],expiryDays:28,endSpy:447.6,shock:'利上げ打ち止め期待で小動き',ivRank:8,ivPct:10,rate:0.0525},
+  {date:'2023-10-18',spy:422.3,sma20:438.1,vix:19.8,trend:'bear',desc:'金利上昇で株式調整。SMA20下回る。9日後にPCEを控える。',events:[{date:'2023-10-27',event:'PCE',impact:'medium'}],expiryDays:25,endSpy:434.0,shock:'10月底から急反発',ivRank:42,ivPct:48,rate:0.0525},
+  // 2024年
+  {date:'2024-01-17',spy:477.5,sma20:469.3,vix:13.2,trend:'bull',desc:'AI相場が加速。低ボラティリティ継続。',events:[],expiryDays:28,endSpy:493.8,shock:null,ivRank:10,ivPct:12,rate:0.0550},
+  {date:'2024-04-10',spy:516.8,sma20:521.4,vix:16.9,trend:'bear',desc:'中東緊張で調整入り。7日後に雇用統計を控える。インフレ再燃懸念。',events:[{date:'2024-04-17',event:'雇用統計',impact:'high'}],expiryDays:21,endSpy:521.4,shock:'地政学リスク後退で回復',ivRank:38,ivPct:44,rate:0.0550},
+  {date:'2024-07-03',spy:547.2,sma20:538.6,vix:12.2,trend:'bull',desc:'AI・半導体相場が続伸中。8日後にCPIを控える。極めて低VIX。',events:[{date:'2024-07-11',event:'CPI発表',impact:'high'}],expiryDays:28,endSpy:548.3,shock:'CPI後に利確売り',ivRank:6,ivPct:8,rate:0.0550},
+  {date:'2024-08-05',spy:513.0,sma20:548.7,vix:38.6,trend:'bear',desc:'円キャリー巻き戻しで歴史的暴落。VIX急騰。',events:[],expiryDays:21,endSpy:538.2,shock:'過剰反応が修正され急反発',ivRank:92,ivPct:95,rate:0.0550},
+  {date:'2024-09-04',spy:547.8,sma20:543.2,vix:18.6,trend:'bull',desc:'8月ショックから回復中。7日後にCPIを控える。大統領選前の不透明感。',events:[{date:'2024-09-11',event:'CPI',impact:'high'}],expiryDays:25,endSpy:571.0,shock:'利下げ期待で上昇継続',ivRank:28,ivPct:33,rate:0.0550},
+  {date:'2024-11-06',spy:594.0,sma20:574.1,vix:16.0,trend:'bull',desc:'トランプ当選翌日。株価急騰。',events:[],expiryDays:21,endSpy:608.5,shock:'トランプラリー継続',ivRank:20,ivPct:25,rate:0.0500},
+  // 2025年
+  {date:'2025-01-08',spy:582.1,sma20:593.6,vix:19.2,trend:'bear',desc:'新政権政策不透明感。SMA20下回る。7日後にCPIを控える。',events:[{date:'2025-01-15',event:'CPI',impact:'high'}],expiryDays:25,endSpy:604.0,shock:'物価安定確認で反発',ivRank:32,ivPct:38,rate:0.0450},
+  {date:'2025-03-05',spy:574.3,sma20:596.8,vix:21.8,trend:'bear',desc:'関税懸念で下落トレンド。SMAから大きく乖離。7日後にCPIを控える。',events:[{date:'2025-03-12',event:'CPI',impact:'high'}],expiryDays:28,endSpy:551.0,shock:'関税拡大発表で続落',ivRank:52,ivPct:58,rate:0.0425},
+  {date:'2025-04-07',spy:503.0,sma20:560.0,vix:52.0,trend:'bear',desc:'関税ショック。VIX 52。年初来-15%超。',events:[],expiryDays:21,endSpy:534.0,shock:'一時停止発表で急反発',ivRank:96,ivPct:98,rate:0.0425},
+  {date:'2025-06-11',spy:595.2,sma20:578.4,vix:15.8,trend:'bull',desc:'関税ショック後の反発局面が続く。高値水準。7日後にFOMCを控える。',events:[{date:'2025-06-18',event:'FOMC金利発表',impact:'high'}],expiryDays:28,endSpy:611.0,shock:null,ivRank:18,ivPct:22,rate:0.0400},
+  // ===== ベアシナリオ追加 =====
+  // 2022年利上げ局面
+  {date:'2022-09-14',spy:385.0,sma20:418.0,vix:27.5,trend:'bear',desc:'インフレ高止まり。FRB利上げ継続。明確な下落トレンド。SMAから8%乖離。',events:[{date:'2022-09-21',event:'FOMC金利発表',impact:'high'}],expiryDays:25,endSpy:365.0,shock:'FOMC後に続落',ivRank:72,ivPct:78,rate:0.0300},
+  {date:'2022-04-06',spy:450.0,sma20:485.0,vix:25.8,trend:'bear',desc:'利上げ開始直後。インフレ8%超。SMAを7%下回る。翌週CPIを控える。',events:[{date:'2022-04-13',event:'CPI発表',impact:'high'}],expiryDays:28,endSpy:422.0,shock:'CPI9%超で急落継続',ivRank:60,ivPct:66,rate:0.0050},
+  {date:'2022-07-14',spy:375.0,sma20:407.0,vix:28.5,trend:'bear',desc:'CPI9.1%最高値発表直後。年初来-20%超。FOMCまで2週間。',events:[{date:'2022-07-27',event:'FOMC金利発表',impact:'high'}],expiryDays:21,endSpy:402.0,shock:'FOMC後のピボット期待で急反発（ベア損失）',ivRank:75,ivPct:80,rate:0.0175},
+  {date:'2022-08-26',spy:397.0,sma20:424.0,vix:26.2,trend:'bear',desc:'Jackson Hole直前。FRBタカ派再確認。SMAを6%下回る。イベントなし。',events:[],expiryDays:28,endSpy:373.0,shock:'パウエルタカ派発言で急落',ivRank:65,ivPct:70,rate:0.0250},
+  {date:'2022-11-02',spy:365.0,sma20:393.0,vix:30.2,trend:'bear',desc:'FOMC翌日。利上げ継続。年初来-24%。イベント空白期間。',events:[],expiryDays:25,endSpy:347.0,shock:'年末にかけて下落継続',ivRank:78,ivPct:83,rate:0.0400},
+  {date:'2022-12-15',spy:384.0,sma20:409.0,vix:27.8,trend:'bear',desc:'年末の利上げ4.25%決定後。PCEを1週間後に控える。SMAから6%乖離。',events:[{date:'2022-12-23',event:'PCE',impact:'medium'}],expiryDays:21,endSpy:374.0,shock:'年末薄商いで下落継続',ivRank:68,ivPct:74,rate:0.0425},
+  // 2022年初頭・地政学リスク
+  {date:'2022-02-24',spy:421.0,sma20:452.0,vix:37.2,trend:'bear',desc:'ロシア、ウクライナ侵攻開始。地政学リスク急騰。VIX37。SMAを7%下回る。',events:[{date:'2022-03-16',event:'FOMC金利発表',impact:'high'}],expiryDays:28,endSpy:445.0,shock:'地政学リスク後退で急反発（ベア損失）',ivRank:85,ivPct:88,rate:0.0025},
+  // 2020年コロナ初動
+  {date:'2020-02-27',spy:284.0,sma20:318.0,vix:39.2,trend:'bear',desc:'コロナ感染拡大で株式市場が急落。週間下落率-12%超。SMAを11%下回る。',events:[],expiryDays:21,endSpy:226.0,shock:'ロックダウン宣言で急落加速',ivRank:90,ivPct:93,rate:0.0175},
+  // 2018年VIXショック
+  {date:'2018-02-09',spy:258.0,sma20:275.0,vix:33.5,trend:'bear',desc:'VIXショック翌週。VIX商品の強制清算で相場が不安定。翌週CPIを控える。',events:[{date:'2018-02-14',event:'CPI発表',impact:'high'}],expiryDays:21,endSpy:275.0,shock:'パニック売り後に急反発（ベア損失）',ivRank:82,ivPct:86,rate:0.0175},
+  // 2024年中東緊張
+  {date:'2024-04-19',spy:496.0,sma20:525.0,vix:29.7,trend:'bear',desc:'中東緊張激化・利下げ期待後退。4月最大の調整。FOMCまで11日。',events:[{date:'2024-04-30',event:'FOMC金利発表',impact:'high'}],expiryDays:28,endSpy:512.0,shock:'FOMC前に底打ち・小反発（ベア損失）',ivRank:72,ivPct:77,rate:0.0550},
+  // 2025年関税ショック深刻化
+  {date:'2025-03-28',spy:543.0,sma20:581.0,vix:28.2,trend:'bear',desc:'関税リスクが燻り続ける下落トレンド。SMAを6.5%下回る。市場は政策不透明感で売り優勢。',events:[],expiryDays:21,endSpy:508.0,shock:'4/2関税発動で急落加速',ivRank:68,ivPct:73,rate:0.0425},
+  {date:'2025-04-14',spy:534.0,sma20:571.0,vix:35.4,trend:'bear',desc:'関税ショック後の不安定相場。一時停止発表あり。SMAを6.5%下回る。',events:[],expiryDays:21,endSpy:558.0,shock:'貿易交渉期待で小反発（ベア損失）',ivRank:88,ivPct:91,rate:0.0425},
+];
+
+// ========== チャートインスタンス管理 ==========
+let currentChart = null;
+
+// ========== アプリ状態 ==========
+let state = {
+  questions: [],
+  current: 0,
+  wins: 0,
+  losses: 0,
+  totalPnL: 0,
+  history: [],
+  selectedStrat: null,
+  selectedSpread: null,
+  currentSpreads: [],
+  checklist: null,
+  phase: 'loading', // loading, question, result, final
+  spreadWidth: 5,
+  spreadAtmOnly: false,
+  exitScenario: null,
+  exitArgs: null,
+  limitOrder: null,
+  holdingSim: null,
+};
+
+// ========== BS推定プレミアム ==========
+function normCDF(x) {
+  const a1=0.254829592,a2=-0.284496736,a3=1.421413741,a4=-1.453152027,a5=1.061405429,p=0.3275911;
+  const sign = x<0?-1:1;
+  x = Math.abs(x)/Math.sqrt(2);
+  const t = 1/(1+p*x);
+  const y = 1-(((((a5*t+a4)*t)+a3)*t+a2)*t+a1)*t*Math.exp(-x*x);
+  return 0.5*(1+sign*y);
+}
+
+function bsPrice(S, K, T, r, sigma, type) {
+  if(T<=0) return Math.max(0, type==='call'?S-K:K-S);
+  const d1 = (Math.log(S/K) + (r+0.5*sigma*sigma)*T)/(sigma*Math.sqrt(T));
+  const d2 = d1 - sigma*Math.sqrt(T);
+  if(type==='call') return S*normCDF(d1) - K*Math.exp(-r*T)*normCDF(d2);
+  return K*Math.exp(-r*T)*normCDF(-d2) - S*normCDF(-d1);
+}
+
+function estimateIV(spy, vix) {
+  // ATM IVはVIXの約1.1倍（実証的な近似）
+  return (vix / 100) * 1.1;
+}
+
+function generateSpreads(spy, vix, strat, expiryDays, width, atmOnly, rate) {
+  width = width || 5;
+  atmOnly = atmOnly || false;
+  rate = (rate !== undefined) ? rate : 0.053;
+  const T = expiryDays / 365;
+  const r = rate;
+  const baseSigma = estimateIV(spy, vix);
+  const spreads = [];
+  const atm = Math.round(spy);
+
+  // チェーンと同じskewIV + Ask/Bidで価格計算（delta付き）
+  function strikeData(K, type) {
+    const sigmaK = skewIV(baseSigma, spy, K);
+    const g = bsGreeks(spy, K, T, r, sigmaK, type);
+    const half = Math.max(0.02, g.price * 0.015 + 0.015);
+    return {
+      ask: +Math.max(0.02, g.price + half).toFixed(2),
+      bid: +Math.max(0.01, g.price - half).toFixed(2),
+      iv:  +(sigmaK * 100).toFixed(1),
+      delta: Math.abs(g.delta),
+    };
+  }
+
+  // ATMフィルター時はoffset範囲を絞る（ATM中心±2）
+  const bullMin = atmOnly ? -1 : -2;
+  const bullMax = atmOnly ? 3 : 8;
+  const bearMax = atmOnly ? 1 : 2;
+  const bearMin = atmOnly ? -3 : -8;
+
+  if(strat === 'bull') {
+    for(let offset = bullMin; offset <= bullMax; offset++) {
+      const bs = atm + offset;
+      const ss = bs + width;
+      const bO = strikeData(bs, 'call');
+      const sO = strikeData(ss, 'call');
+      const net = +(bO.ask - sO.bid).toFixed(2);
+      if(net <= 0.02) continue;
+      const mp = +(width - net).toFixed(2);
+      if(mp <= 0) continue;
+      const rr = +(mp / net).toFixed(2);
+      const bep = +(bs + net).toFixed(2);
+      const costRatio = +(net / width).toFixed(3);
+      const delta = bO.delta;
+      const ev = +(delta * mp - (1 - delta) * net).toFixed(2);
+      spreads.push({bs, ss, bp:bO.ask, sp:sO.bid, net, mp, rr, bep, width,
+        bep_dist:+((bep-spy)/spy*100).toFixed(2), iv:bO.iv,
+        costRatio, delta, ev});
+    }
+  } else {
+    for(let offset = bearMax; offset >= bearMin; offset--) {
+      const bs = atm + offset;
+      const ss = bs - width;
+      const bO = strikeData(bs, 'put');
+      const sO = strikeData(ss, 'put');
+      const net = +(bO.ask - sO.bid).toFixed(2);
+      if(net <= 0.02) continue;
+      const mp = +(bs - ss - net).toFixed(2);
+      if(mp <= 0) continue;
+      const rr = +(mp / net).toFixed(2);
+      const bep = +(bs - net).toFixed(2);
+      const costRatio = +(net / width).toFixed(3);
+      const delta = bO.delta;
+      const ev = +(delta * mp - (1 - delta) * net).toFixed(2);
+      spreads.push({bs, ss, bp:bO.ask, sp:sO.bid, net, mp, rr, bep, width,
+        bep_dist:+((spy-bep)/spy*100).toFixed(2), iv:bO.iv,
+        costRatio, delta, ev});
+    }
+  }
+  // 戦略基準フィルター: VIX≤20はR/R≥1.3、それ以外は≥1.5
+  const rrMin = vix <= 20 ? 1.3 : 1.5;
+  const valid = spreads.filter(s => s.rr >= rrMin && s.ev >= Math.max(0.20, s.net * 0.05));
+  const pool = valid.length > 0 ? valid : spreads;
+  return pool.sort((a,b) => b.rr - a.rr).slice(0, 6);
+}
+
+function calcPnL(sc, strat, spread) {
+  const endSpy = sc.endSpy;
+  let pnl = 0;
+  if(strat === 'bull') {
+    // ブルコール満期損益
+    const buyVal = Math.max(0, endSpy - spread.bs);
+    const sellVal = Math.max(0, endSpy - spread.ss);
+    const finalVal = buyVal - sellVal;
+    pnl = finalVal - spread.net;
+  } else {
+    // ベアプット満期損益
+    const buyVal = Math.max(0, spread.bs - endSpy);
+    const sellVal = Math.max(0, spread.ss - endSpy);
+    const finalVal = buyVal - sellVal;
+    pnl = finalVal - spread.net;
+  }
+  return +pnl.toFixed(2);
+}
+
+// ========== Seeded PRNG (Mulberry32) ==========
+function makePRNG(seed) {
+  let s = (seed ^ 0xDEADBEEF) >>> 0;
+  return function() {
+    s = Math.imul(s ^ (s >>> 15), s | 1);
+    s ^= s + Math.imul(s ^ (s >>> 7), s | 61);
+    return ((s ^ (s >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function dateToSeed(dateStr) {
+  return parseInt(dateStr.replace(/-/g, ''), 10);
+}
+
+// ========== ノーマルPDF ==========
+function normPDF(x) {
+  return Math.exp(-0.5*x*x) / Math.sqrt(2*Math.PI);
+}
+
+// ========== BSグリークス計算 ==========
+function bsGreeks(S, K, T, r, sigma, type) {
+  if(T <= 0) {
+    const intrinsic = type==='call' ? Math.max(0,S-K) : Math.max(0,K-S);
+    return {price:intrinsic, delta:type==='call'?(S>K?1:0):(S<K?-1:0), gamma:0, theta:0, vega:0};
+  }
+  const sqrtT = Math.sqrt(T);
+  const d1 = (Math.log(S/K) + (r+0.5*sigma*sigma)*T)/(sigma*sqrtT);
+  const d2 = d1 - sigma*sqrtT;
+  const eRT = Math.exp(-r*T);
+  const price = type==='call'
+    ? S*normCDF(d1) - K*eRT*normCDF(d2)
+    : K*eRT*normCDF(-d2) - S*normCDF(-d1);
+  const delta = type==='call' ? normCDF(d1) : normCDF(d1)-1;
+  const gamma = normPDF(d1) / (S * sigma * sqrtT);
+  const theta = type==='call'
+    ? (-S*normPDF(d1)*sigma/(2*sqrtT) - r*K*eRT*normCDF(d2)) / 365
+    : (-S*normPDF(d1)*sigma/(2*sqrtT) + r*K*eRT*normCDF(-d2)) / 365;
+  const vega = S * normPDF(d1) * sqrtT / 100;
+  return {
+    price: +price.toFixed(2),
+    delta: +delta.toFixed(3),
+    gamma: +gamma.toFixed(4),
+    theta: +theta.toFixed(3),
+    vega:  +vega.toFixed(3),
+  };
+}
+
+// ========== IVスキュー補正（SPY put skew） ==========
+// logm < 0（OTM put）ほどIVが上がる。logm > 0（OTM call）はほぼフラット。
+function skewIV(baseSigma, S, K) {
+  const logm = Math.log(K / S);
+  const adj = 1.0 - 1.6 * logm; // OTM putで係数上昇
+  return baseSigma * Math.min(Math.max(adj, 0.75), 1.9);
+}
+
+// ========== 7ステップ エントリー判定 ==========
+function classifyEvent(eventStr) {
+  const s = eventStr.toLowerCase();
+  if(s.includes('fomc') || s.includes('fed')) return 'FOMC';
+  if(s.includes('cpi')) return 'CPI';
+  if(s.includes('雇用')) return '雇用統計';
+  if(s.includes('pce')) return 'PCE';
+  return 'OTHER';
+}
+
+function analyzeChecklist(sc) {
+  const T = sc.expiryDays / 365;
+  const r = (sc.rate !== undefined) ? sc.rate : 0.053;
+  const baseSigma = estimateIV(sc.spy, sc.vix);
+  const atmK = Math.round(sc.spy);
+  const sigmaAtm = skewIV(baseSigma, sc.spy, atmK);
+  const callG = bsGreeks(sc.spy, atmK, T, r, sigmaAtm, 'call');
+  const putG  = bsGreeks(sc.spy, atmK, T, r, sigmaAtm, 'put');
+  const callDelta = callG.delta;
+  const putDelta  = Math.abs(putG.delta);
+  const deltaDiff = Math.abs(callDelta - putDelta);
+  const bullSignal  = callDelta > putDelta;
+  const smaAboveSpy = sc.spy > sc.sma20;
+  const smaLabel    = smaAboveSpy ? 'SMA20↑ 強気' : 'SMA20↓ 弱気';
+  const dirLabel    = bullSignal ? 'ブルコール' : 'ベアプット';
+  const smaAndDeltaContradict = (bullSignal && !smaAboveSpy) || (!bullSignal && smaAboveSpy);
+  const deltaTooSmall = deltaDiff < 0.04;
+
+  // STEP① VIX + 方向判定（統合）
+  let step1Status, step1Msg;
+  if(sc.vix > 50) {
+    step1Status = 'ng';
+    step1Msg = `VIX ${sc.vix} > 50 — 即見送り`;
+  } else if(deltaTooSmall) {
+    step1Status = 'ng';
+    step1Msg = `デルタ差 ${deltaDiff.toFixed(3)} < 0.04 — 方向不明瞭 → 見送り（例外なし）`;
+  } else if(smaAndDeltaContradict) {
+    step1Status = 'ng';
+    step1Msg = `SMAとデルタ矛盾（デルタ:${dirLabel} / ${smaLabel}）→ 見送り（例外なし）`;
+  } else if(sc.vix > 30) {
+    step1Status = 'warn';
+    step1Msg = `VIX ${sc.vix} > 30 — ベアプットのみ検討 / ${dirLabel} / ${smaLabel}`;
+  } else if(sc.vix > 20) {
+    step1Status = 'ok';
+    step1Msg = `VIX ${sc.vix}（20〜30）— トレンドに従う / ${dirLabel} / ${smaLabel}`;
+  } else {
+    step1Status = 'ok';
+    step1Msg = `VIX ${sc.vix} ≤ 20 — ブルコール優先 / ${dirLabel} / ${smaLabel}`;
+  }
+
+  // STEP② イベント確認
+  const entryDate = new Date(sc.date);
+  const nextDate  = new Date(entryDate); nextDate.setDate(nextDate.getDate() + 1);
+  const expiryDate = new Date(entryDate); expiryDate.setDate(expiryDate.getDate() + sc.expiryDays);
+  const criticalTypes = ['FOMC','CPI','雇用統計'];
+
+  const onOrBeforeEntry = sc.events.filter(e => {
+    const d = new Date(e.date);
+    return criticalTypes.includes(classifyEvent(e.event)) &&
+      (d.toDateString() === entryDate.toDateString() || d.toDateString() === nextDate.toDateString());
+  });
+  const within3OfExpiry = sc.events.filter(e => {
+    const d = new Date(e.date);
+    const daysToExpiry = (expiryDate - d) / 86400000;
+    return criticalTypes.includes(classifyEvent(e.event)) && daysToExpiry >= 0 && daysToExpiry <= 3;
+  });
+  const criticalDuring = sc.events.filter(e => {
+    const d = new Date(e.date);
+    return d > entryDate && d <= expiryDate && criticalTypes.includes(classifyEvent(e.event));
+  });
+  const pceDuring = sc.events.filter(e => {
+    const d = new Date(e.date);
+    return d > entryDate && d <= expiryDate && classifyEvent(e.event) === 'PCE';
+  });
+
+  let step2Status, step2Msg;
+  if(onOrBeforeEntry.length > 0) {
+    step2Status = 'ng';
+    step2Msg = `前日・当日にイベント: ${onOrBeforeEntry.map(e=>e.date+' '+e.event).join('、')} → 即見送り`;
+  } else if(within3OfExpiry.length > 0) {
+    step2Status = 'ng';
+    step2Msg = `満期3日以内に ${within3OfExpiry.map(e=>e.event).join('/')} → 即見送り`;
+  } else if(criticalDuring.length > 0 && sc.vix > 25) {
+    step2Status = 'ng';
+    step2Msg = `保有期間中に ${criticalDuring.map(e=>e.event).join('/')} + VIX ${sc.vix} > 25 → 見送り`;
+  } else if(criticalDuring.length > 0) {
+    step2Status = 'warn';
+    step2Msg = `保有期間中に ${criticalDuring.map(e=>e.event).join('/')} / VIX ${sc.vix} ≤ 25 — 高基準（R/R≥1.8・EV≥$30必須）`;
+  } else if(pceDuring.length > 0) {
+    step2Status = 'ok';
+    step2Msg = `PCEのみ — OK`;
+  } else {
+    step2Status = 'ok';
+    step2Msg = `イベントなし — OK`;
+  }
+
+  // STEP③ 推定IV
+  const estimatedIV = sc.vix * 1.1;
+  let step3Status, step3Msg;
+  if(estimatedIV > 70) {
+    step3Status = 'ng';
+    step3Msg = `推定IV ${estimatedIV.toFixed(1)}% > 70% → 即見送り`;
+  } else if(estimatedIV > 45) {
+    step3Status = 'warn';
+    step3Msg = `推定IV ${estimatedIV.toFixed(1)}%（45〜70%）— 警告`;
+  } else {
+    step3Status = 'ok';
+    step3Msg = `推定IV ${estimatedIV.toFixed(1)}% ≤ 45% → OK`;
+  }
+
+  // STEP④ DTE
+  let step4Status, step4Msg;
+  if(sc.expiryDays < 14) {
+    step4Status = 'ng';
+    step4Msg = `DTE ${sc.expiryDays}日 < 14日 → NG（ガンマリスク高）`;
+  } else if(sc.expiryDays < 21) {
+    step4Status = 'warn';
+    step4Msg = `DTE ${sc.expiryDays}日（14〜21日）— 注意`;
+  } else if(sc.expiryDays <= 35) {
+    step4Status = 'ok';
+    step4Msg = `DTE ${sc.expiryDays}日（21〜35日）— 最適 ✓`;
+  } else {
+    step4Status = 'warn';
+    step4Msg = `DTE ${sc.expiryDays}日 > 35日 — 注意（セータコスト増）`;
+  }
+
+  // STEP⑤ スプレッド選択
+  const rrMin = sc.vix <= 20 ? 1.3 : 1.5;
+  const step5Status = 'info';
+  const step5Msg = `R/R ≥ ${rrMin}（VIX${sc.vix<=20?' ≤ 20 → 1.3':' > 20 → 1.5'}）| ATM最近接優先 | EV ≥ $20 — 下表で確認`;
+
+  const absoluteSkip = step1Status === 'ng' || step2Status === 'ng' || sc.expiryDays < 14;
+
+  const vixRec = {
+    strat: sc.vix > 50 ? 'skip' : sc.vix > 30 ? 'bear' : sc.vix > 20 ? 'trend' : 'bull',
+    msg:   sc.vix > 50 ? `VIX ${sc.vix} > 50 — 全見送り` :
+           sc.vix > 30 ? `VIX ${sc.vix} > 30 — ベアプットのみ` :
+           sc.vix > 20 ? `VIX ${sc.vix}（20〜30）— トレンドに従う` :
+                         `VIX ${sc.vix} ≤ 20 — ブルコール優先`,
+  };
+
+  return {
+    step1:{status:step1Status, msg:step1Msg},
+    step2:{status:step2Status, msg:step2Msg},
+    step3:{status:step3Status, msg:step3Msg},
+    step4:{status:step4Status, msg:step4Msg},
+    step5:{status:step5Status, msg:step5Msg},
+    absoluteSkip, dirRec: bullSignal ? 'bull' : 'bear',
+    rrMin, vixRec, callDelta, putDelta,
+    smaAndDeltaContradict, deltaTooSmall,
+    eventHighStd: criticalDuring.length > 0 && sc.vix <= 25,
+  };
+}
+function buildChecklistHTML(cl) {
+  function icon(s) {
+    if(s==='ok')   return '<span style="color:#10b981;font-size:14px">✓</span>';
+    if(s==='warn') return '<span style="color:#f59e0b;font-size:14px">⚠</span>';
+    if(s==='ng')   return '<span style="color:#ef4444;font-size:14px">✗</span>';
+    return '<span style="color:#475569;font-size:14px">→</span>';
+  }
+  function bg(s) {
+    if(s==='ok')   return 'background:#071510;border-left:3px solid #10b981';
+    if(s==='warn') return 'background:#1a1500;border-left:3px solid #f59e0b';
+    if(s==='ng')   return 'background:#1a0808;border-left:3px solid #ef4444';
+    return 'background:#141920;border-left:3px solid #2a3340';
+  }
+  const steps = [
+    {label:'① VIX + 方向判定', ...cl.step1},
+    {label:'② イベント確認', ...cl.step2},
+    {label:'③ 推定IV', ...cl.step3},
+    {label:'④ DTE', ...cl.step4},
+    {label:'⑤ スプレッド選択', ...cl.step5},
+  ];
+  const stepsHTML = steps.map(s => `
+    <div style="${bg(s.status)};border-radius:6px;padding:7px 10px;margin-bottom:5px;display:flex;align-items:flex-start;gap:8px">
+      <div style="min-width:16px;line-height:1.5">${icon(s.status)}</div>
+      <div>
+        <div style="font-size:10px;color:#64748b;font-weight:700;margin-bottom:1px;letter-spacing:0.5px">${s.label}</div>
+        <div style="font-size:11px;color:#94a3b8;line-height:1.5">${s.msg}</div>
+      </div>
+    </div>`).join('');
+
+  const vixColor = cl.vixRec.strat==='bull'?'#10b981':cl.vixRec.strat==='bear'?'#ef4444':cl.vixRec.strat==='skip'?'#ef4444':'#f59e0b';
+  const skipBanner = cl.absoluteSkip ? `
+    <div style="background:#2a0808;border:1px solid #ef4444;border-radius:8px;padding:9px 12px;margin-bottom:10px;font-size:12px;font-weight:700;color:#ef4444">
+      🚫 絶対見送り条件に該当 — 「見送り」を選択してください
+    </div>` : '';
+
+  return `<div class="card" style="padding:14px 16px">
+    <div class="section-title" style="margin-bottom:10px">5ステップ エントリー判定</div>
+    ${skipBanner}${stepsHTML}
+    <div style="background:#141920;border-radius:6px;padding:7px 12px;margin-top:6px;display:flex;align-items:center;gap:10px">
+      <div style="font-size:10px;color:#475569;font-weight:700;white-space:nowrap">VIX環境</div>
+      <div style="font-size:11px;color:${vixColor}">${cl.vixRec.msg}</div>
+    </div>
+  </div>`;
+}
+
+// ========== オプションチェーン生成 ==========
+function generateOptionsChain(sc) {
+  const S = sc.spy;
+  const T = sc.expiryDays / 365;
+  const r = (sc.rate !== undefined) ? sc.rate : 0.053;
+  const baseSigma = estimateIV(S, sc.vix);
+  // SPYオプションは$1刻み。ATMは最近接整数ストライク
+  const atmK = Math.round(S);
+  const rows = [];
+  for(let i = -12; i <= 12; i++) {
+    const K = atmK + i;
+    const sigmaK = skewIV(baseSigma, S, K);
+    const call = bsGreeks(S, K, T, r, sigmaK, 'call');
+    const put  = bsGreeks(S, K, T, r, sigmaK, 'put');
+    // 流動性モデル: 半スプレッド
+    const cHalf = Math.max(0.02, call.price * 0.015 + 0.015);
+    const pHalf = Math.max(0.02, put.price  * 0.015 + 0.015);
+    rows.push({
+      strike: K,
+      isAtm: K === atmK,
+      callItm: K < S,
+      putItm:  K > S,
+      call: {
+        bid:   +Math.max(0.01, call.price - cHalf).toFixed(2),
+        ask:   +Math.max(0.02, call.price + cHalf).toFixed(2),
+        delta: call.delta,
+        theta: call.theta,
+        iv:    +(sigmaK*100).toFixed(1),
+      },
+      put: {
+        bid:   +Math.max(0.01, put.price - pHalf).toFixed(2),
+        ask:   +Math.max(0.02, put.price + pHalf).toFixed(2),
+        delta: put.delta,
+        theta: put.theta,
+        iv:    +(sigmaK*100).toFixed(1),
+      },
+    });
+  }
+  return rows;
+}
+
+// ========== オプションチェーンHTML構築 ==========
+function buildChainHTML(sc) {
+  const chain = generateOptionsChain(sc);
+  const f2 = v => (+v).toFixed(2);
+
+  const rowsHTML = chain.map(row => {
+    const atm = row.isAtm ? ' atm-row' : '';
+    const cItm = row.callItm ? ' itm' : '';
+    const pItm = row.putItm  ? ' itm' : '';
+    const sAtm = row.isAtm   ? ' atm' : '';
+    return `<tr class="chain-row${atm}" data-strike="${row.strike}">
+      <td class="ch-call-cell${cItm}">${row.call.iv}%</td>
+      <td class="ch-call-cell${cItm}">${(+row.call.delta).toFixed(3)}</td>
+      <td class="ch-call-cell${cItm}">${f2(row.call.theta)}</td>
+      <td class="ch-call-cell${cItm} ch-bid">${f2(row.call.bid)}</td>
+      <td class="ch-call-cell${cItm} ch-ask">${f2(row.call.ask)}</td>
+      <td class="ch-strike-cell${sAtm}">${row.strike}${row.isAtm?'<br><span style="font-size:9px;color:#f97316;font-weight:400">ATM</span>':''}</td>
+      <td class="ch-put-cell${pItm} ch-bid">${f2(row.put.bid)}</td>
+      <td class="ch-put-cell${pItm} ch-ask">${f2(row.put.ask)}</td>
+      <td class="ch-put-cell${pItm}">${(Math.abs(row.put.delta)).toFixed(3)}</td>
+      <td class="ch-put-cell${pItm}">${f2(row.put.theta)}</td>
+      <td class="ch-put-cell${pItm}">${row.put.iv}%</td>
+    </tr>`;
+  }).join('');
+
+  return `<table class="chain-table">
+    <thead>
+      <tr>
+        <th class="chain-head-calls" colspan="5">CALLS</th>
+        <th class="chain-head-mid">STRIKE</th>
+        <th class="chain-head-puts" colspan="5">PUTS</th>
+      </tr>
+      <tr class="chain-subhead">
+        <th class="ch-call">IV%</th>
+        <th class="ch-call">Δ</th>
+        <th class="ch-call">θ/日</th>
+        <th class="ch-call">Bid</th>
+        <th class="ch-call">Ask</th>
+        <th class="ch-strike">Strike</th>
+        <th class="ch-put">Bid</th>
+        <th class="ch-put">Ask</th>
+        <th class="ch-put">Δ</th>
+        <th class="ch-put">θ/日</th>
+        <th class="ch-put">IV%</th>
+      </tr>
+    </thead>
+    <tbody>${rowsHTML}</tbody>
+  </table>`;
+}
+
+// ========== 合成ローソク足データ生成 ==========
+function generateCandleData(sc) {
+  const rng = makePRNG(dateToSeed(sc.date));
+  const dailyVol = (sc.vix / 100) / Math.sqrt(252);
+  const numDays = 63; // 約3ヶ月
+
+  // トレンドに合わせた推定開始価格
+  const startPrice = sc.trend === 'bull'
+    ? sc.sma20 * (0.94 + rng() * 0.04)
+    : sc.sma20 * (1.02 + rng() * 0.04);
+
+  // GBMで価格パスを生成
+  const drift = sc.trend === 'bull' ? 0.0004 : -0.0004;
+  let p = startPrice;
+  const closes = [p];
+  for(let i = 1; i < numDays; i++) {
+    const u1 = Math.max(rng(), 1e-10);
+    const u2 = rng();
+    const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+    p *= Math.exp(drift + dailyVol * z);
+    closes.push(p);
+  }
+
+  // 最終価格をsc.spyにスケール調整
+  const scale = sc.spy / closes[closes.length - 1];
+  const scaledCloses = closes.map(x => x * scale);
+
+  // 取引日付を生成（sc.dateで終わるnumDays営業日）
+  const tradingDates = [];
+  const endDate = new Date(sc.date);
+  let d = new Date(endDate);
+  while(tradingDates.length < numDays) {
+    const dow = d.getDay();
+    if(dow !== 0 && dow !== 6) tradingDates.unshift(d.toISOString().split('T')[0]);
+    d.setDate(d.getDate() - 1);
+  }
+
+  // OHLCV生成
+  const candles = [];
+  for(let i = 0; i < numDays; i++) {
+    const close = +scaledCloses[i].toFixed(2);
+    const prevClose = i === 0 ? close : +scaledCloses[i-1].toFixed(2);
+    const open = +(prevClose * (1 + (rng() - 0.5) * dailyVol * 0.8)).toFixed(2);
+    const range = Math.abs(close - open) + close * dailyVol * rng() * 0.5;
+    const high = +(Math.max(open, close) + range * (0.2 + rng() * 0.8)).toFixed(2);
+    const low  = +(Math.min(open, close) - range * (0.2 + rng() * 0.8)).toFixed(2);
+    const volume = Math.round(40000000 + rng() * 120000000);
+    candles.push({ time: tradingDates[i], open, high, low, close, volume });
+  }
+  return candles;
+}
+
+// ========== チャート描画 ==========
+function renderChart(sc) {
+  const container = document.getElementById('priceChart');
+  if(!container) return;
+
+  // 古いチャートインスタンスを破棄してイベントリスナーを解放
+  if(currentChart) {
+    try { currentChart.remove(); } catch(e) {}
+    currentChart = null;
+  }
+
+  const candles = generateCandleData(sc);
+
+  const chart = LightweightCharts.createChart(container, {
+    width: container.clientWidth,
+    height: 240,
+    layout: {
+      background: { type: 'solid', color: '#0a0d12' },
+      textColor: '#64748b',
+      fontSize: 11,
+    },
+    grid: {
+      vertLines: { color: '#151c25' },
+      horzLines: { color: '#151c25' },
+    },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    rightPriceScale: {
+      borderColor: '#1e2530',
+      scaleMargins: { top: 0.08, bottom: 0.22 },
+    },
+    timeScale: {
+      borderColor: '#1e2530',
+      timeVisible: true,
+      fixLeftEdge: true,
+      fixRightEdge: true,
+    },
+    handleScroll: true,
+    handleScale: false,
+  });
+
+  // ローソク足
+  const candleSeries = chart.addCandlestickSeries({
+    upColor: '#10b981',
+    downColor: '#ef4444',
+    borderVisible: false,
+    wickUpColor: '#10b981',
+    wickDownColor: '#ef4444',
+  });
+  candleSeries.setData(candles);
+
+  // 出来高（下部オーバーレイ）
+  const volSeries = chart.addHistogramSeries({
+    priceFormat: { type: 'volume' },
+    priceScaleId: 'vol',
+  });
+  chart.priceScale('vol').applyOptions({
+    scaleMargins: { top: 0.82, bottom: 0 },
+  });
+  volSeries.setData(candles.map(c => ({
+    time: c.time,
+    value: c.volume,
+    color: c.close >= c.open ? 'rgba(16,185,129,0.25)' : 'rgba(239,68,68,0.25)',
+  })));
+
+  // SMA20ライン
+  const smaData = [];
+  for(let i = 19; i < candles.length; i++) {
+    const avg = candles.slice(i - 19, i + 1).reduce((s, c) => s + c.close, 0) / 20;
+    smaData.push({ time: candles[i].time, value: +avg.toFixed(2) });
+  }
+  const smaSeries = chart.addLineSeries({
+    color: '#f97316',
+    lineWidth: 1,
+    priceLineVisible: false,
+    lastValueVisible: false,
+    title: '',
+  });
+  smaSeries.setData(smaData);
+
+  // SMA20ラベルをチャート左上に固定表示
+  container.style.position = 'relative';
+  const smaLabel = document.createElement('div');
+  smaLabel.style.cssText = 'position:absolute;top:8px;left:8px;z-index:10;font-size:10px;color:#f97316;font-weight:600;pointer-events:none;background:rgba(10,13,18,0.75);padding:2px 7px;border-radius:3px';
+  smaLabel.textContent = 'SMA20';
+  container.appendChild(smaLabel);
+
+  // エントリーマーカー
+  candleSeries.setMarkers([{
+    time: candles[candles.length - 1].time,
+    position: 'aboveBar',
+    color: '#f97316',
+    shape: 'arrowDown',
+    text: 'Entry',
+    size: 1,
+  }]);
+
+  chart.timeScale().fitContent();
+  currentChart = chart;
+}
+
+// ========== 初期化 ==========
+function init() {
+  const shuffled = [...SCENARIOS].sort(()=>Math.random()-0.5);
+  state.questions = shuffled.slice(0, 10);
+  state.current = 0;
+  state.wins = 0;
+  state.losses = 0;
+  state.totalPnL = 0;
+  state.history = [];
+  renderStepBar();
+  loadQuestion();
+}
+
+function renderStepBar() {
+  const bar = document.getElementById('stepBar');
+  bar.innerHTML = state.questions.map((_, i) => {
+    let cls = 'step-dot';
+    if(i < state.current) {
+      const h = state.history[i];
+      if(h && h.strat === 'skip') cls += ' skip';
+      else if(h && h.pnl >= 0) cls += ' done';
+      else cls += ' wrong';
+    } else if(i === state.current) {
+      cls += ' current';
+    }
+    return `<div class="${cls}"></div>`;
+  }).join('');
+}
+
+function loadQuestion() {
+  state.phase = 'question';
+  state.selectedStrat = null;
+  state.selectedSpread = null;
+  const sc = state.questions[state.current];
+  document.getElementById('qNum').textContent = state.current + 1;
+  renderQuestion(sc);
+}
+
+function renderQuestion(sc, reviewMode) {
+  state.checklist = analyzeChecklist(sc);
+  const cl = state.checklist;
+
+  const eventsInPeriod = sc.events.filter(e => {
+    const entryDate = new Date(sc.date);
+    const expiryDate = new Date(entryDate);
+    expiryDate.setDate(expiryDate.getDate() + sc.expiryDays);
+    const d = new Date(e.date);
+    return d >= entryDate && d <= expiryDate;
+  });
+  const evBanner = eventsInPeriod.length > 0
+    ? `<div class="event-banner event-warn">⚠ 保有期間中にイベント: ${eventsInPeriod.map(e=>e.date+' '+e.event).join('　')}</div>`
+    : `<div class="event-banner event-ok">✅ 保有期間中にイベントなし</div>`;
+
+  const trend = sc.spy > sc.sma20 ? '強気↑' : '弱気↓';
+  const trendColor = sc.spy > sc.sma20 ? '#10b981' : '#ef4444';
+  const vixColor = sc.vix <= 20 ? '#10b981' : sc.vix <= 30 ? '#f59e0b' : '#ef4444';
+  const vixStatus = sc.vix <= 20 ? '安定' : sc.vix <= 30 ? '注意' : '警戒';
+  const ivRankColor = sc.ivRank < 30 ? '#10b981' : sc.ivRank < 60 ? '#f59e0b' : '#ef4444';
+  const ivRankLabel = sc.ivRank < 30 ? '低IV（割安）' : sc.ivRank < 60 ? '普通' : '高IV（割高）';
+  const ivPctLabel  = sc.ivPct  < 30 ? '安い' : sc.ivPct  < 60 ? '普通' : '高い';
+
+  document.getElementById('appContent').innerHTML = `
+    <div class="card" style="padding:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div>
+          <div style="font-size:11px;color:#f97316;letter-spacing:2px;margin-bottom:3px">問題 ${state.current+1}/10 — ${sc.date}</div>
+          <div style="font-size:12px;color:#94a3b8">${sc.desc}</div>
+        </div>
+        <div style="font-size:11px;color:#475569;text-align:right">満期まで<br>${sc.expiryDays}日</div>
+      </div>
+      <div id="priceChart"></div>
+    </div>
+
+    <div class="card">
+      <div class="market-grid" style="grid-template-columns:repeat(3,1fr)">
+        <div class="market-item">
+          <div class="market-label">SPY</div>
+          <div class="market-value" style="color:#fff">$${sc.spy.toFixed(2)}</div>
+          <div class="market-sub" style="color:${trendColor}">${trend} / SMA20 $${sc.sma20.toFixed(1)}</div>
+        </div>
+        <div class="market-item">
+          <div class="market-label">VIX</div>
+          <div class="market-value" style="color:${vixColor}">${sc.vix}</div>
+          <div class="market-sub" style="color:${vixColor}">${vixStatus}</div>
+        </div>
+        <div class="market-item">
+          <div class="market-label">SMA20乖離</div>
+          <div class="market-value" style="color:${trendColor}">${((sc.spy-sc.sma20)/sc.sma20*100).toFixed(1)}%</div>
+          <div class="market-sub" style="color:#475569">現在値との差</div>
+        </div>
+        <div class="market-item">
+          <div class="market-label">推定IV（ATM）</div>
+          <div class="market-value" style="color:#94a3b8">${(sc.vix*1.1).toFixed(1)}%</div>
+          <div class="market-sub" style="color:#475569">VIX×1.1概算</div>
+        </div>
+        <div class="market-item">
+          <div class="market-label">IVランク（IVR）</div>
+          <div class="market-value" style="color:${ivRankColor}">${sc.ivRank}%</div>
+          <div class="market-sub" style="color:${ivRankColor}">${ivRankLabel}</div>
+        </div>
+        <div class="market-item">
+          <div class="market-label">IVパーセンタイル</div>
+          <div class="market-value" style="color:${ivRankColor}">${sc.ivPct}%</div>
+          <div class="market-sub" style="color:#475569">過去1年比 / ${ivPctLabel}</div>
+        </div>
+      </div>
+      ${evBanner}
+    </div>
+
+    <div class="card" style="padding:14px 16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div class="section-title" style="margin:0">オプションチェーン</div>
+        <div style="font-size:10px;color:#475569">満期まで ${sc.expiryDays}日 &nbsp;|&nbsp; SPY $${sc.spy.toFixed(2)} &nbsp;|&nbsp; IV ${(sc.vix*1.1).toFixed(1)}%</div>
+      </div>
+      <div class="chain-wrap">${buildChainHTML(sc)}</div>
+    </div>
+
+    ${reviewMode ? `
+    <div style="display:flex;gap:10px">
+      <button class="btn btn-secondary" onclick="backToResult()" style="flex:1;padding:12px">← 回答結果に戻る</button>
+    </div>` : `
+    <div class="card">
+      <div class="section-title">戦略選択</div>
+      <div style="display:flex;gap:10px;margin-bottom:14px">
+        <button class="btn btn-bull" id="btnBull" onclick="selectStrat('bull')" style="flex:1;padding:12px">
+          📈 ブルコール<br><span style="font-size:11px;opacity:0.7">強気 — 上昇を期待</span>
+        </button>
+        <button class="btn btn-bear" id="btnBear" onclick="selectStrat('bear')" style="flex:1;padding:12px">
+          📉 ベアプット<br><span style="font-size:11px;opacity:0.7">弱気 — 下落を期待</span>
+        </button>
+        <button class="btn btn-skip" id="btnSkip" onclick="selectStrat('skip')" style="flex:1;padding:12px">
+          🚫 見送り<br><span style="font-size:11px;opacity:0.7">様子見 — 建てない</span>
+        </button>
+      </div>
+      <div id="spreadSection" style="display:none">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <div class="section-title" style="margin:0">候補スプレッド</div>
+          <div style="display:flex;gap:6px;align-items:center">
+            <span style="font-size:10px;color:#475569">幅：</span>
+            <button id="btnW5" onclick="switchSpreadMode(5, false)" style="font-size:10px;padding:3px 9px;border-radius:5px;border:1px solid #334155;background:#1e293b;color:#94a3b8;cursor:pointer">$5</button>
+            <button id="btnW10" onclick="switchSpreadMode(10, false)" style="font-size:10px;padding:3px 9px;border-radius:5px;border:1px solid #334155;background:#1e293b;color:#94a3b8;cursor:pointer">$10</button>
+            <button id="btnAtm" onclick="switchSpreadMode(state.spreadWidth, !state.spreadAtmOnly)" style="font-size:10px;padding:3px 9px;border-radius:5px;border:1px solid #334155;background:#1e293b;color:#94a3b8;cursor:pointer">ATM近</button>
+          </div>
+        </div>
+        <div style="overflow-x:auto">
+          <table class="spread-table" id="spreadTable">
+            <thead><tr>
+              <th>ストライク</th><th>コスト</th><th>最大利益</th><th>R/R</th><th>コスト率</th><th>EV</th><th>BEP</th><th>決済目安</th>
+            </tr></thead>
+            <tbody id="spreadBody"></tbody>
+          </table>
+        </div>
+        <div class="hint-box" id="hintBox" style="display:none"></div>
+      </div>
+      <div id="entryBar" style="display:none;margin-top:14px;gap:10px;flex-direction:column">
+        <textarea id="entryReason" placeholder="判断理由を入力（任意）：なぜこの戦略・スプレッドを選んだか" style="width:100%;background:#141920;border:1px solid #2a3340;color:#e2e8f0;border-radius:8px;padding:10px;font-size:12px;resize:vertical;min-height:60px;font-family:inherit"></textarea>
+        <div style="display:flex;gap:10px">
+          <button class="btn btn-primary" id="btnEntry" onclick="confirmEntry()" style="flex:1" disabled>確定 →</button>
+          <button class="btn btn-secondary" id="btnHint" onclick="showHint()">ヒント</button>
+        </div>
+      </div>
+    </div>`}
+  `;
+
+  requestAnimationFrame(() => renderChart(sc));
+}
+
+function selectStrat(strat) {
+  state.selectedStrat = strat;
+  state.selectedSpread = null;
+  document.getElementById('btnBull').classList.toggle('selected', strat==='bull');
+  document.getElementById('btnBear').classList.toggle('selected', strat==='bear');
+  document.getElementById('btnSkip').classList.toggle('selected', strat==='skip');
+
+  // オプションチェーンのハイライトをリセット
+  document.querySelectorAll('.chain-row').forEach(r => r.classList.remove('hl-bull','hl-bear'));
+
+  const entryBar = document.getElementById('entryBar');
+  entryBar.style.display = 'flex';
+
+  if(strat === 'skip') {
+    document.getElementById('spreadSection').style.display = 'none';
+    document.getElementById('btnHint').style.display = 'none';
+    document.getElementById('btnEntry').textContent = '見送り確定 →';
+    document.getElementById('btnEntry').disabled = false;
+    return;
+  }
+
+  document.getElementById('btnHint').style.display = '';
+  document.getElementById('btnEntry').textContent = 'エントリー確定 →';
+
+  const sc = state.questions[state.current];
+  const cl = state.checklist;
+
+  // 絶対見送り条件の警告
+  const box = document.getElementById('hintBox');
+  if(cl && cl.absoluteSkip) {
+    box.style.display = 'block';
+    box.style.background = '#2a0808';
+    box.style.color = '#ef4444';
+    box.innerHTML = '🚫 絶対見送り条件に該当しています。見送りを強く推奨します。';
+  } else if(cl && cl.eventHighStd) {
+    box.style.display = 'block';
+    box.style.background = '#1a1300';
+    box.style.color = '#f59e0b';
+    box.innerHTML = '⚠ CPI/FOMC 保有期間中（VIX≤20）— R/R ≥ 1.8 かつ EV ≥ $30 のスプレッドのみ選択すること（⭐マーク参照）';
+  } else {
+    box.style.display = 'none';
+  }
+
+  state.spreadWidth = 5;
+  state.spreadAtmOnly = false;
+  renderSpreadTable(sc, strat);
+  updateWidthButtons();
+}
+
+function renderSpreadTable(sc, strat) {
+  const cl = state.checklist;
+  const spreads = generateSpreads(sc.spy, sc.vix, strat, sc.expiryDays, state.spreadWidth, state.spreadAtmOnly, sc.rate);
+
+  const tbody = document.getElementById('spreadBody');
+  tbody.innerHTML = spreads.map((s,i) => {
+    const highStd = s.rr >= 1.8 && s.ev >= 0.30;
+    const rowStyle = highStd ? 'border-left:3px solid #f59e0b' : '';
+    const starMark = highStd ? '<span style="color:#f59e0b;margin-left:4px">⭐</span>' : '';
+    return `<tr onclick="selectSpread(${i})" id="row-${i}" style="${rowStyle}">
+      <td style="font-weight:600">$${s.bs}/$${s.ss}${starMark}</td>
+      <td style="color:#ef4444">-$${(s.net*100).toFixed(0)}</td>
+      <td style="color:#10b981">+$${(s.mp*100).toFixed(0)}</td>
+      <td class="${s.rr>=2?'rr-good':s.rr>=(cl&&cl.rrMin||1.5)?'rr-ok':'rr-low'}">${s.rr}</td>
+      <td style="color:${s.costRatio<=0.5?'#10b981':'#ef4444'}">${(s.costRatio*100).toFixed(0)}%</td>
+      <td style="color:${s.ev>=0.20?'#10b981':s.ev>0?'#f59e0b':'#ef4444'}">${s.ev>0?'+':''}$${(s.ev*100).toFixed(0)}</td>
+      <td style="color:#94a3b8">$${s.bep} <small style="color:#475569">(${s.bep_dist>0?'+':''}${s.bep_dist}%)</small></td>
+      <td style="color:#a78bfa">${Math.floor(sc.expiryDays/3)}日後</td>
+    </tr>`;
+  }).join('');
+
+  state.currentSpreads = spreads;
+
+  if(spreads.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:#475569;padding:20px">条件を満たすスプレッドなし → 幅を広げるか見送りを検討</td></tr>`;
+  }
+
+  document.getElementById('spreadSection').style.display = 'block';
+  document.getElementById('btnEntry').disabled = true;
+}
+
+function switchSpreadMode(width, atmOnly) {
+  if(state.phase !== 'question' || !state.selectedStrat || state.selectedStrat === 'skip') return;
+  state.spreadWidth = width;
+  state.spreadAtmOnly = atmOnly;
+  state.selectedSpread = null;
+  document.getElementById('btnEntry').disabled = true;
+  const sc = state.questions[state.current];
+  renderSpreadTable(sc, state.selectedStrat);
+  updateWidthButtons();
+}
+
+function updateWidthButtons() {
+  const activeStyle = 'font-size:10px;padding:3px 9px;border-radius:5px;border:1px solid #6366f1;background:#312e81;color:#a5b4fc;cursor:pointer';
+  const normalStyle = 'font-size:10px;padding:3px 9px;border-radius:5px;border:1px solid #334155;background:#1e293b;color:#94a3b8;cursor:pointer';
+  const w5 = document.getElementById('btnW5');
+  const w10 = document.getElementById('btnW10');
+  const atm = document.getElementById('btnAtm');
+  if(!w5) return;
+  w5.style.cssText = (state.spreadWidth === 5 && !state.spreadAtmOnly) ? activeStyle : normalStyle;
+  w10.style.cssText = (state.spreadWidth === 10 && !state.spreadAtmOnly) ? activeStyle : normalStyle;
+  atm.style.cssText = state.spreadAtmOnly ? activeStyle : normalStyle;
+}
+
+function selectSpread(idx) {
+  state.selectedSpread = state.currentSpreads[idx];
+  document.querySelectorAll('.spread-table tbody tr').forEach((r,i) => {
+    r.className = i===idx ? (state.selectedStrat==='bull'?'selected-row':'selected-row-bear') : '';
+  });
+  document.getElementById('btnEntry').disabled = false;
+
+  // オプションチェーンの対応ストライクをハイライト
+  const hlClass = state.selectedStrat === 'bull' ? 'hl-bull' : 'hl-bear';
+  document.querySelectorAll('.chain-row').forEach(r => {
+    r.classList.remove('hl-bull', 'hl-bear');
+    const k = +r.dataset.strike;
+    if(k === state.selectedSpread.bs || k === state.selectedSpread.ss) {
+      r.classList.add(hlClass);
+      r.scrollIntoView({block:'nearest', behavior:'smooth'});
+    }
+  });
+}
+
+function showHint() {
+  const sc = state.questions[state.current];
+  const cl = state.checklist;
+  const lines = [];
+
+  if(cl.absoluteSkip) lines.push('🚫 絶対見送り条件あり — 見送りが正解です');
+
+  lines.push(`① ${cl.step1.msg}`);
+  if(cl.step2.status !== 'ok') lines.push(`② ${cl.step2.msg}`);
+  else lines.push(`② イベントなし — OK`);
+  lines.push(`③ ${cl.step3.msg}`);
+  lines.push(`④ ${cl.step4.msg}`);
+  lines.push(`⑤ R/R ≥ ${cl.rrMin} | EV ≥ $20 のスプレッドをATM最近接で選択`);
+
+  const box = document.getElementById('hintBox');
+  box.style.display = 'block';
+  box.style.background = '';
+  box.style.color = '';
+  box.innerHTML = lines.join('<br>');
+}
+
+function confirmEntry() {
+  if(!state.selectedStrat) return;
+  if(state.selectedStrat !== 'skip' && !state.selectedSpread) return;
+  const sc = state.questions[state.current];
+
+  const reason = (document.getElementById('entryReason')?.value || '').trim();
+
+  if(state.selectedStrat === 'skip') {
+    state.history.push({sc, strat:'skip', spread:null, pnl:0, checklist:state.checklist, reason});
+    updateHeader();
+    renderStepBar();
+    renderResultSkip(sc);
+    return;
+  }
+
+  // PnL確定は決済シミュレーション後に行う
+  state.exitArgs = { sc, strat: state.selectedStrat, spread: state.selectedSpread, reason };
+  state.history.push({sc, strat:state.selectedStrat, spread:state.selectedSpread, pnl:0, checklist:state.checklist, reason});
+
+  renderLimitOrderScreen(sc, state.selectedStrat, state.selectedSpread, reason);
+}
+
+// ========== 指値設定画面 ==========
+function renderLimitOrderScreen(sc, strat, spread, reason) {
+  if(currentChart) { try { currentChart.remove(); } catch(e) {} currentChart = null; }
+
+  const maxProfit = Math.round(spread.mp * 100);
+  const maxLoss   = Math.round(spread.net * 100);
+  const defTarget = Math.round(maxProfit * 0.75);
+  const defStop   = Math.round(maxLoss   * 0.50);
+
+  // state.exitArgs は confirmEntry で設定済み
+
+  document.getElementById('appContent').innerHTML = `
+    <div class="card">
+      <div class="section-title" style="margin-bottom:14px">ステップ2：決済指値を設定してください</div>
+
+      <div style="background:#141920;border-radius:8px;padding:14px;margin-bottom:16px;display:flex;justify-content:space-between">
+        <div>
+          <div style="font-size:10px;color:#475569;margin-bottom:3px">最大利益</div>
+          <div style="color:#10b981;font-weight:700;font-size:15px">+$${maxProfit}</div>
+        </div>
+        <div>
+          <div style="font-size:10px;color:#475569;margin-bottom:3px">最大損失</div>
+          <div style="color:#ef4444;font-weight:700;font-size:15px">-$${maxLoss}</div>
+        </div>
+        <div>
+          <div style="font-size:10px;color:#475569;margin-bottom:3px">戦略</div>
+          <div style="color:#94a3b8;font-weight:600;font-size:13px">${strat==='bull'?'📈 ブルコール':'📉 ベアプット'} $${spread.bs}/$${spread.ss}</div>
+        </div>
+      </div>
+
+      <div style="margin-bottom:16px">
+        <label style="font-size:12px;color:#94a3b8;display:block;margin-bottom:6px">
+          目標利益（指値）<span style="font-size:10px;color:#475569"> — 最大利益×75%を初期値</span>
+        </label>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="color:#10b981;font-weight:700;font-size:16px">+$</span>
+          <input id="targetProfitInput" type="number" value="${defTarget}" min="1" max="${maxProfit}"
+            style="background:#141920;border:1px solid #1a5a30;color:#10b981;border-radius:6px;padding:8px 12px;font-size:18px;font-weight:700;width:110px">
+          <span style="font-size:11px;color:#475569">（最大 +$${maxProfit}）</span>
+        </div>
+      </div>
+
+      <div style="margin-bottom:22px">
+        <label style="font-size:12px;color:#94a3b8;display:block;margin-bottom:6px">
+          損切り（逆指値）<span style="font-size:10px;color:#475569"> — 最大損失×50%を初期値</span>
+        </label>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="color:#ef4444;font-weight:700;font-size:16px">-$</span>
+          <input id="stopLossInput" type="number" value="${defStop}" min="1" max="${maxLoss}"
+            style="background:#141920;border:1px solid #5a1a1a;color:#ef4444;border-radius:6px;padding:8px 12px;font-size:18px;font-weight:700;width:110px">
+          <span style="font-size:11px;color:#475569">（最大 -$${maxLoss}）</span>
+        </div>
+      </div>
+
+      <button class="btn btn-primary" onclick="confirmLimitOrder()" style="width:100%;padding:14px;font-size:14px;font-weight:700">
+        指値を確定して保有 →
+      </button>
+    </div>
+  `;
+}
+
+function confirmLimitOrder() {
+  const targetProfit = parseInt(document.getElementById('targetProfitInput').value) || 0;
+  const stopLoss     = parseInt(document.getElementById('stopLossInput').value)     || 0;
+  state.limitOrder = { targetProfit, stopLoss };
+  const { sc, strat, spread, reason } = state.exitArgs;
+
+  const sim = simulateHoldingPath(sc, strat, spread, state.limitOrder);
+  state.holdingSim = sim;
+
+  if (sim.type === 'limit' || sim.type === 'stop' || sim.type === 'expiry') {
+    finalizeTradeResult(sim.exitPnl);
+    renderAutoExitResult(sc, strat, spread, sim);
+  } else {
+    // vix_spike または pre_event: 手動決済判断画面へ
+    renderExitPhase(sc, strat, spread, reason, sim);
+  }
+}
+
+// ========== 保有期間価格シミュレーション ==========
+function simulateHoldingPath(sc, strat, spread, limitOrder) {
+  const rng = makePRNG(dateToSeed(sc.date) + 5000 + (strat === 'bull' ? 0 : 3000));
+  const expiryDays = sc.expiryDays;
+  const rate = (sc.rate !== undefined) ? sc.rate : 0.053;
+  const baseVix = sc.vix;
+  const dailyVol = (baseVix / 100) / Math.sqrt(252);
+  const drift = (sc.trend === 'bull' ? 0.0003 : -0.0003);
+
+  // GBMで価格パスを生成
+  const rawPrices = [sc.spy];
+  let p = sc.spy;
+  for (let d = 1; d <= expiryDays; d++) {
+    const u1 = Math.max(rng(), 1e-10);
+    const u2 = rng();
+    const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+    p *= Math.exp(drift + dailyVol * z);
+    rawPrices.push(p);
+  }
+  // 最終価格をsc.endSpyにスケール調整
+  const scale = sc.endSpy / rawPrices[expiryDays];
+  const prices = rawPrices.map(q => +(q * scale).toFixed(2));
+
+  // VIXパス（平均回帰 + 下落時スパイク）
+  const vixes = [baseVix];
+  let vix = baseVix;
+  for (let d = 1; d <= expiryDays; d++) {
+    const meanRev = 0.08 * (baseVix - vix);
+    const vixVol = Math.max(vix * 0.04, 0.5);
+    const u1 = Math.max(rng(), 1e-10);
+    const u2 = rng();
+    const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+    vix += meanRev + vixVol * z;
+    const pctChg = (prices[d] - prices[d-1]) / prices[d-1];
+    if (pctChg < -0.02) vix *= (1 + Math.abs(pctChg) * 2.5);
+    vix = Math.max(8, Math.min(vix, baseVix * 3));
+    vixes.push(+vix.toFixed(1));
+  }
+
+  // 保有期間内の重要イベントのday番号マップ
+  const entryDate = new Date(sc.date);
+  const critEvents = sc.events.filter(e => {
+    const d = new Date(e.date);
+    const expiry = new Date(entryDate);
+    expiry.setDate(expiry.getDate() + expiryDays);
+    return d > entryDate && d <= expiry && ['FOMC','CPI','雇用統計'].includes(classifyEvent(e.event));
+  });
+  const eventDayMap = {};
+  critEvents.forEach(e => {
+    const dayNum = Math.round((new Date(e.date) - entryDate) / 86400000);
+    if (dayNum >= 1 && dayNum <= expiryDays) eventDayMap[dayNum] = e.event;
+  });
+
+  // 満期日損益（参考値）
+  const expiryPnlDollar = Math.round(calcPnL(sc, strat, spread) * 100);
+
+  // 日次シミュレーション
+  for (let d = 1; d <= expiryDays; d++) {
+    const curSpy = prices[d];
+    const curVix = vixes[d];
+    const prevVix = vixes[d-1];
+    const remainingT = Math.max(0.0001, (expiryDays - d) / 365);
+    const sigma = estimateIV(curSpy, curVix);
+    const sigmaL = skewIV(sigma, curSpy, spread.bs);
+    const sigmaS = skewIV(sigma, curSpy, spread.ss);
+
+    // 含み損益をBS計算
+    let unrealizedPnl;
+    if (d === expiryDays) {
+      if (strat === 'bull') {
+        unrealizedPnl = Math.round((Math.max(0, curSpy - spread.bs) - Math.max(0, curSpy - spread.ss) - spread.net) * 100);
+      } else {
+        unrealizedPnl = Math.round((Math.max(0, spread.bs - curSpy) - Math.max(0, spread.ss - curSpy) - spread.net) * 100);
+      }
+    } else {
+      if (strat === 'bull') {
+        const lv = bsGreeks(curSpy, spread.bs, remainingT, rate, sigmaL, 'call').price;
+        const sv = bsGreeks(curSpy, spread.ss, remainingT, rate, sigmaS, 'call').price;
+        unrealizedPnl = Math.round((lv - sv - spread.net) * 100);
+      } else {
+        const lv = bsGreeks(curSpy, spread.bs, remainingT, rate, sigmaL, 'put').price;
+        const sv = bsGreeks(curSpy, spread.ss, remainingT, rate, sigmaS, 'put').price;
+        unrealizedPnl = Math.round((lv - sv - spread.net) * 100);
+      }
+    }
+
+    // 1. 指値（目標利益）到達チェック
+    if (unrealizedPnl >= limitOrder.targetProfit) {
+      return { type:'limit', day:d, exitPnl:unrealizedPnl, exitSpy:curSpy, exitVix:curVix, expiryPnl:expiryPnlDollar, slippage:0 };
+    }
+
+    // 2. 逆指値（損切り）到達チェック
+    if (unrealizedPnl <= -limitOrder.stopLoss) {
+      const pctChg = (curSpy - prices[d-1]) / prices[d-1];
+      const vixSpike = curVix / prevVix > 1.2;
+      const gapDown = pctChg < -0.015;
+      let slippage = 0;
+      if (vixSpike || gapDown) {
+        const rngSlip = makePRNG(dateToSeed(sc.date) + d * 17);
+        slippage = Math.round(Math.abs(unrealizedPnl) * (0.01 + rngSlip() * 0.02));
+      }
+      return { type:'stop', day:d, exitPnl:unrealizedPnl - slippage, exitSpy:curSpy, exitVix:curVix, expiryPnl:expiryPnlDollar, slippage, vixSpike, gapDown };
+    }
+
+    // 3. VIX急騰通知（手動決済トリガー）
+    if (d >= 2 && curVix / prevVix >= 1.3 && curVix > 25) {
+      return { type:'vix_spike', day:d, unrealizedPnl, exitSpy:curSpy, exitVix:curVix, prevVix, vixChangePct:Math.round((curVix/prevVix-1)*100), expiryPnl:expiryPnlDollar, remainingDte:expiryDays-d };
+    }
+
+    // 4. イベント前日通知
+    if (eventDayMap[d + 1]) {
+      return { type:'pre_event', day:d, unrealizedPnl, exitSpy:curSpy, exitVix:curVix, eventName:eventDayMap[d+1], expiryPnl:expiryPnlDollar, remainingDte:expiryDays-d };
+    }
+  }
+
+  // 満期まで保有
+  return { type:'expiry', day:expiryDays, exitPnl:expiryPnlDollar, exitSpy:sc.endSpy, expiryPnl:expiryPnlDollar, slippage:0 };
+}
+
+// ========== トレード結果確定（勝敗・損益更新）==========
+function finalizeTradeResult(exitPnlDollar) {
+  const isWin = exitPnlDollar >= 0;
+  if(isWin) state.wins++; else state.losses++;
+  state.totalPnL += exitPnlDollar;
+  const last = state.history[state.history.length - 1];
+  if(last && last.strat !== 'skip') last.pnl = exitPnlDollar;
+  updateHeader();
+  renderStepBar();
+}
+
+// ========== 自動決済結果画面（指値・逆指値・満期）==========
+function renderAutoExitResult(sc, strat, spread, sim) {
+  if(currentChart) { try { currentChart.remove(); } catch(e) {} currentChart = null; }
+
+  const isWin = sim.exitPnl >= 0;
+  const pnlColor = isWin ? '#10b981' : '#ef4444';
+  const pnlSign  = sim.exitPnl >= 0 ? '+' : '';
+  const showExpiryRef = sim.type !== 'expiry';
+
+  let titleHTML, reasonHTML;
+  if (sim.type === 'limit') {
+    titleHTML = `<div style="font-size:20px;font-weight:700;color:#10b981;margin-bottom:6px">✅ 目標利益到達（${sim.day}日目）で自動決済</div>`;
+    reasonHTML = `<div style="font-size:12px;color:#64748b">指値 +$${state.limitOrder.targetProfit} に到達しました</div>`;
+  } else if (sim.type === 'stop') {
+    let slipNote = '';
+    if (sim.slippage > 0) {
+      const cause = sim.vixSpike ? 'VIX急騰' : 'ギャップダウン';
+      const slipPct = Math.round(sim.slippage / Math.max(1, Math.abs(sim.exitPnl) + sim.slippage) * 100);
+      slipNote = `<div style="font-size:11px;color:#f59e0b;margin-top:5px">⚠ ${cause}によりスリッページ -$${sim.slippage}（設定より約${slipPct}%悪い価格で約定）</div>`;
+    }
+    titleHTML = `<div style="font-size:20px;font-weight:700;color:#ef4444;margin-bottom:6px">🔴 損切りライン到達（${sim.day}日目）で自動決済</div>`;
+    reasonHTML = `<div style="font-size:12px;color:#64748b">逆指値 -$${state.limitOrder.stopLoss} に到達しました</div>${slipNote}`;
+  } else {
+    titleHTML = `<div style="font-size:20px;font-weight:700;color:#94a3b8;margin-bottom:6px">📅 満期まで保有</div>`;
+    reasonHTML = `<div style="font-size:12px;color:#64748b">指値・逆指値に到達せず満期を迎えました</div>`;
+  }
+
+  const expiryPnlColor = sim.expiryPnl >= 0 ? '#10b981' : '#ef4444';
+  const expiryPnlSign  = sim.expiryPnl >= 0 ? '+' : '';
+  let expiryComment = '';
+  if (sim.type === 'limit') {
+    expiryComment = sim.expiryPnl > sim.exitPnl
+      ? `<span style="color:#f59e0b;margin-left:6px">← 保有継続の方が良かった</span>`
+      : `<span style="color:#10b981;margin-left:6px">← 早期決済が正解！</span>`;
+  } else if (sim.type === 'stop') {
+    expiryComment = sim.expiryPnl > sim.exitPnl
+      ? `<span style="color:#f59e0b;margin-left:6px">← 保有継続の方が良かった可能性</span>`
+      : `<span style="color:#10b981;margin-left:6px">← 損切りが正解！（さらに悪化した）</span>`;
+  }
+  const expiryRefHTML = showExpiryRef ? `
+    <div style="background:#141920;border-radius:8px;padding:10px 14px;margin-top:10px;font-size:11px;color:#64748b">
+      参考：満期まで保有した場合 <span style="color:${expiryPnlColor};font-weight:600">${expiryPnlSign}$${sim.expiryPnl}</span>${expiryComment}
+    </div>` : '';
+
+  const priceChangePct = (sc.endSpy - sc.spy) / sc.spy * 100;
+  const priceColor = sc.endSpy > sc.spy ? '#10b981' : '#ef4444';
+
+  document.getElementById('appContent').innerHTML = `
+    <div class="result-card ${isWin?'result-win':'result-loss'}">
+      ${titleHTML}
+      ${reasonHTML}
+      <div style="font-size:36px;font-weight:700;color:${pnlColor};margin-top:12px">${pnlSign}$${sim.exitPnl}</div>
+      <div style="font-size:12px;color:#64748b;margin-top:4px">決済損益（1枚あたり）</div>
+      ${expiryRefHTML}
+    </div>
+
+    <div class="card">
+      <div class="section-title">結果詳細</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
+        <div style="background:#141920;border-radius:8px;padding:12px">
+          <div style="font-size:11px;color:#475569;margin-bottom:4px">エントリー時 SPY</div>
+          <div style="font-size:18px;font-weight:700">$${sc.spy.toFixed(2)}</div>
+        </div>
+        <div style="background:#141920;border-radius:8px;padding:12px">
+          <div style="font-size:11px;color:#475569;margin-bottom:4px">満期日 SPY</div>
+          <div style="font-size:18px;font-weight:700;color:${priceColor}">$${sc.endSpy.toFixed(2)} <small>(${priceChangePct>0?'+':''}${priceChangePct.toFixed(2)}%)</small></div>
+        </div>
+      </div>
+      ${sc.shock ? `<div style="background:#2a1f00;border:1px solid #5a3a00;border-radius:8px;padding:10px;font-size:12px;color:#f59e0b;margin-bottom:12px">💡 ${sc.shock}</div>` : ''}
+      <div style="font-size:12px;color:#64748b;line-height:1.8">
+        <div>戦略: <span style="color:#fff">${strat==='bull'?'📈 ブルコール':'📉 ベアプット'} $${spread.bs}/$${spread.ss}</span></div>
+        <div>エントリーコスト: <span style="color:#ef4444">-$${(spread.net*100).toFixed(0)}</span>　最大利益: <span style="color:#10b981">+$${(spread.mp*100).toFixed(0)}</span>　R/R: ${spread.rr}</div>
+        <div>指値: <span style="color:#10b981">+$${state.limitOrder.targetProfit}</span>　逆指値: <span style="color:#ef4444">-$${state.limitOrder.stopLoss}</span></div>
+      </div>
+    </div>
+
+    ${buildChecklistHTML(state.checklist || analyzeChecklist(sc))}
+
+    <div style="display:flex;gap:10px">
+      <button class="btn btn-secondary" onclick="reviewQuestion()" style="padding:12px 16px">問題に戻る ↩</button>
+      ${state.current < state.questions.length - 1
+        ? `<button class="btn btn-primary" onclick="nextQuestion()" style="flex:1;padding:12px">次の問題へ →</button>`
+        : `<button class="btn btn-primary" onclick="showFinal()" style="flex:1;padding:12px">結果を見る 🏁</button>`
+      }
+    </div>
+  `;
+  state.resultCallback = () => renderAutoExitResult(sc, strat, spread, sim);
+}
+
+// ========== 決済シナリオ生成 ==========
+function generateExitScenario(sc, strat, spread) {
+  const rng = makePRNG(dateToSeed(sc.date) + (strat === 'bull' ? 1000 : 2000));
+  const expiryDays = sc.expiryDays;
+  const timelimit  = Math.floor(expiryDays / 3);
+  const rate   = (sc.rate !== undefined) ? sc.rate : 0.053;
+  const sigma  = estimateIV(sc.spy, sc.vix);
+  const lmOrder = state.limitOrder || {
+    targetProfit: Math.round(spread.mp  * 100 * 0.75),
+    stopLoss:     Math.round(spread.net * 100 * 0.50),
+  };
+
+  // 保有期間中の重要イベントを抽出
+  const critEvents = sc.events.filter(e => {
+    const d     = new Date(e.date);
+    const entry  = new Date(sc.date);
+    const expiry = new Date(sc.date);
+    expiry.setDate(expiry.getDate() + expiryDays);
+    return d > entry && d <= expiry && ['FOMC','CPI','雇用統計'].includes(classifyEvent(e.event));
+  });
+
+  // 利用可能なパターンを選択
+  const patterns = ['profit_target', 'timelimit', 'spike'];
+  if(critEvents.length > 0) patterns.push('pre_event');
+  const pattern = patterns[Math.floor(rng() * patterns.length)];
+
+  let day, midSpy, midVix;
+
+  if(pattern === 'profit_target') {
+    // 指値付近の含み益が出るよう midSpy を設定
+    day    = Math.floor(expiryDays * (0.25 + rng() * 0.25));
+    midSpy = strat === 'bull'
+      ? +(spread.bep + (spread.ss - spread.bep) * 0.65).toFixed(2)
+      : +(spread.bep - (spread.bep - spread.ss) * 0.65).toFixed(2);
+    midVix = sc.vix;
+
+  } else if(pattern === 'timelimit') {
+    day = timelimit;
+    // ランダムに含み益 or 含み損
+    const favorable = rng() > 0.5;
+    midSpy = strat === 'bull'
+      ? +(sc.spy * (favorable ? (1.01 + rng()*0.01) : (0.978 + rng()*0.01))).toFixed(2)
+      : +(sc.spy * (favorable ? (0.99 - rng()*0.01) : (1.022 - rng()*0.01))).toFixed(2);
+    midVix = sc.vix;
+
+  } else if(pattern === 'pre_event') {
+    // イベント前日に設定
+    const eventDate = new Date(critEvents[0].date);
+    const entryDate = new Date(sc.date);
+    day    = Math.max(3, Math.min(Math.round((eventDate - entryDate) / 86400000) - 1, expiryDays - 3));
+    // ランダムに含み益 or 含み損
+    const favorable = rng() > 0.4;
+    midSpy = strat === 'bull'
+      ? +(sc.spy * (favorable ? (1.01 + rng()*0.01) : (0.982 + rng()*0.01))).toFixed(2)
+      : +(sc.spy * (favorable ? (0.99 - rng()*0.01) : (1.018 - rng()*0.01))).toFixed(2);
+    midVix = sc.vix;
+
+  } else { // spike
+    day    = Math.floor(expiryDays * (0.2 + rng() * 0.25));
+    midSpy = strat === 'bull'
+      ? +(sc.spy * (0.952 + rng() * 0.02)).toFixed(2)   // ブルは不利
+      : +(sc.spy * (0.965 + rng() * 0.02)).toFixed(2);  // ベアは有利寄り
+    midVix = Math.round(sc.vix * (1.3 + rng() * 0.2));
+  }
+
+  day = Math.max(2, Math.min(day, expiryDays - 3));
+  const remainingDte = expiryDays - day;
+  const remainingT   = remainingDte / 365;
+
+  // 含み損益をBS計算
+  const sigmaL = skewIV(sigma, sc.spy, spread.bs);
+  const sigmaS = skewIV(sigma, sc.spy, spread.ss);
+  let unrealizedPnl;
+  if(strat === 'bull') {
+    const lv = bsGreeks(midSpy, spread.bs, remainingT, rate, sigmaL, 'call').price;
+    const sv = bsGreeks(midSpy, spread.ss, remainingT, rate, sigmaS, 'call').price;
+    unrealizedPnl = Math.round((lv - sv - spread.net) * 100);
+  } else {
+    const lv = bsGreeks(midSpy, spread.bs, remainingT, rate, sigmaL, 'put').price;
+    const sv = bsGreeks(midSpy, spread.ss, remainingT, rate, sigmaS, 'put').price;
+    unrealizedPnl = Math.round((lv - sv - spread.net) * 100);
+  }
+
+  // ========== 正解ロジック ==========
+  let exitCorrect = true, exitReason = '', situationLabel = '', bothOk = false;
+
+  if(pattern === 'profit_target') {
+    exitCorrect    = true;
+    situationLabel = '目標利益到達';
+    exitReason     = `目標指値（+$${lmOrder.targetProfit}）に到達 → 決済が正解`;
+
+  } else if(pattern === 'timelimit') {
+    situationLabel = 'タイムリミット到達';
+    if(unrealizedPnl < 0) {
+      exitCorrect = true;
+      exitReason  = `タイムリミット（${timelimit}日）到達かつ含み損 → 損切りが正解`;
+    } else {
+      bothOk     = true;
+      exitCorrect = true;
+      exitReason  = `タイムリミット到達だが含み益あり → 決済・ホールドどちらも可`;
+    }
+
+  } else if(pattern === 'pre_event') {
+    situationLabel = `イベント前日（${critEvents[0].event}）`;
+    exitCorrect    = true;
+    exitReason     = unrealizedPnl >= 0
+      ? `${critEvents[0].event} 前日で含み益 → 即利確が正解`
+      : `${critEvents[0].event} 前日で含み損 → 即損切りが正解`;
+
+  } else { // spike
+    const vixChangePctVal = Math.round((midVix / sc.vix - 1) * 100);
+    situationLabel = `VIX急騰（+${vixChangePctVal}%）`;
+    if(strat === 'bull') {
+      exitCorrect = true;
+      exitReason  = `VIX急騰でブルコールは含み損拡大リスク → 即損切りが正解`;
+    } else if(unrealizedPnl >= 0) {
+      exitCorrect = true;
+      exitReason  = `VIX急騰でベアプット含み益 → 即利確が正解`;
+    } else {
+      // ベアプット+含み損: VIX上昇はベアに味方する可能性 → どちらも可
+      bothOk      = true;
+      exitCorrect = true;
+      exitReason  = `VIX急騰でベアプット含み損 → ホールドも可（VIX上昇がベアに味方の可能性）`;
+    }
+  }
+
+  const maxProfitDollar = Math.round(spread.mp * 100);
+  const unrealizedPct   = maxProfitDollar > 0 ? Math.round(unrealizedPnl / maxProfitDollar * 100) : 0;
+  const pricePct        = +((midSpy - sc.spy) / sc.spy * 100).toFixed(1);
+  const vixChangePct    = Math.round((midVix / sc.vix - 1) * 100);
+
+  return { pattern, day, midSpy, midVix, pricePct,
+    unrealizedPnl, unrealizedPct, maxProfitDollar,
+    remainingDte, timelimit, situationLabel, exitCorrect, exitReason, bothOk,
+    hasEvent: critEvents.length > 0,
+    eventName: critEvents.length > 0 ? critEvents[0].event : null,
+    vixChangePct, limitOrder: lmOrder };
+}
+
+// ========== 決済判断フェーズ描画（VIX急騰・イベント前日）==========
+function renderExitPhase(sc, strat, spread, reason, sim) {
+  if(currentChart) { try { currentChart.remove(); } catch(e) {} currentChart = null; }
+
+  const pnlColor = sim.unrealizedPnl >= 0 ? '#10b981' : '#ef4444';
+  const pnlSign  = sim.unrealizedPnl >= 0 ? '+' : '';
+  const lmOrder  = state.limitOrder;
+
+  let noticeHTML = '', btnExitLabel = '✅ 即決済する', badgeColor = '#f97316';
+  let situationLabel = '';
+
+  if (sim.type === 'vix_spike') {
+    badgeColor     = '#ef4444';
+    situationLabel = `VIX急騰（+${sim.vixChangePct}%）`;
+    noticeHTML     = `
+      <div style="margin-bottom:6px;font-size:14px;font-weight:700;color:#ef4444">
+        VIXが前日比+${sim.vixChangePct}%急騰（${sim.prevVix.toFixed(0)} → ${sim.exitVix}）。現在の含み損益: <span style="color:${pnlColor}">${pnlSign}$${sim.unrealizedPnl}</span>
+      </div>
+      <div style="font-size:12px;color:#ef4444">⚡ VIX急騰通知（${sim.day}日目）</div>`;
+  } else { // pre_event
+    badgeColor     = '#f59e0b';
+    situationLabel = `イベント前日（${sim.eventName}）`;
+    noticeHTML     = `
+      <div style="margin-bottom:6px;font-size:14px;font-weight:700;color:#f59e0b">
+        明日${sim.eventName}発表。現在の含み損益: <span style="color:${pnlColor}">${pnlSign}$${sim.unrealizedPnl}</span>
+      </div>
+      <div style="font-size:12px;color:#f59e0b">⚠ イベント前日通知（${sim.day}日目）</div>`;
+  }
+
+  document.getElementById('appContent').innerHTML = `
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div class="section-title" style="margin:0">決済判断フェーズ</div>
+        <div style="font-size:10px;background:${badgeColor}22;color:${badgeColor};padding:3px 10px;border-radius:10px;border:1px solid ${badgeColor}55">
+          ${situationLabel}
+        </div>
+      </div>
+
+      <div style="background:#141920;border-radius:10px;padding:16px;margin-bottom:14px">
+        ${noticeHTML}
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;font-size:12px">
+        <div style="background:#0f1318;border-radius:8px;padding:10px">
+          <div style="color:#475569;font-size:10px;margin-bottom:3px">目標指値</div>
+          <div style="color:#10b981;font-weight:700">+$${lmOrder.targetProfit}</div>
+        </div>
+        <div style="background:#0f1318;border-radius:8px;padding:10px">
+          <div style="color:#475569;font-size:10px;margin-bottom:3px">損切り逆指値</div>
+          <div style="color:#ef4444;font-weight:700">-$${lmOrder.stopLoss}</div>
+        </div>
+        <div style="background:#0f1318;border-radius:8px;padding:10px">
+          <div style="color:#475569;font-size:10px;margin-bottom:3px">現在の含み損益</div>
+          <div style="color:${pnlColor};font-weight:700;font-size:15px">${pnlSign}$${sim.unrealizedPnl}</div>
+        </div>
+        <div style="background:#0f1318;border-radius:8px;padding:10px">
+          <div style="color:#475569;font-size:10px;margin-bottom:3px">残りDTE</div>
+          <div style="color:#94a3b8;font-weight:600">${sim.remainingDte}日</div>
+        </div>
+      </div>
+
+      <textarea id="exitReason" placeholder="決済判断の理由を入力（任意）：なぜ決済 / ホールドを選んだか" style="width:100%;background:#141920;border:1px solid #2a3340;color:#e2e8f0;border-radius:8px;padding:10px;font-size:12px;resize:vertical;min-height:56px;font-family:inherit;margin-bottom:10px"></textarea>
+
+      <div style="display:flex;gap:10px">
+        <button class="btn btn-primary" onclick="submitExitDecision('exit')" style="flex:1;padding:14px;font-size:13px;font-weight:700">${btnExitLabel}</button>
+        <button class="btn btn-secondary" onclick="submitExitDecision('hold')" style="flex:1;padding:14px;font-size:13px;font-weight:700">⏳ ホールドする</button>
+      </div>
+    </div>
+  `;
+}
+
+function submitExitDecision(choice) {
+  const sim = state.holdingSim;
+  const { sc, strat, spread } = state.exitArgs;
+  const exitReasonText = (document.getElementById('exitReason')?.value || '').trim();
+
+  const userExited = choice === 'exit';
+  // 決済→含み損益、ホールド→満期損益
+  const actualPnl = userExited ? sim.unrealizedPnl : sim.expiryPnl;
+
+  // 正解判定
+  let correct, feedbackText, bothOk = false;
+  if (sim.type === 'vix_spike') {
+    if (strat === 'bull') {
+      correct      = userExited;
+      feedbackText = correct
+        ? `✅ 正解：VIX急騰でブルコールは含み損拡大リスク → 即損切りが正解`
+        : `❌ 不正解（ホールドを選択）— VIX急騰でブルコール保有継続はリスク大`;
+    } else if (sim.unrealizedPnl >= 0) {
+      correct      = userExited;
+      feedbackText = correct
+        ? `✅ 正解：VIX急騰でベアプット含み益 → 即利確が正解`
+        : `❌ 不正解（ホールドを選択）— VIX急騰で含み益があるなら利確推奨`;
+    } else {
+      bothOk       = true;
+      correct      = true;
+      feedbackText = `✅ ${userExited ? '決済' : 'ホールド'}を選択 — VIX急騰でベアプット含み損: ホールドも可（VIX上昇がベアに味方の可能性）`;
+    }
+  } else { // pre_event
+    correct      = userExited;
+    feedbackText = correct
+      ? `✅ 正解：${sim.eventName}前日で${sim.unrealizedPnl >= 0 ? '含み益 → 即利確' : '含み損 → 即損切り'}が正解`
+      : `❌ 不正解（ホールドを選択）— ${sim.eventName}前日は決済が原則`;
+  }
+
+  const feedbackColor  = correct ? '#10b981' : '#ef4444';
+  const situationLabel = sim.type === 'vix_spike'
+    ? `VIX急騰（+${sim.vixChangePct}%）`
+    : `イベント前日（${sim.eventName}）`;
+
+  // 履歴エントリーに決済判断を記録
+  const last = state.history[state.history.length - 1];
+  if(last) {
+    last.exitChoice         = choice;
+    last.exitCorrect        = correct;
+    last.exitBothOk         = bothOk;
+    last.exitSituationLabel = situationLabel;
+    last.exitReason         = feedbackText.replace(/^[✅❌] /, '');
+    last.exitPattern        = sim.type;
+    last.exitUserReason     = exitReasonText;
+  }
+
+  finalizeTradeResult(actualPnl);
+
+  const pnlColor  = actualPnl >= 0 ? '#10b981' : '#ef4444';
+  const pnlSign   = actualPnl >= 0 ? '+' : '';
+  const label     = userExited ? '手動決済（' + situationLabel + '）' : '満期まで保有';
+  const expiryRef = userExited && sim.expiryPnl !== actualPnl
+    ? `<div style="font-size:11px;color:#64748b;margin-top:6px">参考：満期まで保有した場合 <span style="color:${sim.expiryPnl>=0?'#10b981':'#ef4444'};font-weight:600">${sim.expiryPnl>=0?'+':''}$${sim.expiryPnl}</span></div>`
+    : '';
+
+  document.getElementById('appContent').innerHTML = `
+    <div class="card" style="padding:20px">
+      <div style="font-size:13px;font-weight:600;color:${feedbackColor};line-height:1.6;margin-bottom:8px">${feedbackText}</div>
+      <div style="font-size:16px;font-weight:700;color:${pnlColor};margin-bottom:4px">${label}　${pnlSign}$${actualPnl}</div>
+      ${expiryRef}
+      <button class="btn btn-primary" onclick="proceedToResult()" style="width:100%;padding:12px;margin-top:14px">最終結果を見る →</button>
+    </div>
+  `;
+}
+
+function proceedToResult() {
+  const { sc } = state.exitArgs;
+  const last    = state.history[state.history.length - 1] || {};
+  const pnlDollar = (last && last.strat !== 'skip') ? last.pnl : 0;
+  const isWin   = pnlDollar >= 0;
+  renderResult(sc, pnlDollar / 100, pnlDollar, isWin);
+}
+
+function updateHeader() {
+  document.getElementById('scoreDisplay').textContent = `${state.wins}勝${state.losses}敗`;
+  const pnl = state.totalPnL;
+  const el = document.getElementById('pnlDisplay');
+  el.textContent = (pnl>=0?'+':'')+'$'+pnl;
+  el.style.color = pnl>=0?'#10b981':'#ef4444';
+}
+
+function renderResult(sc, pnl, pnlDollar, isWin) {
+  if(currentChart) { try { currentChart.remove(); } catch(e) {} currentChart = null; }
+  const spread = state.selectedSpread;
+  const strat = state.selectedStrat;
+  const correctDir = (strat==='bear' && sc.endSpy < sc.spy) || (strat==='bull' && sc.endSpy > sc.spy);
+
+  // 価格推移の簡易表示
+  const priceChangePct = (sc.endSpy - sc.spy)/sc.spy*100;
+  const priceChange = priceChangePct.toFixed(2);
+  const priceColor = sc.endSpy > sc.spy ? '#10b981' : '#ef4444';
+
+  // 決済判断を履歴から取得
+  const lastH = state.history[state.history.length - 1] || {};
+  const exitOk       = lastH.exitCorrect !== false;
+  const exitColor    = exitOk ? '#10b981' : '#ef4444';
+  const exitIcon     = exitOk ? '✅' : '❌';
+  const exitReasonText  = lastH.exitReason || '';
+  const exitSitText     = lastH.exitSituationLabel || '';
+  const exitUserReason  = lastH.exitUserReason || '';
+  // 手動決済かどうか（vix_spike / pre_event かつ決済を選択）
+  const isManualExit    = lastH.exitChoice === 'exit' && lastH.exitPattern;
+  const sim             = state.holdingSim;
+  const expiryPnlRef    = (isManualExit && sim) ? sim.expiryPnl : null;
+
+  let resultTitleText = isWin ? '✅ 利益確定' : '❌ 損失';
+  if (isManualExit) resultTitleText = isWin ? '✅ 手動決済（利益）' : '🔴 手動決済（損失）';
+
+  const expiryRefHTML = (isManualExit && expiryPnlRef !== null) ? `
+    <div style="font-size:12px;margin-top:10px;padding:8px 12px;background:#141920;border-radius:8px;line-height:1.7">
+      <div style="color:#64748b">参考：満期まで保有した場合 <span style="color:${expiryPnlRef>=0?'#10b981':'#ef4444'};font-weight:600">${expiryPnlRef>=0?'+':''}$${expiryPnlRef}</span></div>
+    </div>` : `<div style="font-size:12px;color:#64748b;margin-top:8px">1枚あたり（×枚数で実際の損益）</div>`;
+
+  document.getElementById('appContent').innerHTML = `
+    <div class="result-card ${isWin?'result-win':'result-loss'}">
+      <div class="result-title">${resultTitleText}</div>
+      <div style="font-size:32px;font-weight:700;color:${isWin?'#10b981':'#ef4444'}">${pnlDollar>=0?'+':''}$${pnlDollar}</div>
+      ${expiryRefHTML}
+    </div>
+
+    <div class="card" style="padding:16px">
+      <div class="section-title" style="margin-bottom:12px">判断評価</div>
+      <div style="display:flex;flex-direction:column;gap:8px;font-size:13px">
+        <div style="display:flex;justify-content:space-between;align-items:center;background:#141920;border-radius:8px;padding:10px 14px">
+          <span style="color:#94a3b8">エントリー判断</span>
+          <span style="font-weight:700;color:${correctDir?'#10b981':'#ef4444'}">${correctDir?'✅ 正解':'❌ 不正解'}</span>
+        </div>
+        <div style="background:#141920;border-radius:8px;padding:10px 14px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+            <span style="color:#94a3b8">決済判断</span>
+            <span style="font-weight:700;color:${exitColor}">${exitIcon} ${exitOk?'正解':'不正解'}</span>
+          </div>
+          <div style="font-size:11px;color:#64748b;margin-bottom:${exitUserReason?'4px':'0'}">${exitSitText}${exitSitText&&exitReasonText?' — ':''}${exitReasonText}</div>
+          ${exitUserReason ? `<div style="font-size:11px;color:#475569;font-style:italic;padding-left:2px">"${exitUserReason}"</div>` : ''}
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;background:#141920;border-radius:8px;padding:10px 14px">
+          <span style="color:#94a3b8">最終損益</span>
+          <span style="font-size:16px;font-weight:700;color:${isWin?'#10b981':'#ef4444'}">${pnlDollar>=0?'+':''}$${pnlDollar}</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-title">結果詳細</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
+        <div style="background:#141920;border-radius:8px;padding:12px">
+          <div style="font-size:11px;color:#475569;margin-bottom:4px">エントリー時 SPY</div>
+          <div style="font-size:18px;font-weight:700">$${sc.spy.toFixed(2)}</div>
+        </div>
+        <div style="background:#141920;border-radius:8px;padding:12px">
+          <div style="font-size:11px;color:#475569;margin-bottom:4px">${isManualExit ? '満期日 SPY（参考）' : '満期日 SPY'}</div>
+          <div style="font-size:18px;font-weight:700;color:${isManualExit?'#475569':priceColor}">$${sc.endSpy.toFixed(2)} <small>(${priceChangePct>0?'+':''}${priceChange}%)</small></div>
+        </div>
+      </div>
+      ${sc.shock ? `<div style="background:#2a1f00;border:1px solid #5a3a00;border-radius:8px;padding:10px;font-size:12px;color:#f59e0b;margin-bottom:12px">💡 ${sc.shock}</div>` : ''}
+      <div style="font-size:12px;color:#64748b;line-height:1.8">
+        <div>戦略: <span style="color:#fff">${strat==='bull'?'📈 ブルコール':'📉 ベアプット'} $${spread.bs}/$${spread.ss}</span></div>
+        <div>エントリーコスト: <span style="color:#ef4444">-$${(spread.net*100).toFixed(0)}</span>　最大利益: <span style="color:#10b981">+$${(spread.mp*100).toFixed(0)}</span>　R/R: ${spread.rr}</div>
+        <div>コスト率: <span style="color:${spread.costRatio<=0.5?'#10b981':'#ef4444'}">${(spread.costRatio*100).toFixed(0)}%</span>　EV: <span style="color:${spread.ev>0?'#10b981':'#ef4444'}">${spread.ev>0?'+':''}$${(spread.ev*100).toFixed(0)}</span></div>
+        <div>BEP: $${spread.bep} (${spread.bep_dist>0?'+':''}${spread.bep_dist}%)</div>
+        <div>方向判断: <span style="color:${correctDir?'#10b981':'#ef4444'}">${correctDir?'✓ 正解':'✗ 不正解'}</span>${!correctDir&&isWin?' (方向は違ったがBEP内で利益)':''}</div>
+      </div>
+    </div>
+
+    ${buildChecklistHTML(state.checklist || analyzeChecklist(sc))}
+
+    <div style="display:flex;gap:10px">
+      <button class="btn btn-secondary" onclick="reviewQuestion()" style="padding:12px 16px">問題に戻る ↩</button>
+      ${state.current < state.questions.length - 1
+        ? `<button class="btn btn-primary" onclick="nextQuestion()" style="flex:1;padding:12px">次の問題へ →</button>`
+        : `<button class="btn btn-primary" onclick="showFinal()" style="flex:1;padding:12px">結果を見る 🏁</button>`
+      }
+    </div>
+  `;
+  state.resultCallback = () => renderResult(sc, pnl, pnlDollar, isWin);
+}
+
+function renderResultSkip(sc) {
+  if(currentChart) { try { currentChart.remove(); } catch(e) {} currentChart = null; }
+  const priceChangePct = (sc.endSpy - sc.spy) / sc.spy * 100;
+  const priceColor = sc.endSpy > sc.spy ? '#10b981' : '#ef4444';
+  const bestStrat = sc.endSpy > sc.spy ? 'bull' : 'bear';
+  const bestSpreads = generateSpreads(sc.spy, sc.vix, bestStrat, sc.expiryDays, undefined, undefined, sc.rate);
+  const bestSpread = bestSpreads[0];
+  const bestPnl = bestSpread ? Math.round(calcPnL(sc, bestStrat, bestSpread) * 100) : 0;
+
+  // 戦略条件ベースの見送り判定
+  const cl = state.checklist || analyzeChecklist(sc);
+  const absoluteSkipReasons = [];
+  if(cl.step1.status === 'ng') absoluteSkipReasons.push(cl.step1.msg);
+  if(cl.step2.status === 'ng') absoluteSkipReasons.push(cl.step2.msg);
+  if(sc.expiryDays < 14) absoluteSkipReasons.push(`DTE ${sc.expiryDays}日 < 14日`);
+
+  let verdict, verdictColor, reasonNote = '';
+  if(absoluteSkipReasons.length > 0) {
+    verdict = '✅ 見送り正解 — 絶対見送り条件に該当';
+    verdictColor = '#10b981';
+    reasonNote = absoluteSkipReasons.join(' / ');
+  } else if(bestPnl <= 0) {
+    verdict = '✅ 見送り正解 — 建てていれば損失だった';
+    verdictColor = '#10b981';
+  } else if(sc.vix * 1.1 > 45) {
+    verdict = `✅ 見送り正解 — IV ${(sc.vix*1.1).toFixed(1)}% と高IV環境。デビットスプレッドには不利。`;
+    verdictColor = '#10b981';
+  } else {
+    verdict = `△ 見送り — ${bestStrat==='bull'?'📈 ブルコール':'📉 ベアプット'}なら +$${bestPnl} のチャンスだった`;
+    verdictColor = '#f59e0b';
+  }
+
+  document.getElementById('appContent').innerHTML = `
+    <div class="result-card" style="background:#141c28;border:2px solid #334155;margin-bottom:14px;text-align:center;padding:20px">
+      <div style="font-size:24px;font-weight:700;color:#94a3b8;margin-bottom:8px">🚫 見送り</div>
+      <div style="font-size:14px;font-weight:700;color:${verdictColor}">${verdict}</div>
+      ${reasonNote ? `<div style="font-size:11px;color:#ef4444;margin-top:6px">${reasonNote}</div>` : ''}
+    </div>
+
+    <div class="card">
+      <div class="section-title">結果詳細</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
+        <div style="background:#141920;border-radius:8px;padding:12px">
+          <div style="font-size:11px;color:#475569;margin-bottom:4px">エントリー時 SPY</div>
+          <div style="font-size:18px;font-weight:700">$${sc.spy.toFixed(2)}</div>
+        </div>
+        <div style="background:#141920;border-radius:8px;padding:12px">
+          <div style="font-size:11px;color:#475569;margin-bottom:4px">満期日 SPY</div>
+          <div style="font-size:18px;font-weight:700;color:${priceColor}">$${sc.endSpy.toFixed(2)} <small>(${priceChangePct>0?'+':''}${priceChangePct.toFixed(2)}%)</small></div>
+        </div>
+      </div>
+      ${sc.shock ? `<div style="background:#2a1f00;border:1px solid #5a3a00;border-radius:8px;padding:10px;font-size:12px;color:#f59e0b;margin-bottom:12px">💡 ${sc.shock}</div>` : ''}
+      ${bestSpread ? `
+      <div style="font-size:12px;color:#64748b;line-height:2;background:#0f1318;border-radius:8px;padding:12px">
+        <div style="color:#475569;margin-bottom:4px;font-size:10px;letter-spacing:1px;text-transform:uppercase">最善手だったスプレッド</div>
+        <div>${bestStrat==='bull'?'📈 ブルコール':'📉 ベアプット'} <span style="color:#fff">$${bestSpread.bs}/$${bestSpread.ss}</span></div>
+        <div>コスト: <span style="color:#ef4444">-$${(bestSpread.net*100).toFixed(0)}</span>　最大利益: <span style="color:#10b981">+$${(bestSpread.mp*100).toFixed(0)}</span>　R/R: ${bestSpread.rr}</div>
+        <div>結果: <span style="color:${bestPnl>=0?'#10b981':'#ef4444'};font-weight:700">${bestPnl>=0?'+':''}$${bestPnl}</span></div>
+      </div>` : ''}
+    </div>
+
+    ${buildChecklistHTML(cl)}
+
+    <div style="display:flex;gap:10px">
+      <button class="btn btn-secondary" onclick="reviewQuestion()" style="padding:12px 16px">問題に戻る ↩</button>
+      ${state.current < state.questions.length - 1
+        ? `<button class="btn btn-primary" onclick="nextQuestion()" style="flex:1;padding:12px">次の問題へ →</button>`
+        : `<button class="btn btn-primary" onclick="showFinal()" style="flex:1;padding:12px">結果を見る 🏁</button>`
+      }
+    </div>
+  `;
+  state.resultCallback = () => renderResultSkip(sc);
+}
+
+function reviewQuestion() {
+  const sc = state.questions[state.current];
+  renderQuestion(sc, true);
+}
+
+function backToResult() {
+  if(state.resultCallback) state.resultCallback();
+}
+
+function generateAnalysisText() {
+  const lines = [];
+  const skips = state.history.filter(h => h.strat === 'skip').length;
+  lines.push(`# SPYオプション バックテスト 分析データ`);
+  lines.push(`成績: ${state.wins}勝 ${state.losses}敗 ${skips}見送り　|　損益: ${state.totalPnL>=0?'+':''}$${state.totalPnL}`);
+  lines.push(`\n以下の10問について、私の判断を分析してください。各問題で「なぜその選択が正しい/間違いだったか」「戦略条件との整合性」「改善点」を教えてください。\n`);
+  lines.push(`---`);
+
+  state.history.forEach((h, i) => {
+    const sc = h.sc;
+    const cl = h.checklist || analyzeChecklist(sc);
+    const trend = sc.spy > sc.sma20 ? '強気↑' : '弱気↓';
+    const smaDev = ((sc.spy - sc.sma20) / sc.sma20 * 100).toFixed(1);
+    const eventsInPeriod = sc.events.filter(e => {
+      const entry = new Date(sc.date), expiry = new Date(sc.date);
+      expiry.setDate(expiry.getDate() + sc.expiryDays);
+      const d = new Date(e.date);
+      return d >= entry && d <= expiry;
+    });
+
+    lines.push(`\n## 問題 #${i+1}｜${sc.date}`);
+    lines.push(`**状況**: ${sc.desc}`);
+    lines.push(`**市場**: SPY $${sc.spy} | SMA20 $${sc.sma20}（${trend} 乖離${smaDev}%）| VIX ${sc.vix} | 推定IV ${(sc.vix*1.1).toFixed(1)}% | DTE ${sc.expiryDays}日`);
+    lines.push(`**イベント**: ${eventsInPeriod.length > 0 ? eventsInPeriod.map(e=>e.date+' '+e.event).join('、') : 'なし'}`);
+
+    function stIcon(s) { return s==='ok'?'✓':s==='warn'?'⚠':s==='ng'?'✗':'→'; }
+    lines.push(`**判定フロー**:`);
+    lines.push(`  ①VIX+方向: ${stIcon(cl.step1.status)} ${cl.step1.msg}`);
+    lines.push(`  ②イベント: ${stIcon(cl.step2.status)} ${cl.step2.msg}`);
+    lines.push(`  ③推定IV: ${stIcon(cl.step3.status)} ${cl.step3.msg}`);
+    lines.push(`  ④DTE: ${stIcon(cl.step4.status)} ${cl.step4.msg}`);
+    lines.push(`  絶対見送り条件: ${cl.absoluteSkip ? '該当あり' : 'なし'}`);
+    lines.push(`  VIX推奨: ${cl.vixRec.msg}`);
+
+    if(h.strat === 'skip') {
+      lines.push(`**私の選択**: 🚫 見送り`);
+    } else {
+      const sp = h.spread;
+      const stratLabel = h.strat === 'bull' ? '📈 ブルコール' : '📉 ベアプット';
+      lines.push(`**私の選択**: ${stratLabel} $${sp.bs}/$${sp.ss}`);
+      lines.push(`  コスト $${(sp.net*100).toFixed(0)} | 最大利益 $${(sp.mp*100).toFixed(0)} | R/R ${sp.rr} | コスト率 ${(sp.costRatio*100).toFixed(0)}% | EV ${sp.ev>0?'+':''}$${(sp.ev*100).toFixed(0)}`);
+    }
+
+    if(h.reason) lines.push(`**判断理由**: ${h.reason}`);
+    const priceChg = ((sc.endSpy - sc.spy)/sc.spy*100).toFixed(2);
+    let outcome;
+    if(h.strat === 'skip') {
+      outcome = '見送り';
+    } else if(h.exitChoice === 'exit' && h.exitPattern) {
+      // 手動決済（VIX急騰・イベント前日）
+      outcome = h.pnl >= 0 ? `✅ 手動決済 +$${h.pnl}` : `❌ 手動決済 $${h.pnl}`;
+    } else {
+      outcome = h.pnl >= 0 ? `✅ 利益 +$${h.pnl}` : `❌ 損失 $${h.pnl}`;
+    }
+    lines.push(`**結果**: SPY $${sc.endSpy}（${priceChg>0?'+':''}${priceChg}%）→ ${outcome}`);
+    if(sc.shock) lines.push(`**実際に起きたこと**: ${sc.shock}`);
+
+    if(h.strat !== 'skip' && h.exitChoice) {
+      lines.push(`**私の決済判断**: ${h.exitChoice === 'exit' ? '決済した' : 'ホールドした'}`);
+      lines.push(`**決済タイミング**: ${h.exitSituationLabel || ''}`);
+      lines.push(`**決済判断の正解**: ${h.exitCorrect ? '正解' : '不正解'}${h.exitBothOk ? '（どちらも可）' : ''}`);
+      lines.push(`**正解ロジック**: ${h.exitReason}`);
+      if(h.exitUserReason) lines.push(`**私の決済理由**: ${h.exitUserReason}`);
+    }
+  });
+
+  lines.push(`\n---`);
+  lines.push(`\n上記データをもとに、私のトレード判断を分析してください。特に間違えた問題について「何を見落としていたか」「次回どう判断すべきか」を具体的に教えてください。`);
+  return lines.join('\n');
+}
+
+function copyAnalysisText() {
+  let text;
+  try { text = generateAnalysisText(); } catch(e) {
+    alert('データ生成エラー: ' + e.message); return;
+  }
+
+  // 既存のオーバーレイがあれば削除
+  const existing = document.getElementById('analysisOverlay');
+  if(existing) existing.remove();
+
+  // オーバーレイを作成（必ず表示する）
+  const overlay = document.createElement('div');
+  overlay.id = 'analysisOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;gap:12px';
+
+  const msg = document.createElement('div');
+  msg.style.cssText = 'color:#94a3b8;font-size:13px;text-align:center';
+  msg.textContent = '全選択 (Cmd+A) → コピー (Cmd+C)';
+
+  const ta = document.createElement('textarea');
+  ta.style.cssText = 'width:100%;max-width:660px;height:55vh;background:#141920;border:1px solid #334155;color:#e2e8f0;border-radius:8px;padding:12px;font-size:11px;font-family:monospace;resize:none';
+  ta.value = text;
+  ta.readOnly = true;
+  ta.addEventListener('click', () => ta.select());
+
+  const closeBtn = document.createElement('button');
+  closeBtn.style.cssText = 'background:#1e2530;color:#94a3b8;border:1px solid #2a3340;border-radius:8px;padding:10px 32px;cursor:pointer;font-size:13px';
+  closeBtn.textContent = '閉じる';
+  closeBtn.onclick = () => overlay.remove();
+
+  overlay.appendChild(msg);
+  overlay.appendChild(ta);
+  overlay.appendChild(closeBtn);
+  document.body.appendChild(overlay);
+
+  // テキストを選択状態にする
+  ta.focus();
+  ta.select();
+
+  // execCommandでクリップボードコピーも試みる
+  try {
+    if(document.execCommand('copy')) {
+      msg.style.color = '#10b981';
+      msg.textContent = '✅ クリップボードにコピーされました！';
+      return;
+    }
+  } catch(e) {}
+
+  // Clipboard APIも試みる
+  if(navigator.clipboard) {
+    navigator.clipboard.writeText(text).then(() => {
+      msg.style.color = '#10b981';
+      msg.textContent = '✅ クリップボードにコピーされました！';
+    }).catch(() => {});
+  }
+}
+
+function nextQuestion() {
+  state.current++;
+  state.limitOrder   = null;
+  state.exitScenario = null;
+  state.exitArgs     = null;
+  state.holdingSim   = null;
+  renderStepBar();
+  loadQuestion();
+}
+
+function saveSession() {
+  try {
+    const session = {
+      id: Date.now(),
+      savedAt: new Date().toISOString(),
+      wins: state.wins,
+      losses: state.losses,
+      skips: state.history.filter(h => h.strat === 'skip').length,
+      totalPnL: state.totalPnL,
+      questions: state.history.map((h, i) => {
+        const sc = h.sc;
+        const cl = h.checklist || analyzeChecklist(sc);
+        function serSpread(s) {
+          return { bs:s.bs, ss:s.ss, net:s.net, mp:s.mp, rr:s.rr, bep:s.bep, bep_dist:s.bep_dist, costRatio:s.costRatio, ev:s.ev, delta:s.delta };
+        }
+        const bullCandidates = generateSpreads(sc.spy, sc.vix, 'bull', sc.expiryDays, 5, false, sc.rate).map(serSpread);
+        const bearCandidates = generateSpreads(sc.spy, sc.vix, 'bear', sc.expiryDays, 5, false, sc.rate).map(serSpread);
+        return {
+          qNum: i + 1,
+          scenarioDate: sc.date,
+          desc: sc.desc,
+          spy: sc.spy, sma20: sc.sma20, vix: sc.vix,
+          expiryDays: sc.expiryDays,
+          events: sc.events,
+          endSpy: sc.endSpy,
+          shock: sc.shock || '',
+          strat: h.strat,
+          spread: h.spread ? {
+            bs: h.spread.bs, ss: h.spread.ss,
+            net: h.spread.net, mp: h.spread.mp,
+            rr: h.spread.rr, costRatio: h.spread.costRatio, ev: h.spread.ev,
+          } : null,
+          reason: h.reason || '',
+          pnl: h.pnl,
+          absoluteSkip: cl.absoluteSkip,
+          dirRec: cl.dirRec,
+          step1: { status: cl.step1.status, msg: cl.step1.msg },
+          step2: { status: cl.step2.status, msg: cl.step2.msg },
+          step3: { status: cl.step3.status, msg: cl.step3.msg },
+          step4: { status: cl.step4.status, msg: cl.step4.msg },
+          vixRecMsg: cl.vixRec.msg,
+          bullCandidates,
+          bearCandidates,
+        };
+      }),
+    };
+    const existing = JSON.parse(localStorage.getItem('spy_training_sessions') || '[]');
+    existing.push(session);
+    localStorage.setItem('spy_training_sessions', JSON.stringify(existing));
+  } catch(e) { console.warn('save failed:', e); }
+}
+
+function showFinal() {
+  saveSession();
+  const winRate = state.wins / (state.wins + state.losses) * 100;
+  const grade = winRate >= 70 ? '優秀 🏆' : winRate >= 50 ? '合格 ✓' : '要練習 📚';
+  const gradeColor = winRate >= 70 ? '#10b981' : winRate >= 50 ? '#f59e0b' : '#ef4444';
+
+  const historyHTML = state.history.map((h, i) => {
+    const reasonHTML = h.reason ? `<div style="font-size:10px;color:#64748b;margin-top:3px;padding-left:2px;font-style:italic">"${h.reason}"</div>` : '';
+    if(h.strat === 'skip') {
+      return `
+        <div class="history-row" style="background:#141c28;flex-direction:column;align-items:flex-start">
+          <div style="display:flex;justify-content:space-between;width:100%">
+            <span style="color:#475569">#${i+1} ${h.sc.date}</span>
+            <span><span class="tag" style="background:#1e2530;color:#64748b">🚫</span></span>
+            <span style="color:#475569">見送り</span>
+            <span style="color:#64748b;font-weight:700">$0</span>
+            <span class="tag" style="background:#1e2530;color:#64748b">見送</span>
+          </div>
+          ${reasonHTML}
+        </div>`;
+    }
+    const exitIcon2  = h.exitCorrect === false ? '❌' : '✅';
+    const exitReasonHTML = h.exitUserReason
+      ? `<div style="font-size:10px;color:#475569;margin-top:2px;padding-left:2px;font-style:italic">決済理由: "${h.exitUserReason}"</div>` : '';
+    const exitJudgeHTML = h.exitChoice
+      ? `<div style="font-size:10px;color:#64748b;margin-top:2px">${exitIcon2} 決済判断 — ${h.exitSituationLabel||''}</div>` : '';
+    return `
+      <div class="history-row ${h.pnl>=0?'history-win':'history-loss'}" style="flex-direction:column;align-items:flex-start">
+        <div style="display:flex;justify-content:space-between;width:100%">
+          <span style="color:#475569">#${i+1} ${h.sc.date}</span>
+          <span><span class="tag tag-${h.strat}">${h.strat==='bull'?'📈':'📉'}</span></span>
+          <span style="color:#64748b">$${h.spread.bs}/$${h.spread.ss}</span>
+          <span style="color:${h.pnl>=0?'#10b981':'#ef4444'};font-weight:700">${h.pnl>=0?'+':''}$${h.pnl}</span>
+          <span class="tag tag-${h.pnl>=0?'win':'loss'}">${h.pnl>=0?'勝':'負'}</span>
+        </div>
+        ${reasonHTML}${exitJudgeHTML}${exitReasonHTML}
+      </div>`;
+  }).join('');
+
+  document.getElementById('appContent').innerHTML = `
+    <div class="card" style="text-align:center;padding:32px">
+      <div style="font-size:14px;color:#475569;margin-bottom:8px">10問完了</div>
+      <div style="font-size:48px;font-weight:700;color:${gradeColor};margin-bottom:4px">${state.wins}勝 ${state.losses}敗</div>
+      <div style="font-size:24px;color:${gradeColor};margin-bottom:8px">${winRate.toFixed(0)}% — ${grade}</div>
+      <div style="font-size:20px;font-weight:700;color:${state.totalPnL>=0?'#10b981':'#ef4444'}">
+        確定損益: ${state.totalPnL>=0?'+':''}$${state.totalPnL}
+      </div>
+      <div style="font-size:11px;color:#475569;margin-top:4px">（1枚ずつエントリーした場合）</div>
+    </div>
+
+    <div class="card">
+      <div class="section-title">問題別結果</div>
+      ${historyHTML}
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <button id="btnCopyAnalysis" class="btn btn-secondary" onclick="copyAnalysisText()" style="padding:14px;font-size:13px;border:1px solid #334155">
+        📋 Claude分析用データをコピー
+      </button>
+      <div style="font-size:11px;color:#475569;text-align:center">コピー後、Claudeに貼り付けると10問の判断を分析してもらえます</div>
+      <a href="spy_training_log.html" class="btn btn-secondary" style="padding:14px;font-size:13px;text-align:center;text-decoration:none;border:1px solid #334155">📊 トレーニング履歴・分析を見る</a>
+      <button class="btn btn-primary" onclick="init()" style="flex:1;padding:12px">もう一度やる 🔄</button>
+    </div>
+  `;
+  renderStepBar();
+}
+
+// 起動
+init();
+</script>
+</body>
+</html>

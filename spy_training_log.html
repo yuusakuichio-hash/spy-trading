@@ -1,0 +1,814 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>SPY トレーニング履歴</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#080b0f;color:#e2e8f0;font-size:14px;min-height:100vh}
+.header{background:#0f1318;border-bottom:1px solid #1e2530;padding:14px 20px;display:flex;justify-content:space-between;align-items:center}
+.header h1{font-size:16px;font-weight:700;color:#fff}
+.header-actions{display:flex;gap:10px}
+.main{max-width:900px;margin:0 auto;padding:20px}
+.card{background:#0f1318;border:1px solid #1e2530;border-radius:12px;padding:18px;margin-bottom:14px}
+.section-title{font-size:11px;font-weight:700;color:#475569;letter-spacing:1px;text-transform:uppercase;margin-bottom:12px}
+.stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px}
+.stat-item{background:#141920;border-radius:8px;padding:14px;text-align:center}
+.stat-label{font-size:10px;color:#475569;margin-bottom:6px}
+.stat-value{font-size:22px;font-weight:700}
+.stat-sub{font-size:10px;color:#475569;margin-top:3px}
+.pattern-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.pattern-item{background:#141920;border-radius:8px;padding:12px 14px}
+.pattern-label{font-size:10px;color:#475569;margin-bottom:4px}
+.pattern-value{font-size:16px;font-weight:700}
+.pattern-sub{font-size:10px;color:#64748b;margin-top:3px;line-height:1.4}
+.btn{padding:8px 16px;border-radius:8px;border:none;cursor:pointer;font-size:13px;font-weight:600;transition:all 0.15s}
+.btn-primary{background:#f97316;color:#fff}
+.btn-primary:hover{background:#ea6c0e}
+.btn-secondary{background:#1e2530;color:#94a3b8;border:1px solid #2a3340}
+.btn-secondary:hover{background:#2a3340}
+.btn-danger{background:#2a0d0d;color:#ef4444;border:1px solid #5a1a1a}
+.btn-danger:hover{background:#3a1414}
+.session-card{background:#0f1318;border:1px solid #1e2530;border-radius:10px;margin-bottom:10px;overflow:hidden}
+.session-header{padding:14px 16px;cursor:pointer;display:flex;align-items:center;gap:12px;user-select:none}
+.session-header:hover{background:#141920}
+.session-date{font-size:12px;color:#475569;min-width:80px}
+.session-score{display:flex;gap:8px;align-items:center}
+.badge{padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700}
+.badge-win{background:#0d2a1a;color:#10b981}
+.badge-loss{background:#2a0d0d;color:#ef4444}
+.badge-skip{background:#1e2530;color:#64748b}
+.badge.clickable{cursor:pointer;border:none;font-family:inherit;transition:opacity 0.15s}
+.badge.clickable:hover{opacity:0.7}
+.session-pnl{font-size:15px;font-weight:700;margin-left:auto}
+.session-toggle{color:#475569;font-size:12px;margin-left:8px}
+.session-detail{display:none;border-top:1px solid #1e2530;padding:12px 16px}
+.session-detail.open{display:block}
+.q-row{display:grid;grid-template-columns:28px 80px 1fr auto 28px;gap:8px;align-items:start;padding:7px 10px;border-radius:6px;margin-bottom:4px;font-size:12px}
+.q-detail-btn{background:none;border:1px solid #2a3340;border-radius:5px;color:#475569;font-size:11px;cursor:pointer;padding:2px 5px;line-height:1;align-self:center}
+.q-detail-btn:hover{background:#1e2530;color:#94a3b8}
+.q-row:hover{background:#141920}
+.q-num{color:#475569;font-weight:700}
+.q-date{color:#475569}
+.q-content{}
+.q-strat{font-weight:700;white-space:nowrap}
+.q-reason{font-size:10px;color:#64748b;margin-top:2px;font-style:italic}
+.q-outcome{font-weight:700;text-align:right;white-space:nowrap}
+.q-check-detail{font-size:10px;color:#475569;margin-top:3px;line-height:1.5}
+.q-row.correct{background:#071510}
+.q-row.mistake{background:#1a0808}
+.q-row.caution{background:#1a1500}
+.trend-bar-wrap{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.trend-bar-label{font-size:11px;color:#475569;min-width:80px;text-align:right}
+.trend-bar-track{flex:1;background:#1e2530;border-radius:4px;height:16px;position:relative;overflow:hidden}
+.trend-bar-fill{height:100%;border-radius:4px;display:flex;align-items:center;padding:0 6px}
+.trend-bar-text{font-size:10px;font-weight:700;white-space:nowrap}
+.trend-pnl{font-size:11px;min-width:60px;text-align:right}
+.empty-state{text-align:center;padding:60px;color:#475569}
+.empty-icon{font-size:48px;margin-bottom:16px}
+a{color:inherit;text-decoration:none}
+.mistake-tag{display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;margin-left:4px}
+.mt-red{background:#2a0d0d;color:#ef4444}
+.mt-yellow{background:#1a1500;color:#f59e0b}
+.mt-green{background:#071510;color:#10b981}
+.mistake-tag.clickable{cursor:pointer;border:none;font-family:inherit;padding:3px 10px;transition:opacity 0.15s}
+.mistake-tag.clickable:hover{opacity:0.75}
+/* ポップアップモーダル */
+.md-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9000;display:flex;align-items:flex-start;justify-content:center;padding:20px;overflow-y:auto}
+.md-box{background:#0f1318;border:1px solid #2a3340;border-radius:14px;width:100%;max-width:680px;margin:auto}
+.md-header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid #1e2530}
+.md-title{font-size:14px;font-weight:700;color:#e2e8f0}
+.md-close{background:none;border:none;color:#475569;font-size:18px;cursor:pointer;padding:4px 8px;line-height:1}
+.md-close:hover{color:#94a3b8}
+.md-body{padding:16px 20px;display:flex;flex-direction:column;gap:12px}
+.md-qcard{background:#141920;border-radius:10px;padding:14px;border-left:3px solid #334155}
+.md-qcard.type-wrong_entry{border-left-color:#ef4444}
+.md-qcard.type-wrong_dir{border-left-color:#f97316}
+.md-qcard.type-cautious_skip{border-left-color:#f59e0b}
+.md-qcard-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.md-qnum{font-size:11px;color:#475569;font-weight:700}
+.md-badge{font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px}
+.md-row{display:grid;grid-template-columns:80px 1fr;gap:4px 10px;font-size:11px;margin-bottom:6px}
+.md-row-label{color:#475569;text-align:right;padding-top:1px}
+.md-row-val{color:#e2e8f0;line-height:1.5}
+.md-divider{border:none;border-top:1px solid #1e2530;margin:10px 0}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>📊 SPY トレーニング履歴</h1>
+  <div class="header-actions">
+    <a href="spy_backtest_trainer.html" class="btn btn-secondary">← トレーニングに戻る</a>
+    <button class="btn btn-secondary" id="btnCopyAll" onclick="copyAllForClaude()">📋 全履歴をClaudeにコピー</button>
+    <button class="btn btn-danger" onclick="clearHistory()">🗑 履歴削除</button>
+  </div>
+</div>
+<div class="main" id="main">
+  <div class="empty-state"><div class="spinner" style="width:32px;height:32px;border:3px solid #1e2530;border-top-color:#f97316;border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto 12px"></div></div>
+</div>
+<style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+
+<script>
+// ========== データロード ==========
+function loadSessions() {
+  try {
+    return JSON.parse(localStorage.getItem('spy_training_sessions') || '[]');
+  } catch(e) { return []; }
+}
+
+// ========== 集計 ==========
+function aggregate(sessions) {
+  let totalWins=0, totalLosses=0, totalSkips=0, totalPnL=0;
+  let correctSkips=0, wrongEntries=0, correctDir=0, wrongDir=0, cautiousSkips=0;
+  let totalEntryRR=0, entryCount=0;
+
+  sessions.forEach(s => {
+    totalWins   += s.wins;
+    totalLosses += s.losses;
+    totalSkips  += s.skips;
+    totalPnL    += s.totalPnL;
+    s.questions.forEach(q => {
+      if(q.strat === 'skip') {
+        if(q.absoluteSkip) correctSkips++;
+        else cautiousSkips++;
+      } else {
+        if(q.absoluteSkip) wrongEntries++;
+        else if(q.strat === q.dirRec) correctDir++;
+        else wrongDir++;
+        if(q.spread) { totalEntryRR += q.spread.rr; entryCount++; }
+      }
+    });
+  });
+
+  const totalEntries = totalWins + totalLosses;
+  const winRate = totalEntries > 0 ? (totalWins / totalEntries * 100) : 0;
+  const avgRR = entryCount > 0 ? (totalEntryRR / entryCount) : 0;
+
+  return {totalWins, totalLosses, totalSkips, totalPnL, totalEntries, winRate,
+          correctSkips, wrongEntries, correctDir, wrongDir, cautiousSkips, avgRR};
+}
+
+// ========== 問題の分類 ==========
+function classifyQ(q) {
+  if(q.strat === 'skip') {
+    if(q.absoluteSkip) return {type:'correct_skip', label:'✓ 正しい見送り', color:'#10b981'};
+    return {type:'cautious_skip', label:'△ 任意の見送り', color:'#f59e0b'};
+  } else {
+    if(q.absoluteSkip) return {type:'wrong_entry', label:'✗ 見送り漏れ', color:'#ef4444'};
+    if(q.strat === q.dirRec) return {type:'correct_dir', label:'✓ 正しい方向', color:'#10b981'};
+    return {type:'wrong_dir', label:'✗ 方向ミス', color:'#ef4444'};
+  }
+}
+
+// ========== ページ描画 ==========
+function render() {
+  const sessions = loadSessions();
+  const main = document.getElementById('main');
+
+  if(sessions.length === 0) {
+    main.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">📝</div>
+        <div style="font-size:16px;color:#e2e8f0;margin-bottom:8px">まだトレーニング履歴がありません</div>
+        <div style="font-size:12px;margin-bottom:20px">トレーニングを完了すると自動的に保存されます</div>
+        <a href="spy_backtest_trainer.html" class="btn btn-primary" style="padding:12px 24px">トレーニングを始める →</a>
+      </div>`;
+    return;
+  }
+
+  const ag = aggregate(sessions);
+  const totalQ = sessions.reduce((s, ss) => s + ss.questions.length, 0);
+
+  // ========== 全体統計 ==========
+  const winRateColor = ag.winRate >= 60 ? '#10b981' : ag.winRate >= 40 ? '#f59e0b' : '#ef4444';
+  const pnlColor = ag.totalPnL >= 0 ? '#10b981' : '#ef4444';
+  const statsHTML = `
+    <div class="card">
+      <div class="section-title">通算成績（全${sessions.length}セッション）</div>
+      <div class="stat-grid">
+        <div class="stat-item">
+          <div class="stat-label">通算損益</div>
+          <div class="stat-value" style="color:${pnlColor}">${ag.totalPnL>=0?'+':''}$${ag.totalPnL}</div>
+          <div class="stat-sub">全セッション合計</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">勝率</div>
+          <div class="stat-value" style="color:${winRateColor}">${ag.winRate.toFixed(0)}%</div>
+          <div class="stat-sub">${ag.totalWins}勝 ${ag.totalLosses}敗</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">総エントリー数</div>
+          <div class="stat-value" style="color:#94a3b8">${ag.totalEntries}</div>
+          <div class="stat-sub">見送り ${ag.totalSkips}回</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">平均R/R</div>
+          <div class="stat-value" style="color:${ag.avgRR>=1.5?'#10b981':ag.avgRR>=1.3?'#f59e0b':'#ef4444'}">${ag.avgRR.toFixed(2)}</div>
+          <div class="stat-sub">エントリー時平均</div>
+        </div>
+      </div>
+    </div>`;
+
+  // ========== パターン分析 ==========
+  const skipTotal = ag.correctSkips + ag.wrongEntries;
+  const dirTotal = ag.correctDir + ag.wrongDir;
+  const skipRate = skipTotal > 0 ? (ag.correctSkips/skipTotal*100) : 100;
+  const dirRate  = dirTotal  > 0 ? (ag.correctDir/dirTotal*100)   : 100;
+
+  // よくあるミス
+  const mistakeSummary = [];
+  if(ag.wrongEntries > 0) mistakeSummary.push(`<button class="mistake-tag mt-red clickable" onclick="showMistakeDetail('wrong_entry')">絶対見送り無視 ${ag.wrongEntries}回 ▸</button>`);
+  if(ag.wrongDir > 0)     mistakeSummary.push(`<button class="mistake-tag mt-red clickable" onclick="showMistakeDetail('wrong_dir')">方向ミス ${ag.wrongDir}回 ▸</button>`);
+  if(ag.cautiousSkips > 0) mistakeSummary.push(`<button class="mistake-tag mt-yellow clickable" onclick="showMistakeDetail('cautious_skip')">慎重すぎる見送り ${ag.cautiousSkips}回 ▸</button>`);
+  if(mistakeSummary.length === 0) mistakeSummary.push('<span class="mistake-tag mt-green">目立ったミスなし</span>');
+
+  const patternHTML = `
+    <div class="card">
+      <div class="section-title">パターン分析</div>
+      <div class="pattern-grid">
+        <div class="pattern-item">
+          <div class="pattern-label">絶対見送り遵守率</div>
+          <div class="pattern-value" style="color:${skipRate>=80?'#10b981':skipRate>=60?'#f59e0b':'#ef4444'}">${skipRate.toFixed(0)}%</div>
+          <div class="pattern-sub">正しい見送り ${ag.correctSkips}回 / 見送り漏れ ${ag.wrongEntries}回<br>（${skipTotal}回の絶対見送り条件中）</div>
+        </div>
+        <div class="pattern-item">
+          <div class="pattern-label">方向判断正解率</div>
+          <div class="pattern-value" style="color:${dirRate>=70?'#10b981':dirRate>=50?'#f59e0b':'#ef4444'}">${dirRate.toFixed(0)}%</div>
+          <div class="pattern-sub">正解 ${ag.correctDir}回 / ミス ${ag.wrongDir}回<br>（${dirTotal}回のエントリー中）</div>
+        </div>
+        <div class="pattern-item" style="grid-column:1/-1">
+          <div class="pattern-label">主なミスパターン</div>
+          <div style="margin-top:6px">${mistakeSummary.join(' ')}</div>
+          ${ag.cautiousSkips > 0 ? `<div class="pattern-sub" style="margin-top:6px">△ 任意の見送り: 絶対見送り条件なしで見送った ${ag.cautiousSkips}回（慎重すぎる可能性）</div>` : ''}
+        </div>
+      </div>
+    </div>`;
+
+  // ========== セッション推移 ==========
+  const maxAbsPnL = Math.max(...sessions.map(s => Math.abs(s.totalPnL)), 1);
+  const trendHTML = `
+    <div class="card">
+      <div class="section-title">セッション別損益推移</div>
+      ${sessions.map((s, i) => {
+        const pnl = s.totalPnL;
+        const pct = Math.abs(pnl) / maxAbsPnL * 100;
+        const color = pnl >= 0 ? '#10b981' : '#ef4444';
+        const wr = s.wins + s.losses > 0 ? Math.round(s.wins/(s.wins+s.losses)*100) : 0;
+        const dt = new Date(s.savedAt).toLocaleDateString('ja-JP', {month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
+        return `<div class="trend-bar-wrap">
+          <div class="trend-bar-label" style="color:#64748b">#${sessions.length-i} ${dt}</div>
+          <div class="trend-bar-track">
+            <div class="trend-bar-fill" style="width:${Math.max(pct,3)}%;background:${color}20;border:1px solid ${color}40">
+              <span class="trend-bar-text" style="color:${color}">${s.wins}勝${s.losses}敗 ${wr}%</span>
+            </div>
+          </div>
+          <div class="trend-pnl" style="color:${color}">${pnl>=0?'+':''}$${pnl}</div>
+        </div>`;
+      }).reverse().join('')}
+    </div>`;
+
+  // ========== セッション一覧 ==========
+  const sessionsHTML = sessions.map((s, si) => {
+    const dt = new Date(s.savedAt).toLocaleDateString('ja-JP', {year:'numeric',month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
+    const pnlColor2 = s.totalPnL >= 0 ? '#10b981' : '#ef4444';
+    const wr2 = s.wins + s.losses > 0 ? Math.round(s.wins/(s.wins+s.losses)*100) : 0;
+
+    const qRows = s.questions.map((q, qi) => {
+      const cls = classifyQ(q);
+      const rowClass = cls.type.includes('correct') ? 'correct' : cls.type.includes('wrong') ? 'mistake' : 'caution';
+      const pricePct = ((q.endSpy - q.spy)/q.spy*100).toFixed(1);
+      const priceDir = q.endSpy > q.spy ? '▲' : '▼';
+      const priceColor = q.endSpy > q.spy ? '#10b981' : '#ef4444';
+
+      let stratStr = '🚫 見送り';
+      let spreadStr = '';
+      if(q.strat === 'bull') stratStr = '📈 ブル';
+      if(q.strat === 'bear') stratStr = '📉 ベア';
+      if(q.spread) spreadStr = ` $${q.spread.bs}/$${q.spread.ss} R/R:${q.spread.rr}`;
+
+      let outcomeStr = '—';
+      if(q.strat !== 'skip') {
+        outcomeStr = q.pnl >= 0
+          ? `<span style="color:#10b981">+$${q.pnl}</span>`
+          : `<span style="color:#ef4444">$${q.pnl}</span>`;
+      }
+
+      // ミスの説明
+      let mistakeNote = '';
+      if(cls.type === 'wrong_entry') mistakeNote = `<span class="mistake-tag mt-red">絶対見送り条件あり</span>`;
+      if(cls.type === 'wrong_dir')   mistakeNote = `<span class="mistake-tag mt-red">方向ミス（推奨: ${q.dirRec === 'bull' ? 'ブル' : 'ベア'}）</span>`;
+      if(cls.type === 'cautious_skip' && q.endSpy > q.spy && q.dirRec === 'bull') mistakeNote = `<span class="mistake-tag mt-yellow">ブル有効だったかも +${pricePct}%</span>`;
+      if(cls.type === 'cautious_skip' && q.endSpy < q.spy && q.dirRec === 'bear') mistakeNote = `<span class="mistake-tag mt-yellow">ベア有効だったかも ${pricePct}%</span>`;
+
+      return `<div class="q-row ${rowClass}">
+        <div class="q-num">#${q.qNum}</div>
+        <div class="q-date">${q.scenarioDate}<br><span style="color:#475569;font-size:10px">VIX ${q.vix}</span></div>
+        <div class="q-content">
+          <div class="q-strat" style="color:${cls.color}">${stratStr}${spreadStr} ${mistakeNote}</div>
+          <div style="font-size:10px;color:#475569;margin-top:2px">${q.step1.msg.substring(0,40)}…</div>
+          ${q.reason ? `<div class="q-reason">"${q.reason}"</div>` : ''}
+        </div>
+        <div class="q-outcome">
+          ${outcomeStr}
+          <div style="font-size:10px;color:${priceColor};margin-top:2px">${priceDir}${Math.abs(pricePct)}%</div>
+        </div>
+        <button class="q-detail-btn" onclick="event.stopPropagation();showQuestionDetail(${si},${qi})" title="詳細">🔍</button>
+      </div>`;
+    }).join('');
+
+    return `<div class="session-card">
+      <div class="session-header" onclick="toggleSession(${si})">
+        <div class="session-date">${dt}</div>
+        <div class="session-score">
+          <button class="badge badge-win clickable" onclick="event.stopPropagation();showTradePopup(${si},'win')">▶ ${s.wins}勝</button>
+          <button class="badge badge-loss clickable" onclick="event.stopPropagation();showTradePopup(${si},'loss')">▶ ${s.losses}敗</button>
+          <button class="badge badge-skip clickable" onclick="event.stopPropagation();showTradePopup(${si},'skip')">▶ ${s.skips}見送</button>
+          <span style="font-size:11px;color:#475569">${wr2}%</span>
+        </div>
+        <div class="session-pnl" style="color:${pnlColor2}">${s.totalPnL>=0?'+':''}$${s.totalPnL}</div>
+        <button class="btn btn-secondary" onclick="event.stopPropagation();copySession(${si})" style="padding:4px 10px;font-size:11px;margin-left:8px">📋 Claude</button>
+        <div class="session-toggle" id="toggle-${si}">▼</div>
+      </div>
+      <div class="session-detail" id="detail-${si}">
+        ${qRows}
+      </div>
+    </div>`;
+  }).reverse().join('');
+
+  main.innerHTML = statsHTML + patternHTML + trendHTML + `
+    <div class="card">
+      <div class="section-title">セッション一覧（新しい順）</div>
+      ${sessionsHTML}
+    </div>`;
+}
+
+function toggleSession(idx) {
+  const detail = document.getElementById('detail-' + idx);
+  const toggle = document.getElementById('toggle-' + idx);
+  const isOpen = detail.classList.contains('open');
+  detail.classList.toggle('open', !isOpen);
+  toggle.textContent = isOpen ? '▼' : '▲';
+}
+
+// ========== セッション個別コピー ==========
+function buildSessionText(s) {
+  const lines = [];
+  const dt = new Date(s.savedAt).toLocaleDateString('ja-JP');
+  lines.push(`# SPYトレーニング分析データ（${dt}）`);
+  lines.push(`成績: ${s.wins}勝 ${s.losses}敗 ${s.skips}見送り | 損益: ${s.totalPnL>=0?'+':''}$${s.totalPnL}\n`);
+  lines.push('以下の10問の判断を分析してください。各問題で「判断が正しかったか」「なぜ正しい/間違いか」「改善点」を教えてください。\n---');
+
+  s.questions.forEach(q => {
+    const trend = q.spy > q.sma20 ? '強気↑' : '弱気↓';
+    const pch = ((q.endSpy - q.spy)/q.spy*100).toFixed(2);
+    const evts = q.events.length ? q.events.map(e=>e.date+' '+e.event).join('、') : 'なし';
+    lines.push(`\n## #${q.qNum}｜${q.scenarioDate}`);
+    lines.push(`状況: ${q.desc}`);
+    lines.push(`市場: SPY $${q.spy} SMA20 $${q.sma20}(${trend}) VIX ${q.vix} DTE ${q.expiryDays}日`);
+    lines.push(`イベント: ${evts}`);
+    lines.push(`①VIX: ${q.step1.status==='ok'?'✓':'⚠'} ${q.step1.msg}`);
+    lines.push(`②イベント: ${q.step2.status==='ng'?'✗':q.step2.status==='warn'?'⚠':'✓'} ${q.step2.msg}`);
+    lines.push(`③方向: ${q.step3.status==='ok'?'✓':'⚠'} ${q.step3.msg}`);
+    lines.push(`絶対見送り: ${q.absoluteSkip?'該当あり':'なし'} / VIX推奨: ${q.vixRecMsg}`);
+    if(q.strat === 'skip') {
+      lines.push(`私の選択: 🚫 見送り`);
+    } else {
+      const sp = q.spread;
+      lines.push(`私の選択: ${q.strat==='bull'?'📈ブルコール':'📉ベアプット'} $${sp.bs}/$${sp.ss}`);
+      lines.push(`  コスト $${(sp.net*100).toFixed(0)} 最大利益 $${(sp.mp*100).toFixed(0)} R/R ${sp.rr} コスト率 ${(sp.costRatio*100).toFixed(0)}% EV ${sp.ev>0?'+':''}$${(sp.ev*100).toFixed(0)}`);
+    }
+    if(q.reason) lines.push(`判断理由: ${q.reason}`);
+    lines.push(`結果: SPY $${q.endSpy}(${pch>0?'+':''}${pch}%) → ${q.strat==='skip'?'見送り':q.pnl>=0?'利益 +$'+q.pnl:'損失 $'+q.pnl}`);
+    if(q.shock) lines.push(`実際: ${q.shock}`);
+  });
+
+  lines.push('\n---\n特に間違えた問題について「何を見落としていたか」「次回どう判断すべきか」を具体的に教えてください。');
+  return lines.join('\n');
+}
+
+function copySession(idx) {
+  const sessions = loadSessions();
+  const text = buildSessionText(sessions[idx]);
+  execCopy(text, document.querySelector(`[onclick="copySession(${idx})"]`));
+}
+
+function copyAllForClaude() {
+  const sessions = loadSessions();
+  if(sessions.length === 0) { alert('履歴がありません'); return; }
+
+  const ag = aggregate(sessions);
+  const lines = [`# SPYトレーニング 全履歴分析データ`];
+  lines.push(`全${sessions.length}セッション | ${ag.totalWins}勝${ag.totalLosses}敗${ag.totalSkips}見送り | 通算損益 ${ag.totalPnL>=0?'+':''}$${ag.totalPnL} | 勝率${ag.winRate.toFixed(0)}%`);
+  lines.push(`絶対見送り遵守: ${ag.correctSkips}/${ag.correctSkips+ag.wrongEntries} | 方向正解: ${ag.correctDir}/${ag.correctDir+ag.wrongDir} | 見送り漏れ: ${ag.wrongEntries}回 | 方向ミス: ${ag.wrongDir}回\n`);
+  lines.push('全セッションの傾向を分析し、繰り返しているミスのパターンと改善ポイントを教えてください。\n===');
+
+  sessions.forEach((s, i) => {
+    lines.push(`\n[セッション #${i+1}]`);
+    lines.push(buildSessionText(s));
+  });
+  execCopy(lines.join('\n'), document.getElementById('btnCopyAll'));
+}
+
+function execCopy(text, btn) {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;gap:12px';
+  const msg = document.createElement('div');
+  msg.style.cssText = 'color:#94a3b8;font-size:13px;text-align:center';
+  msg.textContent = '全選択 (Cmd+A) → コピー (Cmd+C)';
+  const ta = document.createElement('textarea');
+  ta.style.cssText = 'width:100%;max-width:660px;height:55vh;background:#141920;border:1px solid #334155;color:#e2e8f0;border-radius:8px;padding:12px;font-size:11px;font-family:monospace;resize:none';
+  ta.value = text;
+  ta.readOnly = true;
+  ta.addEventListener('click', () => ta.select());
+  const closeBtn = document.createElement('button');
+  closeBtn.style.cssText = 'background:#1e2530;color:#94a3b8;border:1px solid #2a3340;border-radius:8px;padding:10px 32px;cursor:pointer;font-size:13px';
+  closeBtn.textContent = '閉じる';
+  closeBtn.onclick = () => overlay.remove();
+  overlay.appendChild(msg);
+  overlay.appendChild(ta);
+  overlay.appendChild(closeBtn);
+  document.body.appendChild(overlay);
+  ta.focus();
+  ta.select();
+  try {
+    if(document.execCommand('copy')) {
+      msg.style.color = '#10b981';
+      msg.textContent = '✅ クリップボードにコピーされました！';
+    }
+  } catch(e) {}
+  if(navigator.clipboard) {
+    navigator.clipboard.writeText(text).then(() => {
+      msg.style.color = '#10b981';
+      msg.textContent = '✅ クリップボードにコピーされました！';
+    }).catch(() => {});
+  }
+}
+
+// ========== スプレッド候補テーブル ==========
+function buildCandidatesHTML(q) {
+  function spreadTable(candidates, strat, selectedSpread) {
+    if(!candidates || candidates.length === 0) {
+      return `<div style="font-size:11px;color:#475569;padding:8px 0">条件を満たすスプレッドなし</div>`;
+    }
+    const rows = candidates.map(s => {
+      const isSelected = selectedSpread && s.bs === selectedSpread.bs && s.ss === selectedSpread.ss;
+      const highStd = s.rr >= 1.8 && s.ev >= 0.30;
+      const evColor = s.ev >= 0.20 ? '#10b981' : s.ev > 0 ? '#f59e0b' : '#ef4444';
+      const rowBg = isSelected ? (strat==='bull'?'background:#071a10;outline:1px solid #10b981':'background:#1a0808;outline:1px solid #ef4444') : '';
+      return `<tr style="${rowBg}${highStd?';border-left:2px solid #f59e0b':''}">
+        <td style="font-weight:600;padding:5px 8px;font-size:11px">$${s.bs}/$${s.ss}${highStd?' <span style="color:#f59e0b">⭐</span>':''}${isSelected?' <span style="color:#10b981;font-size:10px">← 選択</span>':''}</td>
+        <td style="color:#ef4444;padding:5px 8px;font-size:11px">-$${(s.net*100).toFixed(0)}</td>
+        <td style="color:#10b981;padding:5px 8px;font-size:11px">+$${(s.mp*100).toFixed(0)}</td>
+        <td style="padding:5px 8px;font-size:11px;color:${s.rr>=1.8?'#10b981':s.rr>=1.5?'#f59e0b':'#ef4444'}">${s.rr}</td>
+        <td style="padding:5px 8px;font-size:11px;color:${s.costRatio<=0.5?'#10b981':'#ef4444'}">${(s.costRatio*100).toFixed(0)}%</td>
+        <td style="padding:5px 8px;font-size:11px;color:${evColor}">${s.ev>0?'+':''}$${(s.ev*100).toFixed(0)}</td>
+        <td style="padding:5px 8px;font-size:11px;color:#94a3b8">$${s.bep}<small style="color:#475569"> (${s.bep_dist>0?'+':''}${s.bep_dist}%)</small></td>
+      </tr>`;
+    }).join('');
+    return `<table style="width:100%;border-collapse:collapse">
+      <thead><tr style="border-bottom:1px solid #1e2530">
+        <th style="padding:4px 8px;font-size:10px;color:#475569;font-weight:600;text-align:left">ストライク</th>
+        <th style="padding:4px 8px;font-size:10px;color:#475569;font-weight:600">コスト</th>
+        <th style="padding:4px 8px;font-size:10px;color:#475569;font-weight:600">最大益</th>
+        <th style="padding:4px 8px;font-size:10px;color:#475569;font-weight:600">R/R</th>
+        <th style="padding:4px 8px;font-size:10px;color:#475569;font-weight:600">コスト率</th>
+        <th style="padding:4px 8px;font-size:10px;color:#475569;font-weight:600">EV</th>
+        <th style="padding:4px 8px;font-size:10px;color:#475569;font-weight:600">BEP</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  }
+
+  const hasBull = q.bullCandidates && q.bullCandidates.length > 0;
+  const hasBear = q.bearCandidates && q.bearCandidates.length > 0;
+  if(!hasBull && !hasBear) return '';
+
+  const selectedForStrat = (q.strat !== 'skip') ? q.spread : null;
+
+  return `<div class="md-qcard" style="border-left-color:#6366f1">
+    <div style="font-size:10px;color:#475569;font-weight:700;margin-bottom:10px;letter-spacing:1px">スプレッド候補（幅$5・EV≥$20フィルター）</div>
+    ${hasBull ? `<div style="font-size:11px;color:#10b981;font-weight:600;margin-bottom:6px">📈 ブルコール候補</div>${spreadTable(q.bullCandidates,'bull',q.strat==='bull'?selectedForStrat:null)}` : ''}
+    ${hasBull && hasBear ? '<div style="height:10px"></div>' : ''}
+    ${hasBear ? `<div style="font-size:11px;color:#ef4444;font-weight:600;margin-bottom:6px;${hasBull?'margin-top:4px':''}">📉 ベアプット候補</div>${spreadTable(q.bearCandidates,'bear',q.strat==='bear'?selectedForStrat:null)}` : ''}
+  </div>`;
+}
+
+// ========== 問題詳細モーダル ==========
+function showQuestionDetail(si, qi) {
+  const sessions = loadSessions();
+  const s = sessions[si];
+  if(!s) return;
+  const q = s.questions[qi];
+  if(!q) return;
+
+  const trend = q.spy > q.sma20 ? '強気↑' : '弱気↓';
+  const smaDevPct = ((q.spy - q.sma20)/q.sma20*100).toFixed(1);
+  const pricePct  = ((q.endSpy - q.spy)/q.spy*100).toFixed(2);
+  const priceDir  = q.endSpy > q.spy ? '▲' : '▼';
+  const priceColor = q.endSpy > q.spy ? '#10b981' : '#ef4444';
+  const evts = q.events && q.events.length ? q.events.map(e=>e.date+' '+e.event).join('、') : 'なし';
+  const cls  = classifyQ(q);
+
+  // 7ステップ判定
+  function stepIcon(s) { return s==='ok'?'<span style="color:#10b981">✓</span>':s==='ng'?'<span style="color:#ef4444">✗</span>':'<span style="color:#f59e0b">⚠</span>'; }
+  function stepBg(s)   { return s==='ok'?'background:#071510;border-left:3px solid #10b981':s==='ng'?'background:#1a0808;border-left:3px solid #ef4444':'background:#1a1500;border-left:3px solid #f59e0b'; }
+
+  const stepsHTML = [
+    {label:'①VIX', s: q.step1},
+    {label:'②イベント', s: q.step2},
+    {label:'③方向', s: q.step3},
+    {label:'④スプレッド', s: q.step4},
+  ].map(({label, s: st}) => st ? `
+    <div style="${stepBg(st.status)};border-radius:6px;padding:7px 10px;margin-bottom:5px;font-size:11px;display:flex;gap:8px;align-items:flex-start">
+      <span style="min-width:60px;color:#475569;flex-shrink:0">${label}</span>
+      <span>${stepIcon(st.status)} ${st.msg}</span>
+    </div>` : '').join('');
+
+  // ユーザー選択
+  let choiceHTML;
+  if(q.strat === 'skip') {
+    choiceHTML = '<span style="color:#64748b">🚫 見送り</span>';
+  } else {
+    const sp = q.spread;
+    const stratLabel = q.strat === 'bull' ? '📈 ブルコール' : '📉 ベアプット';
+    const stratColor = q.strat === 'bull' ? '#10b981' : '#ef4444';
+    choiceHTML = `<span style="color:${stratColor}">${stratLabel}</span>`;
+    if(sp) choiceHTML += `<div style="font-size:11px;color:#94a3b8;margin-top:4px">$${sp.bs}/$${sp.ss} &nbsp;コスト $${(sp.net*100).toFixed(0)} &nbsp;最大益 $${(sp.mp*100).toFixed(0)} &nbsp;R/R ${sp.rr} &nbsp;コスト率 ${(sp.costRatio*100).toFixed(0)}% &nbsp;EV ${sp.ev>0?'+':''}$${(sp.ev*100).toFixed(0)}</div>`;
+  }
+
+  // 結果
+  let pnlHTML = '—';
+  if(q.strat !== 'skip') {
+    const pnlColor = q.pnl >= 0 ? '#10b981' : '#ef4444';
+    pnlHTML = `<span style="color:${pnlColor};font-weight:700;font-size:16px">${q.pnl>=0?'+':''}$${q.pnl}</span>`;
+  }
+
+  const clsTag = `<span style="background:${cls.color}20;color:${cls.color};font-size:10px;padding:2px 8px;border-radius:4px;font-weight:700">${cls.label}</span>`;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'md-overlay';
+  overlay.innerHTML = `
+    <div class="md-box">
+      <div class="md-header">
+        <div>
+          <div class="md-title">#${q.qNum} &nbsp;${q.scenarioDate} &nbsp;${clsTag}</div>
+          <div style="font-size:10px;color:#475569;margin-top:3px">${q.desc}</div>
+        </div>
+        <button class="md-close" onclick="this.closest('.md-overlay').remove()">✕</button>
+      </div>
+      <div class="md-body">
+        <div class="md-qcard" style="border-left-color:#334155">
+          <div style="font-size:10px;color:#475569;font-weight:700;margin-bottom:8px;letter-spacing:1px">市場データ</div>
+          <div class="md-row">
+            <div class="md-row-label">SPY / SMA20</div>
+            <div class="md-row-val">$${q.spy} &nbsp;/&nbsp; $${q.sma20}（${trend} ${smaDevPct>0?'+':''}${smaDevPct}%）</div>
+          </div>
+          <div class="md-row">
+            <div class="md-row-label">VIX / DTE</div>
+            <div class="md-row-val">VIX ${q.vix} &nbsp;|&nbsp; 満期まで ${q.expiryDays}日</div>
+          </div>
+          <div class="md-row">
+            <div class="md-row-label">イベント</div>
+            <div class="md-row-val" style="color:${evts==='なし'?'#475569':'#f59e0b'}">${evts}</div>
+          </div>
+        </div>
+        <div class="md-qcard" style="border-left-color:#6366f1">
+          <div style="font-size:10px;color:#475569;font-weight:700;margin-bottom:8px;letter-spacing:1px">7ステップ判定</div>
+          ${stepsHTML}
+        </div>
+        <div class="md-qcard" style="border-left-color:#94a3b8">
+          <div style="font-size:10px;color:#475569;font-weight:700;margin-bottom:8px;letter-spacing:1px">私の選択</div>
+          <div style="margin-bottom:8px">${choiceHTML}</div>
+          ${q.reason ? `<div style="font-size:11px;color:#64748b;font-style:italic;padding:6px 10px;background:#141920;border-radius:6px">"${q.reason}"</div>` : ''}
+        </div>
+        <div class="md-qcard" style="border-left-color:${priceColor}">
+          <div style="font-size:10px;color:#475569;font-weight:700;margin-bottom:8px;letter-spacing:1px">結果</div>
+          <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+            ${pnlHTML}
+            <span style="color:${priceColor};font-size:13px">${priceDir}${Math.abs(pricePct)}% → $${q.endSpy}</span>
+            ${q.shock ? `<span style="color:#64748b;font-size:11px">(${q.shock})</span>` : ''}
+          </div>
+        </div>
+        ${buildCandidatesHTML(q)}
+      </div>
+    </div>`;
+  overlay.addEventListener('click', e => { if(e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+}
+
+// ========== 勝/敗/見送 クリックポップアップ ==========
+function showTradePopup(si, filter) {
+  const sessions = loadSessions();
+  const s = sessions[si];
+  if(!s) return;
+
+  const filterMap = {
+    win:  {label:'勝ちトレード', color:'#10b981', bg:'#0d2a1a', test: q => q.strat !== 'skip' && q.pnl > 0},
+    loss: {label:'負けトレード', color:'#ef4444', bg:'#2a0d0d', test: q => q.strat !== 'skip' && q.pnl <= 0},
+    skip: {label:'見送り',       color:'#64748b', bg:'#1e2530', test: q => q.strat === 'skip'},
+  };
+  const f = filterMap[filter];
+  const qs = s.questions.filter(f.test);
+
+  const sessionDt = new Date(s.savedAt).toLocaleDateString('ja-JP', {year:'numeric',month:'numeric',day:'numeric'});
+
+  const cards = qs.map(q => {
+    const trend = q.spy > q.sma20 ? '強気↑' : '弱気↓';
+    const smaDevPct = ((q.spy - q.sma20)/q.sma20*100).toFixed(1);
+    const pricePct = ((q.endSpy - q.spy)/q.spy*100).toFixed(2);
+    const priceDir = q.endSpy > q.spy ? '▲' : '▼';
+    const priceColor = q.endSpy > q.spy ? '#10b981' : '#ef4444';
+    const evts = q.events && q.events.length ? q.events.map(e => e.date+' '+e.event).join('、') : 'なし';
+    const cls = classifyQ(q);
+
+    let choiceHTML;
+    if(q.strat === 'skip') {
+      choiceHTML = `<span style="color:#64748b">🚫 見送り</span>`;
+    } else {
+      const sp = q.spread;
+      const stratLabel = q.strat === 'bull' ? '📈 ブルコール' : '📉 ベアプット';
+      const stratColor = q.strat === 'bull' ? '#10b981' : '#ef4444';
+      choiceHTML = `<span style="color:${stratColor}">${stratLabel}</span>`;
+      if(sp) choiceHTML += ` <span style="color:#94a3b8">$${sp.bs}/$${sp.ss} &nbsp;R/R ${sp.rr} &nbsp;EV ${sp.ev>0?'+':''}$${(sp.ev*100).toFixed(0)}</span>`;
+    }
+
+    let outcomeHTML = '';
+    if(q.strat !== 'skip') {
+      const pnlColor = q.pnl >= 0 ? '#10b981' : '#ef4444';
+      outcomeHTML = `<span style="color:${pnlColor};font-weight:700">${q.pnl>=0?'+':''}$${q.pnl}</span> &nbsp;`;
+    }
+
+    const clsTag = `<span style="background:${cls.color}18;color:${cls.color};font-size:10px;padding:1px 7px;border-radius:4px;font-weight:700">${cls.label}</span>`;
+
+    return `<div class="md-qcard" style="border-left-color:${f.color}">
+      <div class="md-qcard-header">
+        <span class="md-qnum">#${q.qNum} &nbsp;|&nbsp; ${q.scenarioDate}</span>
+        ${clsTag}
+      </div>
+      <div class="md-row">
+        <div class="md-row-label">市場</div>
+        <div class="md-row-val">SPY $${q.spy} &nbsp;SMA20 $${q.sma20}（${trend} ${smaDevPct>0?'+':''}${smaDevPct}%）&nbsp;VIX ${q.vix} &nbsp;DTE ${q.expiryDays}日</div>
+      </div>
+      <div class="md-row">
+        <div class="md-row-label">イベント</div>
+        <div class="md-row-val" style="color:${evts==='なし'?'#475569':'#f59e0b'}">${evts}</div>
+      </div>
+      <div class="md-row">
+        <div class="md-row-label">状況</div>
+        <div class="md-row-val" style="color:#94a3b8;font-size:10px">${q.desc}</div>
+      </div>
+      <div class="md-row">
+        <div class="md-row-label">私の判断</div>
+        <div class="md-row-val">${choiceHTML}</div>
+      </div>
+      ${q.reason ? `<div class="md-row"><div class="md-row-label">理由</div><div class="md-row-val" style="color:#64748b;font-style:italic">"${q.reason}"</div></div>` : ''}
+      <div class="md-row">
+        <div class="md-row-label">結果</div>
+        <div class="md-row-val">${outcomeHTML}<span style="color:${priceColor};font-size:10px">${priceDir}${Math.abs(pricePct)}% → $${q.endSpy}</span>${q.shock ? `<span style="color:#475569;font-size:10px"> (${q.shock})</span>` : ''}</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  const overlay = document.createElement('div');
+  overlay.className = 'md-overlay';
+  overlay.innerHTML = `
+    <div class="md-box">
+      <div class="md-header">
+        <div>
+          <div class="md-title" style="color:${f.color}">${f.label}（${qs.length}件）</div>
+          <div style="font-size:10px;color:#475569;margin-top:3px">セッション ${sessionDt}</div>
+        </div>
+        <button class="md-close" onclick="this.closest('.md-overlay').remove()">✕</button>
+      </div>
+      <div class="md-body">
+        ${qs.length === 0
+          ? `<div style="text-align:center;color:#475569;padding:30px">${f.label}はありません</div>`
+          : cards}
+      </div>
+    </div>`;
+  overlay.addEventListener('click', e => { if(e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+}
+
+// ========== ミスパターン詳細ポップアップ ==========
+function showMistakeDetail(type) {
+  const sessions = loadSessions();
+  const matched = [];
+  sessions.forEach((s, si) => {
+    s.questions.forEach(q => {
+      const cls = classifyQ(q);
+      if(cls.type === type) matched.push({q, si, sessionDate: new Date(s.savedAt)});
+    });
+  });
+
+  const typeLabels = {
+    wrong_entry:   {title:'絶対見送り無視', color:'#ef4444', bg:'#2a0d0d', desc:'絶対見送り条件（VIX>50・前日イベントなど）があるのにエントリーした問題'},
+    wrong_dir:     {title:'方向ミス', color:'#f97316', bg:'#2a1200', desc:'エントリーしたが推奨方向と逆を選んでいた問題'},
+    cautious_skip: {title:'慎重すぎる見送り', color:'#f59e0b', bg:'#1a1500', desc:'絶対条件なしで見送り。有効なエントリーを逃した可能性がある問題'},
+  };
+  const lbl = typeLabels[type];
+
+  const cards = matched.map(({q, si, sessionDate}) => {
+    const trend = q.spy > q.sma20 ? '強気↑' : '弱気↓';
+    const smaDevPct = ((q.spy - q.sma20)/q.sma20*100).toFixed(1);
+    const pricePct = ((q.endSpy - q.spy)/q.spy*100).toFixed(2);
+    const priceDir = q.endSpy > q.spy ? '▲' : '▼';
+    const priceColor = q.endSpy > q.spy ? '#10b981' : '#ef4444';
+    const evts = q.events && q.events.length ? q.events.map(e => e.date+' '+e.event).join('、') : 'なし';
+
+    let choiceHTML = '';
+    if(q.strat === 'skip') {
+      choiceHTML = `<span style="color:#64748b">🚫 見送り</span>`;
+    } else {
+      const sp = q.spread;
+      const stratLabel = q.strat === 'bull' ? '📈 ブルコール' : '📉 ベアプット';
+      const stratColor = q.strat === 'bull' ? '#10b981' : '#ef4444';
+      choiceHTML = `<span style="color:${stratColor}">${stratLabel}</span>`;
+      if(sp) choiceHTML += ` <span style="color:#94a3b8">$${sp.bs}/$${sp.ss} | R/R ${sp.rr} | EV ${sp.ev>0?'+':''}$${(sp.ev*100).toFixed(0)}</span>`;
+    }
+
+    let resultHTML = '—';
+    if(q.strat !== 'skip') {
+      const pnlColor = q.pnl >= 0 ? '#10b981' : '#ef4444';
+      resultHTML = `<span style="color:${pnlColor}">${q.pnl>=0?'+':''}$${q.pnl}</span>`;
+    }
+
+    // 正解はどうすべきだったか
+    let correctNote = '';
+    if(type === 'wrong_entry') {
+      const msgs = [];
+      if(q.step1 && q.step1.status === 'ng') msgs.push(q.step1.msg);
+      if(q.step2 && q.step2.status === 'ng') msgs.push(q.step2.msg);
+      if(msgs.length) correctNote = `<div style="margin-top:8px;padding:8px 10px;background:#1a0808;border-radius:6px;font-size:10px;color:#ef4444">⛔ 見送り理由: ${msgs.join(' / ')}</div>`;
+    } else if(type === 'wrong_dir') {
+      const rec = q.dirRec === 'bull' ? '📈 ブルコール' : '📉 ベアプット';
+      correctNote = `<div style="margin-top:8px;padding:8px 10px;background:#1a0d00;border-radius:6px;font-size:10px;color:#f97316">→ 推奨方向: ${rec}（${q.step3 ? q.step3.msg : ''}）</div>`;
+    } else if(type === 'cautious_skip') {
+      const rec = q.dirRec === 'bull' ? '📈 ブルコール' : '📉 ベアプット';
+      correctNote = `<div style="margin-top:8px;padding:8px 10px;background:#1a1300;border-radius:6px;font-size:10px;color:#f59e0b">△ ${rec}が有効だった可能性（実際 SPY ${priceDir}${Math.abs(pricePct)}%）</div>`;
+    }
+
+    const dt = sessionDate.toLocaleDateString('ja-JP', {month:'numeric',day:'numeric'});
+    return `<div class="md-qcard type-${type}">
+      <div class="md-qcard-header">
+        <span class="md-qnum">セッション${dt} #${q.qNum} &nbsp;|&nbsp; ${q.scenarioDate}</span>
+        <span class="md-badge" style="background:${lbl.bg};color:${lbl.color}">${lbl.title}</span>
+      </div>
+      <div class="md-row">
+        <div class="md-row-label">市場</div>
+        <div class="md-row-val">SPY $${q.spy} &nbsp;SMA20 $${q.sma20}（${trend} ${smaDevPct>0?'+':''}${smaDevPct}%）&nbsp; VIX ${q.vix} &nbsp; DTE ${q.expiryDays}日</div>
+      </div>
+      <div class="md-row">
+        <div class="md-row-label">イベント</div>
+        <div class="md-row-val" style="color:${evts==='なし'?'#475569':'#f59e0b'}">${evts}</div>
+      </div>
+      <div class="md-row">
+        <div class="md-row-label">状況</div>
+        <div class="md-row-val" style="color:#94a3b8;font-size:10px">${q.desc}</div>
+      </div>
+      <hr class="md-divider">
+      <div class="md-row">
+        <div class="md-row-label">私の判断</div>
+        <div class="md-row-val">${choiceHTML}</div>
+      </div>
+      ${q.reason ? `<div class="md-row"><div class="md-row-label">理由</div><div class="md-row-val" style="color:#64748b;font-style:italic">"${q.reason}"</div></div>` : ''}
+      <div class="md-row">
+        <div class="md-row-label">結果</div>
+        <div class="md-row-val">${resultHTML} &nbsp;<span style="color:${priceColor};font-size:10px">${priceDir}${Math.abs(pricePct)}% → $${q.endSpy}</span>${q.shock ? `<span style="color:#475569;font-size:10px"> (${q.shock})</span>` : ''}</div>
+      </div>
+      ${correctNote}
+    </div>`;
+  }).join('');
+
+  const overlay = document.createElement('div');
+  overlay.className = 'md-overlay';
+  overlay.innerHTML = `
+    <div class="md-box">
+      <div class="md-header">
+        <div>
+          <div class="md-title" style="color:${lbl.color}">${lbl.title}（${matched.length}件）</div>
+          <div style="font-size:10px;color:#475569;margin-top:3px">${lbl.desc}</div>
+        </div>
+        <button class="md-close" onclick="this.closest('.md-overlay').remove()">✕</button>
+      </div>
+      <div class="md-body">
+        ${matched.length === 0
+          ? '<div style="text-align:center;color:#475569;padding:30px">該当する問題はありません</div>'
+          : cards}
+      </div>
+    </div>`;
+  overlay.addEventListener('click', e => { if(e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+}
+
+function clearHistory() {
+  if(!confirm('全トレーニング履歴を削除しますか？この操作は元に戻せません。')) return;
+  localStorage.removeItem('spy_training_sessions');
+  render();
+}
+
+// 起動
+render();
+</script>
+</body>
+</html>

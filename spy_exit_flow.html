@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SPY オプション — 決済判断フロー</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f5f5f5;padding:20px;min-height:100vh}
+.wrap{max-width:680px;margin:0 auto;background:#fff;border-radius:12px;border:1px solid #e5e5e5;padding:20px}
+h1{font-size:15px;font-weight:600;color:#111;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid #eee}
+.section-head{font-size:11px;font-weight:500;color:#aaa;letter-spacing:1px;text-transform:uppercase;padding:14px 0 6px 0}
+.row2{display:flex;gap:8px;flex-wrap:wrap}
+.chip{padding:5px 12px;border-radius:6px;font-size:12px;font-weight:500;white-space:nowrap}
+.chip-red{background:#fce8e6;color:#a32d2d}
+.chip-green{background:#e6f4ea;color:#1e7e34}
+.chip-amber{background:#fff3cd;color:#856404}
+.chip-gray{background:#f0f0f0;color:#666}
+.step-block{border-radius:8px;border:0.5px solid #eee;padding:12px 14px;margin-bottom:8px;background:#fafafa}
+.step-title{font-size:13px;font-weight:500;color:#111;margin-bottom:8px}
+.sub-item{font-size:12px;color:#444;padding:4px 0;line-height:1.5}
+.sub-item + .sub-item{border-top:0.5px solid #eee;padding-top:5px;margin-top:1px}
+.matrix{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:4px}
+.matrix-cell{border-radius:6px;padding:7px 10px;border:0.5px solid #eee;font-size:11px;background:#fff}
+.matrix-cell .mc-top{font-weight:500;font-size:11px;margin-bottom:3px;color:#888}
+.mc-action{font-weight:500;color:#444}
+.mc-bull{color:#1e7e34;font-weight:500}
+.mc-bear{color:#a32d2d;font-weight:500}
+.mc-warn{color:#856404;font-weight:500}
+.warn-box{border-radius:6px;padding:9px 12px;font-size:11px;margin-top:6px;line-height:1.6}
+.warn-box-red{background:#fce8e6;border:0.5px solid #f0bbbb;color:#a32d2d}
+.warn-box-amber{background:#fff3cd;border:0.5px solid #f0d080;color:#856404}
+.warn-line{display:flex;align-items:baseline;gap:6px;padding:3px 0}
+.warn-line + .warn-line{border-top:0.5px dashed rgba(0,0,0,0.1)}
+.warn-icon{font-style:normal;font-weight:700;flex-shrink:0}
+.arrow-down{text-align:center;height:18px;display:flex;align-items:center;justify-content:center;margin:2px 0}
+.footer{margin-top:16px;padding-top:12px;border-top:1px solid #eee;font-size:11px;color:#aaa;text-align:right}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>SPY オプション — 決済判断フロー v1.0</h1>
+
+<!-- Section 1 -->
+<div class="section-head">自動決済（moomoo指値設定）</div>
+<div class="step-block">
+  <div class="step-title">エントリー時に必ず設定</div>
+  <div class="row2">
+    <span class="chip chip-green">目標利益：最大利益 × 75% → 指値</span>
+    <span class="chip chip-red">損切り：最大損失 × 50% → 逆指値</span>
+  </div>
+  <div class="sub-item" style="margin-top:8px;color:#666">両足一括決済注文（スプレッド全体）で設定する</div>
+</div>
+
+<div class="arrow-down"><svg width="12" height="14" viewBox="0 0 12 14"><path d="M6 0v11M1 8l5 6 5-6" fill="none" stroke="#ccc" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+
+<!-- Section 2 -->
+<div class="section-head">Pushover通知トリガー</div>
+<div class="step-block">
+  <div class="step-title">以下の条件でPushover通知が届く</div>
+  <div class="row2">
+    <span class="chip chip-amber">タイムリミット前日（DTE÷3の前日）</span>
+    <span class="chip chip-amber">満期3日前</span>
+    <span class="chip chip-red">イベント前日（CPI / FOMC / 雇用統計）</span>
+    <span class="chip chip-red">VIX前日比 +30% 急騰</span>
+  </div>
+</div>
+
+<div class="arrow-down"><svg width="12" height="14" viewBox="0 0 12 14"><path d="M6 0v11M1 8l5 6 5-6" fill="none" stroke="#ccc" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+
+<!-- Section 3 -->
+<div class="section-head">通知来たら5時に確認する内容</div>
+<div class="step-block">
+  <div class="step-title">状況別アクション</div>
+  <div class="matrix">
+    <div class="matrix-cell">
+      <div class="mc-top">含み益あり</div>
+      <span class="mc-bull">指値に到達しそうか確認<br>必要なら手動決済</span>
+    </div>
+    <div class="matrix-cell">
+      <div class="mc-top">含み損あり</div>
+      <span class="mc-bear">逆指値に到達しそうか確認<br>損切り実行</span>
+    </div>
+    <div class="matrix-cell">
+      <div class="mc-top">VIX急騰 + ブルコール</div>
+      <span class="mc-bear">即損切り推奨</span>
+    </div>
+    <div class="matrix-cell">
+      <div class="mc-top">VIX急騰 + ベアプット</div>
+      <span class="mc-bull">含み益なら即利確</span>
+    </div>
+  </div>
+</div>
+
+<div class="arrow-down"><svg width="12" height="14" viewBox="0 0 12 14"><path d="M6 0v11M1 8l5 6 5-6" fill="none" stroke="#ccc" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+
+<!-- Section 3b: イベント前日の対応 -->
+<div class="section-head">イベント前日の対応</div>
+<div class="step-block">
+  <div class="step-title">CPI / FOMC / 雇用統計の前日に通知が来た場合</div>
+  <div class="matrix">
+    <div class="matrix-cell" style="background:#e6f4ea;border-color:#a8d5b5">
+      <div class="mc-top">含み益あり</div>
+      <span class="mc-bull" style="font-weight:700">→ 即決済</span>
+    </div>
+    <div class="matrix-cell" style="background:#fce8e6;border-color:#f0bbbb">
+      <div class="mc-top">含み損あり</div>
+      <span class="mc-bear" style="font-weight:700">→ 即損切り<br><span style="font-weight:400;font-size:10px">逆指値を待たず手動</span></span>
+    </div>
+    <div class="matrix-cell" style="background:#fff3cd;border-color:#f0d080;grid-column:span 2">
+      <div class="mc-top">ほぼゼロ（損益わずか）</div>
+      <span class="mc-warn" style="font-weight:700">→ 即決済（リスク排除優先）</span>
+    </div>
+  </div>
+</div>
+
+<div class="arrow-down"><svg width="12" height="14" viewBox="0 0 12 14"><path d="M6 0v11M1 8l5 6 5-6" fill="none" stroke="#ccc" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+
+<!-- Section 4 -->
+<div class="section-head">絶対決済条件</div>
+<div class="warn-box warn-box-red">
+  <div style="font-weight:600;margin-bottom:6px;font-size:12px">以下は損益問わず必ず実行</div>
+  <div class="warn-line">
+    <span class="warn-icon">▲</span>
+    <span><strong>満期3日前</strong> — 損益問わず必ず決済</span>
+  </div>
+  <div class="warn-line">
+    <span class="warn-icon">▲</span>
+    <span><strong>2連敗後の冷却期間</strong> — 新規エントリー停止（既存ポジションはルール通り管理）</span>
+  </div>
+  <div class="warn-line">
+    <span class="warn-icon">▲</span>
+    <span><strong>DTE÷3 超過 + 含み損</strong> — 損切り実行</span>
+  </div>
+</div>
+
+<div class="footer">v1.1 — Pushover通知・イベント前日3ケース対応</div>
+</div>
+</body>
+</html>
