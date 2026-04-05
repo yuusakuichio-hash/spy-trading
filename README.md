@@ -1,6 +1,7 @@
 # SPY Trading Tools
 
 ## ツール一覧
+- [スクリーナー（ライブ）](spy_screener.html)
 - [バックテストトレーナー](spy_backtest_trainer.html)
 - [7ステップフロー](spy_7step_flow.html)
 - [決済フロー](spy_exit_flow.html)
