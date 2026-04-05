@@ -1,0 +1,914 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SPY スクリーナー</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#080b0f;color:#e2e8f0;font-size:14px;min-height:100vh}
+.header{background:#0f1318;border-bottom:1px solid #1e2530;padding:14px 20px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px}
+.header h1{font-size:16px;font-weight:700;color:#fff}
+.header-right{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.main{max-width:900px;margin:0 auto;padding:20px}
+.card{background:#0f1318;border:1px solid #1e2530;border-radius:12px;padding:18px;margin-bottom:14px}
+.market-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
+@media(max-width:600px){.market-grid{grid-template-columns:repeat(2,1fr)}}
+.market-item{background:#141920;border-radius:8px;padding:10px 14px;text-align:center}
+.market-label{font-size:10px;color:#475569;margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px}
+.market-value{font-size:20px;font-weight:700}
+.market-sub{font-size:10px;margin-top:2px;color:#64748b}
+.strategy-banner{border-radius:8px;padding:12px 16px;margin-bottom:14px;font-size:13px;font-weight:700;display:flex;align-items:center;gap:10px}
+.banner-debit{background:#071f0d;border:1px solid #14532d;color:#4ade80}
+.banner-credit{background:#1a0d2a;border:1px solid #4c1d95;color:#c084fc}
+.banner-both{background:#1c1500;border:1px solid #713f12;color:#fbbf24}
+.event-banner{border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:12px}
+.event-warn{background:#2a1f00;border:1px solid #5a3a00;color:#f59e0b}
+.event-ok{background:#0d2a1a;border:1px solid #1a5a30;color:#10b981}
+.section-title{font-size:11px;font-weight:700;color:#475569;letter-spacing:1px;text-transform:uppercase;margin-bottom:10px}
+.btn{padding:8px 16px;border-radius:8px;border:none;cursor:pointer;font-size:13px;font-weight:600;transition:all .15s}
+.btn-primary{background:#f97316;color:#fff}
+.btn-primary:hover{background:#ea6c0e}
+.btn-secondary{background:#1e2530;color:#94a3b8;border:1px solid #2a3340;font-size:12px}
+.btn-secondary:hover{background:#2a3340}
+.btn-small{padding:4px 10px;border-radius:6px;font-size:11px;font-weight:700;border:none;cursor:pointer}
+.spread-table{width:100%;border-collapse:collapse;font-size:12px}
+.spread-table th{padding:7px 8px;text-align:left;color:#475569;border-bottom:1px solid #1e2530;font-weight:500;white-space:nowrap}
+.spread-table td{padding:7px 8px;border-bottom:1px solid #141920;vertical-align:middle}
+.spread-table tr.spread-row:hover td{background:#141920;cursor:pointer}
+.spread-table tr.selected-row td{background:#0d2a1a!important;outline:1px solid #10b981}
+.spread-table tr.selected-row-credit td{background:#1a0d2a!important;outline:1px solid #c084fc}
+.rr-good{color:#10b981;font-weight:700}
+.rr-ok{color:#f59e0b;font-weight:700}
+.rr-low{color:#ef4444;font-weight:700}
+.tag{display:inline-block;padding:2px 8px;border-radius:12px;font-size:10px;font-weight:600}
+.tag-bull{background:#0d2a1a;color:#10b981}
+.tag-bear{background:#2a0d0d;color:#ef4444}
+.tag-credit-bull{background:#0d1a2a;color:#818cf8}
+.tag-credit-bear{background:#1a0d2a;color:#c084fc}
+.step-row{display:none}
+.step-row.open{display:table-row}
+.step-item{display:flex;align-items:flex-start;gap:8px;border-radius:6px;padding:7px 10px;margin-bottom:4px}
+.step-ok{background:#071510;border-left:3px solid #10b981}
+.step-warn{background:#1a1500;border-left:3px solid #f59e0b}
+.step-fail{background:#1a0808;border-left:3px solid #ef4444}
+.step-neutral{background:#141920;border-left:3px solid #2a3340}
+.step-icon-ok{color:#10b981;font-size:14px;min-width:16px}
+.step-icon-warn{color:#f59e0b;font-size:14px;min-width:16px}
+.step-icon-fail{color:#ef4444;font-size:14px;min-width:16px}
+.step-icon-neutral{color:#475569;font-size:14px;min-width:16px}
+.loading{text-align:center;padding:60px;color:#475569}
+.spinner{width:32px;height:32px;border:3px solid #1e2530;border-top-color:#f97316;border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 12px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.claude-box{background:#141920;border-radius:8px;padding:14px;font-size:12px;color:#94a3b8;line-height:1.8;white-space:pre-wrap}
+.settings-toggle{background:none;border:none;color:#64748b;font-size:12px;cursor:pointer;padding:4px 0;display:flex;align-items:center;gap:6px}
+.settings-body{display:none;padding-top:14px;border-top:1px solid #1e2530;margin-top:14px}
+.settings-body.open{display:block}
+.input-group{margin-bottom:12px}
+.input-group label{display:block;font-size:11px;color:#64748b;margin-bottom:4px}
+.input-group input{width:100%;background:#141920;border:1px solid #2a3340;color:#e2e8f0;padding:7px 10px;border-radius:6px;font-size:13px;font-family:monospace}
+.input-group input:focus{outline:1px solid #f97316;border-color:#f97316}
+.rank-1{background:#fff3cd;color:#856404;padding:2px 8px;border-radius:12px;font-size:10px;font-weight:700}
+.rank-2{background:#e8f0fe;color:#1a56db;padding:2px 8px;border-radius:12px;font-size:10px;font-weight:700}
+.expiry-header{font-size:14px;font-weight:700;color:#fff;margin-bottom:14px;display:flex;align-items:center;gap:10px}
+.dte-badge{background:#1e2d4a;color:#3b82f6;font-size:11px;padding:2px 10px;border-radius:12px;font-weight:600}
+.sub-section-title{font-size:11px;font-weight:700;letter-spacing:1px;margin:12px 0 8px}
+.bull-title{color:#10b981}
+.bear-title{color:#ef4444}
+.credit-bull-title{color:#818cf8}
+.credit-bear-title{color:#c084fc}
+.overflow-x{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.push-status{font-size:11px;color:#64748b;margin-top:6px}
+.error-box{background:#2a0d0d;border:1px solid #5a1a1a;border-radius:8px;padding:14px;color:#ef4444;font-size:13px;margin-bottom:14px}
+.info-row{display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px;font-size:11px;color:#64748b;margin-bottom:10px}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>📊 SPY スクリーナー</h1>
+  <div class="header-right">
+    <span id="lastUpdate" style="font-size:11px;color:#475569"></span>
+    <button class="btn btn-primary" onclick="runScreener()" id="refreshBtn">▶ スクリーン実行</button>
+  </div>
+</div>
+
+<div class="main">
+  <!-- Market Grid -->
+  <div id="marketGrid" style="display:none">
+    <div class="market-grid">
+      <div class="market-item">
+        <div class="market-label">SPY</div>
+        <div class="market-value" id="mSpy" style="color:#e2e8f0">--</div>
+        <div class="market-sub" id="mSpyChange"></div>
+      </div>
+      <div class="market-item">
+        <div class="market-label">VIX</div>
+        <div class="market-value" id="mVix" style="color:#e2e8f0">--</div>
+        <div class="market-sub" id="mVixChange"></div>
+      </div>
+      <div class="market-item">
+        <div class="market-label">SMA20乖離</div>
+        <div class="market-value" id="mSma" style="color:#e2e8f0">--</div>
+        <div class="market-sub" id="mTrend"></div>
+      </div>
+      <div class="market-item">
+        <div class="market-label">IVパーセンタイル</div>
+        <div class="market-value" id="mIvp" style="color:#e2e8f0">--</div>
+        <div class="market-sub" id="mIvpSub"></div>
+      </div>
+    </div>
+    <!-- Strategy Banner -->
+    <div id="stratBanner" class="strategy-banner"></div>
+    <!-- Event Banner -->
+    <div id="eventBanner"></div>
+  </div>
+
+  <!-- Main content area -->
+  <div id="appContent">
+    <div style="text-align:center;padding:40px;color:#475569">
+      <div style="font-size:36px;margin-bottom:12px">📊</div>
+      <div style="font-size:15px;font-weight:600;color:#64748b;margin-bottom:6px">SPY スクリーナー</div>
+      <div style="font-size:12px;margin-bottom:20px">「スクリーン実行」でリアルタイムデータを取得して候補を表示します</div>
+      <button class="btn btn-primary" onclick="runScreener()">▶ スクリーン実行</button>
+    </div>
+  </div>
+
+  <!-- Claude Section -->
+  <div id="claudeSection" style="display:none" class="card">
+    <div class="section-title" style="margin-bottom:12px">🤖 Claude 最適解評価</div>
+    <div id="claudeContent" class="claude-box">評価待ち...</div>
+    <button class="btn btn-secondary" style="margin-top:10px" onclick="runClaude()">再評価</button>
+  </div>
+
+  <!-- Settings -->
+  <div class="card">
+    <button class="settings-toggle" onclick="toggleSettings()">
+      <span id="settingsArrow">▶</span> 設定（APIキー・Pushover）
+    </button>
+    <div id="settingsBody" class="settings-body">
+      <div class="input-group">
+        <label>ANTHROPIC_API_KEY</label>
+        <input type="password" id="apiKey" placeholder="sk-ant-..." oninput="saveSettings()">
+      </div>
+      <div class="input-group">
+        <label>PUSHOVER_TOKEN</label>
+        <input type="text" id="pushToken" placeholder="a5rb9..." oninput="saveSettings()">
+      </div>
+      <div class="input-group">
+        <label>PUSHOVER_USER</label>
+        <input type="text" id="pushUser" placeholder="u2cevk..." oninput="saveSettings()">
+      </div>
+      <button class="btn btn-secondary" onclick="testPushover()">📱 テスト通知</button>
+      <div id="pushStatus" class="push-status"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ========== 設定 ==========
+const CORS_PROXIES = [
+  'https://corsproxy.io/?',
+  'https://api.allorigins.win/raw?url=',
+  'https://cors-anywhere.herokuapp.com/'
+];
+const YF_URLS = [
+  'https://query1.finance.yahoo.com/v8/finance/chart/',
+  'https://query2.finance.yahoo.com/v8/finance/chart/'
+];
+const MIN_DTE = 7, MAX_DTE = 45, TOP_N = 5, SPREAD_WIDTH = 5;
+const RATE = 0.053;
+
+// ========== CORSプロキシ フォールバック ==========
+async function fetchYF(symbol, params) {
+  for(const yfUrl of YF_URLS) {
+    for(const proxy of CORS_PROXIES) {
+      try {
+        const url = yfUrl + symbol + '?' + params;
+        const res = await fetch(proxy + encodeURIComponent(url), {
+          signal: AbortSignal.timeout(8000)
+        });
+        if(!res.ok) continue;
+        const json = await res.json();
+        if(json?.chart?.result?.[0]) return json;
+      } catch(e) { continue; }
+    }
+  }
+  throw new Error('全プロキシ失敗');
+}
+
+// ========== 経済イベント（2026年）==========
+const EVENTS = [
+  {date:'2026-01-29',event:'FOMC 金利発表',type:'fomc',impact:'high'},
+  {date:'2026-03-19',event:'FOMC 金利発表',type:'fomc',impact:'high'},
+  {date:'2026-05-07',event:'FOMC 金利発表',type:'fomc',impact:'high'},
+  {date:'2026-06-18',event:'FOMC 金利発表',type:'fomc',impact:'high'},
+  {date:'2026-07-30',event:'FOMC 金利発表',type:'fomc',impact:'high'},
+  {date:'2026-09-17',event:'FOMC 金利発表',type:'fomc',impact:'high'},
+  {date:'2026-10-29',event:'FOMC 金利発表',type:'fomc',impact:'high'},
+  {date:'2026-12-10',event:'FOMC 金利発表',type:'fomc',impact:'high'},
+  {date:'2026-02-06',event:'雇用統計',type:'jobs',impact:'high'},
+  {date:'2026-03-06',event:'雇用統計',type:'jobs',impact:'high'},
+  {date:'2026-04-03',event:'雇用統計',type:'jobs',impact:'high'},
+  {date:'2026-05-01',event:'雇用統計',type:'jobs',impact:'high'},
+  {date:'2026-06-05',event:'雇用統計',type:'jobs',impact:'high'},
+  {date:'2026-07-02',event:'雇用統計',type:'jobs',impact:'high'},
+  {date:'2026-08-07',event:'雇用統計',type:'jobs',impact:'high'},
+  {date:'2026-09-04',event:'雇用統計',type:'jobs',impact:'high'},
+  {date:'2026-10-02',event:'雇用統計',type:'jobs',impact:'high'},
+  {date:'2026-11-06',event:'雇用統計',type:'jobs',impact:'high'},
+  {date:'2026-12-04',event:'雇用統計',type:'jobs',impact:'high'},
+  {date:'2026-02-11',event:'CPI',type:'cpi',impact:'high'},
+  {date:'2026-03-11',event:'CPI',type:'cpi',impact:'high'},
+  {date:'2026-04-10',event:'CPI',type:'cpi',impact:'high'},
+  {date:'2026-05-13',event:'CPI',type:'cpi',impact:'high'},
+  {date:'2026-06-10',event:'CPI',type:'cpi',impact:'high'},
+  {date:'2026-07-15',event:'CPI',type:'cpi',impact:'high'},
+  {date:'2026-08-12',event:'CPI',type:'cpi',impact:'high'},
+  {date:'2026-09-09',event:'CPI',type:'cpi',impact:'high'},
+  {date:'2026-10-14',event:'CPI',type:'cpi',impact:'high'},
+  {date:'2026-11-12',event:'CPI',type:'cpi',impact:'high'},
+  {date:'2026-12-10',event:'CPI',type:'cpi',impact:'high'},
+  {date:'2026-02-27',event:'PCE',type:'pce',impact:'medium'},
+  {date:'2026-03-27',event:'PCE',type:'pce',impact:'medium'},
+  {date:'2026-04-30',event:'PCE',type:'pce',impact:'medium'},
+  {date:'2026-05-29',event:'PCE',type:'pce',impact:'medium'},
+  {date:'2026-06-26',event:'PCE',type:'pce',impact:'medium'},
+  {date:'2026-07-31',event:'PCE',type:'pce',impact:'medium'},
+  {date:'2026-08-28',event:'PCE',type:'pce',impact:'medium'},
+  {date:'2026-09-25',event:'PCE',type:'pce',impact:'medium'},
+  {date:'2026-10-30',event:'PCE',type:'pce',impact:'medium'},
+  {date:'2026-11-25',event:'PCE',type:'pce',impact:'medium'},
+  {date:'2026-12-22',event:'PCE',type:'pce',impact:'medium'},
+];
+
+function getEventInfo() {
+  const today = new Date(); today.setHours(0,0,0,0);
+  const in14  = new Date(today); in14.setDate(in14.getDate()+14);
+  const future = EVENTS
+    .map(e => ({...e, dt: new Date(e.date)}))
+    .filter(e => e.dt >= today)
+    .sort((a,b) => a.dt - b.dt);
+  const within14 = future.filter(e => e.dt <= in14);
+  const nextEvent = future[0] || null;
+  return {within14, nextEvent, allFuture: future};
+}
+
+// ========== 設定保存/読込 ==========
+function saveSettings() {
+  localStorage.setItem('anthropic_key', document.getElementById('apiKey').value);
+  localStorage.setItem('pushover_token', document.getElementById('pushToken').value);
+  localStorage.setItem('pushover_user',  document.getElementById('pushUser').value);
+}
+function loadSettings() {
+  document.getElementById('apiKey').value   = localStorage.getItem('anthropic_key')   || '';
+  document.getElementById('pushToken').value = localStorage.getItem('pushover_token') || '';
+  document.getElementById('pushUser').value  = localStorage.getItem('pushover_user')  || '';
+}
+function toggleSettings() {
+  const body = document.getElementById('settingsBody');
+  const arrow = document.getElementById('settingsArrow');
+  const open = body.classList.toggle('open');
+  arrow.textContent = open ? '▼' : '▶';
+}
+
+// ========== Pushover通知 ==========
+async function sendPushover(message, title='SPYアラート') {
+  const token = localStorage.getItem('pushover_token');
+  const user  = localStorage.getItem('pushover_user');
+  if(!token || !user) return false;
+  try {
+    await fetch('https://api.pushover.net/1/messages.json', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({token, user, title, message})
+    });
+    return true;
+  } catch(e) {
+    // CORS fallback via proxies
+    for(const proxy of CORS_PROXIES) {
+      try {
+        await fetch(proxy + encodeURIComponent('https://api.pushover.net/1/messages.json'), {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({token, user, title, message})
+        });
+        return true;
+      } catch(e2) { continue; }
+    }
+    return false;
+  }
+}
+async function testPushover() {
+  const st = document.getElementById('pushStatus');
+  st.textContent = '送信中...';
+  const ok = await sendPushover('テスト通知 from SPYアラート', 'SPYアラート テスト');
+  st.textContent = ok ? '✅ 送信完了' : '❌ 失敗（トークン・ユーザーキーを確認）';
+  setTimeout(()=>st.textContent='', 4000);
+}
+
+// ========== VIX急騰チェック ==========
+async function checkVixSurge(vixToday, vixYesterday) {
+  if(!vixYesterday || !vixToday) return;
+  const change = (vixToday - vixYesterday) / vixYesterday;
+  if(change >= 0.30) {
+    const msg = `🚨 VIX急騰\nVIX前日比+${(change*100).toFixed(1)}%\n即時決済を検討してください`;
+    const sent = await sendPushover(msg, '🚨 VIX急騰アラート');
+    if(sent) console.log('VIX急騰Pushover送信完了');
+  }
+}
+
+// ========== イベント前日チェック ==========
+async function checkEventTomorrow(eventInfo) {
+  const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate()+1); tomorrow.setHours(0,0,0,0);
+  const tomorrowStr = tomorrow.toISOString().slice(0,10);
+  const tmrEvents = eventInfo.allFuture.filter(e => e.date === tomorrowStr);
+  for(const e of tmrEvents) {
+    const msg = `📅 イベント前日\n明日：${e.event}\n含み損益を確認して決済判断してください`;
+    await sendPushover(msg, '📅 イベント前日アラート');
+  }
+}
+
+// ========== Yahoo Finance データ取得 ==========
+async function getMarketData() {
+  const [spyJson, vixJson] = await Promise.all([
+    fetchYF('SPY', 'interval=1d&range=30d'),
+    fetchYF('%5EVIX', 'interval=1d&range=1y')
+  ]);
+
+  // SPY
+  const spyChart = spyJson.chart.result[0];
+  const spyCloses = spyChart.indicators.quote[0].close.filter(v => v != null);
+  const spyPrice  = +spyCloses[spyCloses.length-1].toFixed(2);
+  const spyPrev   = spyCloses[spyCloses.length-2];
+  const spyChange = +((spyPrice - spyPrev) / spyPrev * 100).toFixed(2);
+  const sma20     = +(spyCloses.slice(-20).reduce((a,b)=>a+b,0)/Math.min(spyCloses.length,20)).toFixed(2);
+
+  // VIX
+  const vixChart   = vixJson.chart.result[0];
+  const vixCloses  = vixChart.indicators.quote[0].close.filter(v => v != null);
+  const vixToday   = +vixCloses[vixCloses.length-1].toFixed(2);
+  const vixYest    = +vixCloses[vixCloses.length-2].toFixed(2);
+  const vixChange  = +((vixToday - vixYest) / vixYest * 100).toFixed(1);
+
+  // IVパーセンタイル（52週VIX範囲）
+  const vix52 = vixCloses.slice(-252);
+  const sorted = [...vix52].sort((a,b)=>a-b);
+  const below  = sorted.filter(v => v <= vixToday).length;
+  const ivPercentile = Math.round(below / sorted.length * 100);
+  const vixMin = +Math.min(...vix52).toFixed(2);
+  const vixMax = +Math.max(...vix52).toFixed(2);
+
+  // ATMデルタ（BS）
+  const {callDelta, putDelta} = calcATMDelta(spyPrice, 21, vixToday);
+
+  return {spyPrice, spyPrev, spyChange, sma20, vixToday, vixYest, vixChange,
+          ivPercentile, vixMin, vixMax, vixCloses52: vix52, callDelta, putDelta};
+}
+
+// ========== 満期日計算（次の3金曜: 7〜45DTE）==========
+function getExpirations() {
+  const today = new Date(); today.setHours(0,0,0,0);
+  const exps = [];
+  // 次の金曜から45日先まで探索
+  const d = new Date(today);
+  while(exps.length < 6 && (d - today)/86400000 <= 50) {
+    d.setDate(d.getDate()+1);
+    if(d.getDay() === 5) { // 金曜
+      const dte = Math.round((d - today)/86400000);
+      if(dte >= MIN_DTE && dte <= MAX_DTE) {
+        exps.push({date: d.toISOString().slice(0,10), dte});
+      }
+    }
+  }
+  return exps.slice(0,3);
+}
+
+// ========== BS計算 ==========
+function normCDF(x) {
+  const a1=.254829592,a2=-.284496736,a3=1.421413741,a4=-1.453152027,a5=1.061405429,p=.3275911;
+  const sign=x<0?-1:1; x=Math.abs(x)/Math.sqrt(2);
+  const t=1/(1+p*x);
+  const y=1-(((((a5*t+a4)*t)+a3)*t+a2)*t+a1)*t*Math.exp(-x*x);
+  return .5*(1+sign*y);
+}
+function normPDF(x){return Math.exp(-.5*x*x)/Math.sqrt(2*Math.PI)}
+function bsGreeks(S,K,T,r,sigma,type){
+  if(T<=0){const i=type==='call'?Math.max(0,S-K):Math.max(0,K-S);return{price:i,delta:type==='call'?(S>K?1:0):(S<K?-1:0)}}
+  const sqrtT=Math.sqrt(T);
+  const d1=(Math.log(S/K)+(r+.5*sigma*sigma)*T)/(sigma*sqrtT);
+  const d2=d1-sigma*sqrtT; const eRT=Math.exp(-r*T);
+  const price=type==='call'?S*normCDF(d1)-K*eRT*normCDF(d2):K*eRT*normCDF(-d2)-S*normCDF(-d1);
+  const delta=type==='call'?normCDF(d1):normCDF(d1)-1;
+  const gamma=normPDF(d1)/(S*sigma*sqrtT);
+  const theta=type==='call'?(-S*normPDF(d1)*sigma/(2*sqrtT)-r*K*eRT*normCDF(d2))/365
+                           :(-S*normPDF(d1)*sigma/(2*sqrtT)+r*K*eRT*normCDF(-d2))/365;
+  return{price:+price.toFixed(2),delta:+delta.toFixed(3),gamma:+gamma.toFixed(4),theta:+theta.toFixed(3)};
+}
+function skewIV(baseSigma,S,K){
+  const logm=Math.log(K/S);
+  return baseSigma*Math.min(Math.max(1.0-1.6*logm,.75),1.9);
+}
+function estimateIV(vix){return(vix/100)*1.1}
+function strikeData(spy,vix,K,type,dte){
+  const T=dte/365, r=RATE, baseSigma=estimateIV(vix);
+  const sigmaK=skewIV(baseSigma,spy,K);
+  const g=bsGreeks(spy,K,T,r,sigmaK,type);
+  const half=Math.max(.02,g.price*.015+.015);
+  return{ask:+Math.max(.02,g.price+half).toFixed(2),bid:+Math.max(.01,g.price-half).toFixed(2),
+         iv:+(sigmaK*100).toFixed(1),delta:Math.abs(g.delta)};
+}
+function calcATMDelta(spy,dte,vix){
+  const T=dte/365,baseSigma=estimateIV(vix);
+  const K=Math.round(spy);
+  const sigmaK=skewIV(baseSigma,spy,K);
+  const cg=bsGreeks(spy,K,T,RATE,sigmaK,'call');
+  const pg=bsGreeks(spy,K,T,RATE,sigmaK,'put');
+  return{callDelta:+cg.delta.toFixed(3),putDelta:+Math.abs(pg.delta).toFixed(3)};
+}
+
+// ========== デビットスプレッド生成 ==========
+function generateDebitSpreads(spy,vix,dir,dte){
+  const atm=Math.round(spy); const spreads=[];
+  const offsets=dir==='bull'?[-2,-1,0,1,2,3,4]:[-2,-1,0,1,2,3,4];
+  for(let offset of offsets){
+    const bs=dir==='bull'?atm+offset:atm-offset;
+    const ss=dir==='bull'?bs+SPREAD_WIDTH:bs-SPREAD_WIDTH;
+    const type=dir==='bull'?'call':'put';
+    const bO=strikeData(spy,vix,bs,type,dte);
+    const sO=strikeData(spy,vix,ss,type,dte);
+    const net=+(bO.ask-sO.bid).toFixed(2);
+    if(net<=.02) continue;
+    const mp=+(SPREAD_WIDTH-net).toFixed(2);
+    if(mp<=0) continue;
+    const rr=+(mp/net).toFixed(2);
+    if(rr<1.5) continue;
+    const bep=dir==='bull'?+(bs+net).toFixed(2):+(bs-net).toFixed(2);
+    const bepDist=dir==='bull'?+((bep-spy)/spy*100).toFixed(2):+((spy-bep)/spy*100).toFixed(2);
+    const ev=+(bO.delta*mp-(1-bO.delta)*net).toFixed(2);
+    if(ev*100<Math.max(20,net*100*.05)) continue;
+    spreads.push({id:`${dir[0].toUpperCase()}${bs}/${ss}-${dte}`,
+      type:dir, strat:dir==='bull'?'ブルコール':'ベアプット',
+      buyStrike:bs, sellStrike:ss, net, mp, rr, bep, bepDist,
+      iv:bO.iv, delta:+bO.delta.toFixed(3), ev, dte,
+      evDollar:+(ev*100).toFixed(0)});
+  }
+  return spreads.sort((a,b)=>b.rr-a.rr).slice(0,TOP_N);
+}
+
+// ========== クレジットスプレッド生成 ==========
+function generateCreditSpreads(spy,vix,dir,dte){
+  const atm=Math.round(spy); const spreads=[];
+  if(dir==='bull-credit'){
+    for(let offset=-1;offset>=-12;offset--){
+      const sellK=atm+offset, buyK=sellK-SPREAD_WIDTH;
+      const sellO=strikeData(spy,vix,sellK,'put',dte);
+      const buyO =strikeData(spy,vix,buyK, 'put',dte);
+      if(sellO.delta>0.30) continue;
+      const credit=+(sellO.bid-buyO.ask).toFixed(2);
+      if(credit<=.02) continue;
+      const maxLoss=+(SPREAD_WIDTH-credit).toFixed(2);
+      if(maxLoss<=0) continue;
+      const rr=+(credit/maxLoss).toFixed(2);
+      const bep=+(sellK-credit).toFixed(2);
+      const bepDist=+((spy-bep)/spy*100).toFixed(2);
+      const ev=+((1-sellO.delta)*credit-sellO.delta*maxLoss).toFixed(2);
+      if(ev*100<20) continue;
+      spreads.push({id:`BC${sellK}/${buyK}-${dte}`,
+        type:'bull-credit', strat:'ブルプット（クレジット）',
+        sellStrike:sellK, buyStrike:buyK, net:credit, mp:credit, maxLoss, rr, bep, bepDist,
+        iv:sellO.iv, sellDelta:+sellO.delta.toFixed(3), ev, dte,
+        evDollar:+(ev*100).toFixed(0), creditType:true});
+    }
+  } else {
+    for(let offset=1;offset<=12;offset++){
+      const sellK=atm+offset, buyK=sellK+SPREAD_WIDTH;
+      const sellO=strikeData(spy,vix,sellK,'call',dte);
+      const buyO =strikeData(spy,vix,buyK, 'call',dte);
+      if(sellO.delta>0.30) continue;
+      const credit=+(sellO.bid-buyO.ask).toFixed(2);
+      if(credit<=.02) continue;
+      const maxLoss=+(SPREAD_WIDTH-credit).toFixed(2);
+      if(maxLoss<=0) continue;
+      const rr=+(credit/maxLoss).toFixed(2);
+      const bep=+(sellK+credit).toFixed(2);
+      const bepDist=+((bep-spy)/spy*100).toFixed(2);
+      const ev=+((1-sellO.delta)*credit-sellO.delta*maxLoss).toFixed(2);
+      if(ev*100<20) continue;
+      spreads.push({id:`BRc${sellK}/${buyK}-${dte}`,
+        type:'bear-credit', strat:'ベアコール（クレジット）',
+        sellStrike:sellK, buyStrike:buyK, net:credit, mp:credit, maxLoss, rr, bep, bepDist,
+        iv:sellO.iv, sellDelta:+sellO.delta.toFixed(3), ev, dte,
+        evDollar:+(ev*100).toFixed(0), creditType:true});
+    }
+  }
+  return spreads.sort((a,b)=>b.ev-a.ev).slice(0,TOP_N);
+}
+
+// ========== 戦略選択 ==========
+function selectStrategy(ivp) {
+  if(ivp<=30) return 'debit';
+  if(ivp>=70) return 'credit';
+  return 'both';
+}
+
+// ========== 7ステップ判定 ==========
+function checkEntry(spread, spy, sma20, vix, callDelta, putDelta, eventInfo, ivp) {
+  const steps=[], strat=spread.type;
+  const isCred=strat.includes('credit');
+  let passCount=0, total=0;
+
+  // ① デルタ方向確認
+  total++;
+  const diff=Math.abs(callDelta-putDelta);
+  const bullSig=callDelta>putDelta;
+  const isBull=strat==='bull'||strat==='bull-credit';
+  if(diff<0.04){
+    steps.push({n:'①',title:'デルタ（方向確認）',status:'warn',
+      detail:`コールΔ${callDelta} / プットΔ${putDelta}　差${diff.toFixed(3)} — 差小さい(0.04未満)`,badge:'差小さい'});
+  } else if(isBull===bullSig){
+    const cont=isBull&&spy<sma20&&vix<=20;
+    if(cont){
+      steps.push({n:'①',title:'デルタ（方向確認）',status:'warn',
+        detail:`コールΔ${callDelta}/プットΔ${putDelta} → デルタブルだがSMAベア(VIX${vix}≤20) — 矛盾`,badge:'矛盾'});
+    } else {
+      steps.push({n:'①',title:'デルタ（方向確認）',status:'ok',
+        detail:`コールΔ${callDelta} / プットΔ${putDelta} → ${isBull?'上有利':'下有利'} ✓`,badge:'OK'});
+      passCount++;
+    }
+  } else {
+    steps.push({n:'①',title:'デルタ（方向確認）',status:'ng',
+      detail:`コールΔ${callDelta}/プットΔ${putDelta} → 方向不一致`,badge:'NG'});
+  }
+
+  // ② イベント確認
+  total++;
+  const today=new Date(); today.setHours(0,0,0,0);
+  const expiryDt=new Date(today); expiryDt.setDate(expiryDt.getDate()+spread.dte);
+  const crit=['fomc','jobs','cpi'];
+  const highEvents=eventInfo.allFuture.filter(e=>{
+    const dt=new Date(e.date);
+    return crit.includes(e.type)&&dt>today&&dt<=expiryDt;
+  });
+  const near3=(()=>{
+    const d=new Date(expiryDt); d.setDate(d.getDate()-3);
+    return highEvents.filter(e=>new Date(e.date)>=d);
+  })();
+  let s2,d2,b2,p2=false;
+  if(near3.length>0){
+    s2='ng';d2=`満期3日以内に ${near3.map(e=>e.event).join('/')} → 即見送り`;b2='NG';
+  } else if(highEvents.length>0&&vix>25){
+    s2='ng';d2=`保有中に${highEvents.map(e=>e.event).join('/')} + VIX${vix}>25 → 見送り`;b2='NG';
+  } else if(highEvents.length>0){
+    s2='warn';d2=`保有中に${highEvents.map(e=>e.event).join('/')} — R/R≥1.8・EV≥$30必須`;b2='注意';
+  } else {
+    s2='ok';d2='イベントなし — OK';b2='OK';p2=true;
+  }
+  steps.push({n:'②',title:'重要イベント確認',status:s2,detail:d2,badge:b2});
+  if(p2) passCount++;
+
+  // ③ IV判定
+  total++;
+  const iv=spread.iv;
+  if(iv<=45){steps.push({n:'③',title:'IVランク',status:'ok',detail:`IV ${iv}% 適正 ✓`,badge:'OK'});passCount++;}
+  else if(iv<=70){steps.push({n:'③',title:'IVランク',status:'warn',detail:`IV ${iv}% やや高め`,badge:'注意'});}
+  else{steps.push({n:'③',title:'IVランク',status:'ng',detail:`IV ${iv}% 高すぎ NG`,badge:'NG'});}
+
+  // ④ DTE
+  total++;
+  const dte=spread.dte;
+  if(dte<14){steps.push({n:'④',title:'DTE（ガンマ）',status:'ng',detail:`残存${dte}日 <14日 NG`,badge:'NG'});}
+  else if(dte>=21&&dte<=35){steps.push({n:'④',title:'DTE（ガンマ）',status:'ok',detail:`残存${dte}日 最適範囲 ✓`,badge:'OK'});passCount++;}
+  else{steps.push({n:'④',title:'DTE（ガンマ）',status:'warn',detail:`残存${dte}日 ${dte<21?'やや短め':'やや長め'}`,badge:'注意'});}
+
+  // ⑤ R/R or 売りデルタ
+  total++;
+  if(isCred){
+    const sd=spread.sellDelta||0;
+    const ok5=sd<=0.30;
+    steps.push({n:'⑤',title:'売りデルタ確認',status:ok5?'ok':'ng',
+      detail:`売りΔ ${sd.toFixed(3)} ${ok5?'≤0.30 OTM ✓':'>0.30 ATM寄りすぎ NG'}`,badge:ok5?'OK':'NG'});
+    if(ok5) passCount++;
+  } else {
+    const ok5=spread.rr>=1.5;
+    steps.push({n:'⑤',title:'R/R確認（≥1.5）',status:ok5?'ok':'ng',
+      detail:`R/R ${spread.rr} ${ok5?'≥1.5 ✓':'<1.5 NG'}`,badge:ok5?'OK':'NG'});
+    if(ok5) passCount++;
+  }
+
+  // ⑥ EV
+  total++;
+  const evD=spread.evDollar||0;
+  const threshold=isCred?20:Math.max(20,spread.net*100*.05);
+  const ok6=evD>=threshold;
+  steps.push({n:'⑥',title:'期待値（EV）',status:ok6?'ok':evD>0?'warn':'ng',
+    detail:`EV +$${evD}　閾値: $${threshold.toFixed(0)} ${ok6?'✓':'NG'}`,badge:`+$${evD}`});
+  if(ok6) passCount++;
+
+  // ⑦ 決済ルール
+  total++;
+  const profitTgt=isCred?Math.round(spread.net*100*.75):Math.round(spread.mp*100*.75);
+  const lossLmt  =isCred?Math.round((spread.maxLoss||SPREAD_WIDTH-spread.net)*100*.50):Math.round(spread.net*100*.50);
+  steps.push({n:'⑦',title:'決済ルール（v2.0）',status:'neutral',
+    detail:`指値: +$${profitTgt}（${isCred?'受取':'最大利益'}×75%）/ 逆指値: -$${lossLmt}（最大損失×50%）/ イベント前日・VIX急騰→即決済`,
+    badge:'自己確認'});
+
+  return {steps, passCount, total};
+}
+
+// ========== UIレンダリング用 ==========
+let state={market:null, allSpreads:[], topPicks:[], claudeText:'', eventInfo:null, strategy:'both'};
+
+function renderMarketGrid(m, ivp) {
+  const smaDiff=+((m.spyPrice-m.sma20)/m.sma20*100).toFixed(2);
+  const trend=m.spyPrice>=m.sma20?'強気↑':'弱気↓';
+  const trendColor=m.spyPrice>=m.sma20?'#10b981':'#ef4444';
+  const spyColor=m.spyChange>=0?'#10b981':'#ef4444';
+  const vixColor=m.vixToday<20?'#10b981':m.vixToday<30?'#f59e0b':'#ef4444';
+  const smaColor=smaDiff>=0?'#10b981':'#ef4444';
+  const ivpColor=ivp<=30?'#4ade80':ivp>=70?'#c084fc':'#fbbf24';
+  document.getElementById('mSpy').innerHTML=`<span style="color:${spyColor}">$${m.spyPrice}</span>`;
+  document.getElementById('mSpyChange').textContent=`${m.spyChange>=0?'+':''}${m.spyChange}%`;
+  document.getElementById('mVix').innerHTML=`<span style="color:${vixColor}">${m.vixToday}</span>`;
+  document.getElementById('mVixChange').textContent=`前日比 ${m.vixChange>=0?'+':''}${m.vixChange}%`;
+  document.getElementById('mSma').innerHTML=`<span style="color:${smaColor}">${smaDiff>=0?'+':''}${smaDiff}%</span>`;
+  document.getElementById('mTrend').innerHTML=`<span style="color:${trendColor}">${trend}</span> SMA$${m.sma20}`;
+  document.getElementById('mIvp').innerHTML=`<span style="color:${ivpColor}">${ivp}%</span>`;
+  document.getElementById('mIvpSub').textContent=`52週 ${m.vixMin}〜${m.vixMax}`;
+  document.getElementById('marketGrid').style.display='block';
+}
+
+function renderStratBanner(ivp) {
+  const b=document.getElementById('stratBanner');
+  if(ivp<=30){b.className='strategy-banner banner-debit';b.innerHTML='📈 <strong>デビット推奨</strong>&nbsp;IVパーセンタイル≤30% — プレミアム割安。ブルコール・ベアプットが有利';}
+  else if(ivp>=70){b.className='strategy-banner banner-credit';b.innerHTML='💰 <strong>クレジット推奨</strong>&nbsp;IVパーセンタイル≥70% — プレミアム割高。ブルプット・ベアコールが有利';}
+  else{b.className='strategy-banner banner-both';b.innerHTML='📊 <strong>両方比較</strong>&nbsp;IVパーセンタイル30〜70% — デビット・クレジット両方のEVを比較して選択';}
+}
+
+function renderEventBanner(eventInfo) {
+  const b=document.getElementById('eventBanner');
+  if(eventInfo.within14.length>0){
+    const evs=eventInfo.within14.map(e=>`<strong>${e.date}</strong> ${e.event}`).join(' / ');
+    b.className='event-banner event-warn';
+    b.innerHTML=`⚠️ 重要イベント（14日以内）: ${evs}`;
+  } else if(eventInfo.nextEvent){
+    b.className='event-banner event-ok';
+    b.innerHTML=`✅ 14日以内イベントなし。次回: <strong>${eventInfo.nextEvent.date}</strong> ${eventInfo.nextEvent.event}`;
+  }
+}
+
+function stepHTML(steps) {
+  return steps.map(s=>{
+    const cls={ok:'step-ok',warn:'step-warn',ng:'step-fail',neutral:'step-neutral'}[s.status]||'step-neutral';
+    const icon={ok:'✓',warn:'⚠',ng:'✗',neutral:'→'}[s.status]||'→';
+    const ic={ok:'step-icon-ok',warn:'step-icon-warn',ng:'step-icon-fail',neutral:'step-icon-neutral'}[s.status]||'step-icon-neutral';
+    const badgeColor={ok:'#10b981',warn:'#f59e0b',ng:'#ef4444',neutral:'#64748b'}[s.status]||'#64748b';
+    return `<div class="step-item ${cls}">
+      <div class="${ic}">${icon}</div>
+      <div style="flex:1">
+        <div style="font-size:10px;color:#64748b;font-weight:700;margin-bottom:1px">${s.n} ${s.title}</div>
+        <div style="font-size:11px;color:#94a3b8">${s.detail}</div>
+      </div>
+      <span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;background:#141920;color:${badgeColor};white-space:nowrap">${s.badge}</span>
+    </div>`;
+  }).join('');
+}
+
+function rrColor(rr){return rr>=2?'rr-good':rr>=1.5?'rr-ok':'rr-low';}
+
+let spreadCounter=0;
+function spreadRow(sp, topPicks, m, eventInfo, ivp, rowClass) {
+  const uid=`sp${++spreadCounter}`;
+  const {steps,passCount,total}=checkEntry(sp,m.spyPrice,m.sma20,m.vixToday,m.callDelta,m.putDelta,eventInfo,ivp);
+  sp._steps=steps; sp._passCount=passCount; sp._total=total;
+  const passBg=passCount===total?'#10b981':passCount>=total-1?'#f59e0b':'#ef4444';
+  const passColor=passCount===total?'#000':'#000';
+  let rankBadge='';
+  if(topPicks[0]===sp.id) rankBadge='<span class="rank-1">🥇 第一候補</span>';
+  else if(topPicks[1]===sp.id) rankBadge='<span class="rank-2">🥈 第二候補</span>';
+  const isCred=sp.creditType;
+  return `
+    <tr class="spread-row ${rowClass}" onclick="toggleStep('${uid}')">
+      <td>${rankBadge}<span class="tag ${sp.type==='bull'?'tag-bull':sp.type==='bear'?'tag-bear':sp.type==='bull-credit'?'tag-credit-bull':'tag-credit-bear'}">${sp.strat}</span></td>
+      <td>${isCred?`売$${sp.sellStrike}/買$${sp.buyStrike}`:`買$${sp.buyStrike}/売$${sp.sellStrike}`}</td>
+      <td>${isCred?`受取 $${(sp.net*100).toFixed(0)}`:`$${sp.net}`}</td>
+      <td>${isCred?`最大損失 $${(sp.maxLoss*100).toFixed(0)}`:`$${sp.mp}`}</td>
+      <td><span class="${rrColor(sp.rr)}">${sp.rr}</span></td>
+      <td>$${sp.bep} <small style="color:#475569">(${sp.bepDist>=0?'+':''}${sp.bepDist}%)</small></td>
+      <td>${isCred?`Δ${sp.sellDelta}`:`Δ${sp.delta}`}</td>
+      <td style="color:#64748b">${sp.iv}%</td>
+      <td><button style="background:${passBg};color:${passColor};border:none;border-radius:6px;padding:3px 8px;font-size:11px;font-weight:700;cursor:pointer">${passCount}/${total}</button></td>
+    </tr>
+    <tr class="step-row" id="${uid}">
+      <td colspan="9" style="padding:10px 14px 14px;background:#0a0d12">
+        ${stepHTML(steps)}
+      </td>
+    </tr>`;
+}
+
+function toggleStep(id){
+  const row=document.getElementById(id);
+  row.classList.toggle('open');
+}
+
+function buildSpreadTable(spreads, topPicks, m, eventInfo, ivp, rowClass) {
+  if(!spreads||spreads.length===0) return '<p style="color:#475569;font-size:12px;padding:8px">条件を満たす候補がありません</p>';
+  const headers=spreads[0].creditType
+    ?`<tr><th>戦略</th><th>ストライク</th><th>受取</th><th>最大損失</th><th>R/R</th><th>BEP</th><th>売りΔ</th><th>IV</th><th>判定</th></tr>`
+    :`<tr><th>戦略</th><th>ストライク</th><th>コスト</th><th>最大利益</th><th>R/R</th><th>BEP</th><th>Δ</th><th>IV</th><th>判定</th></tr>`;
+  const rows=spreads.map(sp=>spreadRow(sp,topPicks,m,eventInfo,ivp,rowClass)).join('');
+  return `<div class="overflow-x"><table class="spread-table"><thead>${headers}</thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function renderSpreads(exps, m, eventInfo, ivp) {
+  const strategy=selectStrategy(ivp);
+  state.strategy=strategy;
+  const isBull=m.callDelta>m.putDelta;
+  let allHtml='';
+  const allSpreads=[];
+
+  for(const exp of exps){
+    let sections='';
+
+    if(strategy!=='credit'){
+      // デビット
+      const bullSpreads=generateDebitSpreads(m.spyPrice,m.vixToday,'bull',exp.dte);
+      const bearSpreads=generateDebitSpreads(m.spyPrice,m.vixToday,'bear',exp.dte);
+      allSpreads.push(...bullSpreads,...bearSpreads);
+      sections+=`<div class="sub-section-title bull-title">📈 ブルコールスプレッド（デビット）</div>`;
+      sections+=buildSpreadTable(bullSpreads,state.topPicks,m,eventInfo,ivp,'');
+      sections+=`<div class="sub-section-title bear-title" style="margin-top:14px">📉 ベアプットスプレッド（デビット）</div>`;
+      sections+=buildSpreadTable(bearSpreads,state.topPicks,m,eventInfo,ivp,'');
+    }
+    if(strategy!=='debit'){
+      // クレジット
+      const bullCred=generateCreditSpreads(m.spyPrice,m.vixToday,'bull-credit',exp.dte);
+      const bearCred=generateCreditSpreads(m.spyPrice,m.vixToday,'bear-credit',exp.dte);
+      allSpreads.push(...bullCred,...bearCred);
+      sections+=`<div class="sub-section-title credit-bull-title" style="margin-top:14px">💜 ブルプットスプレッド（クレジット）</div>`;
+      sections+=buildSpreadTable(bullCred,state.topPicks,m,eventInfo,ivp,'');
+      sections+=`<div class="sub-section-title credit-bear-title" style="margin-top:14px">🔴 ベアコールスプレッド（クレジット）</div>`;
+      sections+=buildSpreadTable(bearCred,state.topPicks,m,eventInfo,ivp,'');
+    }
+
+    allHtml+=`<div class="card">
+      <div class="expiry-header">${exp.date} <span class="dte-badge">残存 ${exp.dte} 日</span></div>
+      ${sections}
+    </div>`;
+  }
+  state.allSpreads=allSpreads;
+  document.getElementById('appContent').innerHTML=allHtml;
+}
+
+// ========== Claude API ==========
+async function runClaude() {
+  const apiKey=localStorage.getItem('anthropic_key');
+  if(!apiKey){alert('ANTHROPIC_API_KEY を設定欄に入力してください');return;}
+  document.getElementById('claudeSection').style.display='block';
+  document.getElementById('claudeContent').textContent='Claude が評価中...';
+
+  const m=state.market; const ivp=state.market._ivp;
+  const eventInfo=state.eventInfo;
+  const strategy=state.strategy;
+  const stratLabel=strategy==='debit'?'デビット推奨（IVp≤30%）':strategy==='credit'?'クレジット推奨（IVp≥70%）':'どちらでも可（IVp 30〜70%）';
+  const evStr=eventInfo.within14.map(e=>`${e.date} ${e.event}`).join(', ')||'なし';
+  const nextStr=eventInfo.nextEvent?`${eventInfo.nextEvent.date} ${eventInfo.nextEvent.event}`:'なし';
+
+  const debitList=state.allSpreads.filter(s=>!s.creditType)
+    .map(s=>`id:${s.id} [${s.strat} 残存${s.dte}日] 買$${s.buyStrike}/売$${s.sellStrike} コスト$${s.net} 最大利益$${s.mp} R/R:${s.rr} BEP$${s.bep}(${s.bepDist>=0?'+':''}${s.bepDist}%) IV:${s.iv}% EV:+$${s.evDollar} 判定:${s._passCount||0}/${s._total||7}`).join('\n')||'なし';
+  const creditList=state.allSpreads.filter(s=>s.creditType)
+    .map(s=>`id:${s.id} [${s.strat} 残存${s.dte}日] 売$${s.sellStrike}/買$${s.buyStrike} 受取$${(s.net*100).toFixed(0)} 最大損失$${(s.maxLoss*100).toFixed(0)} 売りΔ:${s.sellDelta} BEP$${s.bep}(${s.bepDist>=0?'+':''}${s.bepDist}%) IV:${s.iv}% EV:+$${s.evDollar} 判定:${s._passCount||0}/${s._total||7}`).join('\n')||'なし';
+
+  const prompt=`SPYオプションスプレッド候補を評価してください。
+
+【市場環境】
+SPY: $${m.spyPrice} / SMA20: $${m.sma20} / VIX: ${m.vixToday}
+ATMコールΔ: ${m.callDelta} / ATMプットΔ: ${m.putDelta}
+IVパーセンタイル: ${ivp}% → 戦略推奨: ${stratLabel}
+
+【経済イベント】
+今後14日以内: ${evStr}
+次回イベント（14日以降）: ${nextStr}
+
+【デビット候補（ブルコール/ベアプット）】
+${debitList}
+
+【クレジット候補（ブルプット/ベアコール）】
+${creditList}
+
+以下のルールで最適解を1つ選んでください：
+1. IVパーセンタイル≥70%はクレジットを優先
+2. IVパーセンタイル≤30%はデビットを優先
+3. 中間（30〜70%）はEVが高い方を選ぶ
+4. 方向はSMA・デルタ一致を確認
+5. EVが最も高いものを選ぶ
+6. イベント判定が「fail」の候補は選ばない
+
+まず以下のJSON形式で回答してください：
+\`\`\`json
+{"top_picks": ["第一候補のid", "第二候補のid"]}
+\`\`\`
+その後に日本語で：
+1. 戦略選択の理由（IVパーセンタイルとの整合性を必ず言及）
+2. 第一・第二候補の選定理由（イベント判定・EV・デルタを明示）
+3. 現在のマーケット環境からの強気/弱気判断
+4. 見送るべき候補とその理由`;
+
+  try {
+    const res=await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers:{
+        'x-api-key':apiKey,
+        'anthropic-version':'2023-06-01',
+        'content-type':'application/json',
+        'anthropic-dangerous-direct-browser-access':'true'
+      },
+      body:JSON.stringify({
+        model:'claude-sonnet-4-20250514',
+        max_tokens:1200,
+        messages:[{role:'user',content:prompt}]
+      })
+    });
+    const data=await res.json();
+    if(!res.ok) throw new Error(data.error?.message||res.statusText);
+
+    let text=data.content[0].text;
+    // IDを抽出してtopPicksを更新
+    const m2=text.match(/```json\s*(\{.*?\})\s*```/s);
+    if(m2){
+      try{
+        const parsed=JSON.parse(m2[1]);
+        state.topPicks=parsed.top_picks||[];
+        text=text.replace(/```json\s*\{.*?\}\s*```/s,'').trim();
+      }catch(e){}
+    }
+    state.claudeText=text;
+    document.getElementById('claudeContent').textContent=text;
+  } catch(e) {
+    document.getElementById('claudeContent').textContent=`エラー: ${e.message}`;
+  }
+}
+
+// ========== メインスクリーナー ==========
+async function runScreener() {
+  const btn=document.getElementById('refreshBtn');
+  btn.disabled=true; btn.textContent='取得中...';
+  document.getElementById('appContent').innerHTML='<div class="loading"><div class="spinner"></div>データ取得中（SPY・VIX）...</div>';
+  document.getElementById('marketGrid').style.display='none';
+  document.getElementById('claudeSection').style.display='none';
+
+  try {
+    const m=await getMarketData();
+    const ivp=m.ivPercentile;
+    m._ivp=ivp;
+    state.market=m;
+
+    // イベント情報
+    const eventInfo=getEventInfo();
+    state.eventInfo=eventInfo;
+
+    // UI更新
+    renderMarketGrid(m, ivp);
+    renderStratBanner(ivp);
+    renderEventBanner(eventInfo);
+
+    // 満期取得
+    const exps=getExpirations();
+    if(exps.length===0){
+      document.getElementById('appContent').innerHTML='<div class="error-box">有効な満期日が見つかりません（7〜45 DTE）</div>';
+      return;
+    }
+
+    // スプレッド描画
+    spreadCounter=0;
+    state.topPicks=[];
+    renderSpreads(exps, m, eventInfo, ivp);
+
+    // VIX急騰チェック
+    await checkVixSurge(m.vixToday, m.vixYest);
+    // イベント前日チェック
+    await checkEventTomorrow(eventInfo);
+
+    document.getElementById('lastUpdate').textContent=`更新: ${new Date().toLocaleTimeString('ja-JP')}`;
+
+    // Claude評価を自動実行
+    const apiKey=localStorage.getItem('anthropic_key');
+    if(apiKey){
+      document.getElementById('claudeSection').style.display='block';
+      await runClaude();
+    }
+  } catch(e) {
+    document.getElementById('appContent').innerHTML=`<div class="error-box">
+      <strong>データ取得エラー</strong><br>${e.message}<br><br>
+      <small>Yahoo Finance APIへのアクセスに失敗しました。CORSプロキシの状況を確認してください。</small>
+    </div>`;
+    console.error(e);
+  } finally {
+    btn.disabled=false; btn.textContent='▶ スクリーン実行';
+  }
+}
+
+// ========== 初期化 ==========
+loadSettings();
+</script>
+</body>
+</html>
