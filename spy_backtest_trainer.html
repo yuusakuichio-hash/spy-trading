@@ -34,6 +34,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;backgrou
 .btn-bear.selected,.btn-bear:hover{background:#ef4444;color:#fff}
 .btn-skip{background:#151c25;color:#64748b;border:1px solid #2a3340}
 .btn-skip.selected,.btn-skip:hover{background:#2a3340;color:#e2e8f0}
+.btn-bull-credit{background:#0d1a2a;color:#818cf8;border:1px solid #1e3a5a}
+.btn-bull-credit.selected,.btn-bull-credit:hover{background:#818cf8;color:#000}
+.btn-bear-credit{background:#1a0d2a;color:#c084fc;border:1px solid #3a1e5a}
+.btn-bear-credit.selected,.btn-bear-credit:hover{background:#c084fc;color:#000}
 .btn-disabled{opacity:0.4;cursor:not-allowed}
 .spread-table{width:100%;border-collapse:collapse;font-size:12px}
 .spread-table th{padding:7px 10px;text-align:left;color:#475569;border-bottom:1px solid #1e2530;font-weight:500}
@@ -288,8 +292,8 @@ function generateSpreads(spy, vix, strat, expiryDays, width, atmOnly, rate) {
         costRatio, delta, ev});
     }
   }
-  // 戦略基準フィルター: VIX≤20はR/R≥1.3、それ以外は≥1.5
-  const rrMin = vix <= 20 ? 1.3 : 1.5;
+  // 戦略基準フィルター: R/R≥1.5（全状況統一）
+  const rrMin = 1.5;
   const valid = spreads.filter(s => s.rr >= rrMin && s.ev >= Math.max(0.20, s.net * 0.05));
   const pool = valid.length > 0 ? valid : spreads;
   return pool.sort((a,b) => b.rr - a.rr).slice(0, 6);
@@ -302,16 +306,94 @@ function calcPnL(sc, strat, spread) {
     // ブルコール満期損益
     const buyVal = Math.max(0, endSpy - spread.bs);
     const sellVal = Math.max(0, endSpy - spread.ss);
-    const finalVal = buyVal - sellVal;
-    pnl = finalVal - spread.net;
-  } else {
+    pnl = (buyVal - sellVal) - spread.net;
+  } else if(strat === 'bear') {
     // ベアプット満期損益
     const buyVal = Math.max(0, spread.bs - endSpy);
     const sellVal = Math.max(0, spread.ss - endSpy);
-    const finalVal = buyVal - sellVal;
-    pnl = finalVal - spread.net;
+    pnl = (buyVal - sellVal) - spread.net;
+  } else if(strat === 'bull-credit') {
+    // ブルプット（クレジット）: 売りput@bs, 買いput@ss (ss < bs)
+    const sellVal = Math.max(0, spread.bs - endSpy);
+    const buyVal  = Math.max(0, spread.ss - endSpy);
+    pnl = spread.net - (sellVal - buyVal);
+  } else if(strat === 'bear-credit') {
+    // ベアコール（クレジット）: 売りcall@bs, 買いcall@ss (ss > bs)
+    const sellVal = Math.max(0, endSpy - spread.bs);
+    const buyVal  = Math.max(0, endSpy - spread.ss);
+    pnl = spread.net - (sellVal - buyVal);
   }
   return +pnl.toFixed(2);
+}
+
+// ========== クレジットスプレッド生成 ==========
+function generateCreditSpreads(spy, vix, strat, expiryDays, width, rate) {
+  width = width || 5;
+  rate = (rate !== undefined) ? rate : 0.053;
+  const T = expiryDays / 365;
+  const r = rate;
+  const baseSigma = estimateIV(spy, vix);
+  const spreads = [];
+  const atm = Math.round(spy);
+
+  function strikeData(K, type) {
+    const sigmaK = skewIV(baseSigma, spy, K);
+    const g = bsGreeks(spy, K, T, r, sigmaK, type);
+    const half = Math.max(0.02, g.price * 0.015 + 0.015);
+    return {
+      ask: +Math.max(0.02, g.price + half).toFixed(2),
+      bid: +Math.max(0.01, g.price - half).toFixed(2),
+      iv:  +(sigmaK * 100).toFixed(1),
+      delta: Math.abs(g.delta),
+    };
+  }
+
+  if(strat === 'bull-credit') {
+    // ブルプット: 売りOTM put (delta ≤ 0.30), 買いさらにOTM put
+    for(let offset = -1; offset >= -12; offset--) {
+      const sellK = atm + offset;
+      const buyK  = sellK - width;
+      const sellO = strikeData(sellK, 'put');
+      const buyO  = strikeData(buyK, 'put');
+      if(sellO.delta > 0.30) continue;
+      const credit = +(sellO.bid - buyO.ask).toFixed(2);
+      if(credit <= 0.02) continue;
+      const maxLoss = +(width - credit).toFixed(2);
+      if(maxLoss <= 0) continue;
+      const rr    = +(credit / maxLoss).toFixed(2);
+      const bep   = +(sellK - credit).toFixed(2);
+      const delta = sellO.delta;
+      const ev    = +((1 - delta) * credit - delta * maxLoss).toFixed(2);
+      spreads.push({ bs:sellK, ss:buyK, bp:sellO.bid, sp:buyO.ask,
+        net:credit, mp:credit, maxLoss, rr, bep, width,
+        bep_dist: +((spy - bep) / spy * 100).toFixed(2),
+        iv:sellO.iv, delta, ev, creditType:true });
+    }
+  } else { // bear-credit
+    // ベアコール: 売りOTM call (delta ≤ 0.30), 買いさらにOTM call
+    for(let offset = 1; offset <= 12; offset++) {
+      const sellK = atm + offset;
+      const buyK  = sellK + width;
+      const sellO = strikeData(sellK, 'call');
+      const buyO  = strikeData(buyK, 'call');
+      if(sellO.delta > 0.30) continue;
+      const credit = +(sellO.bid - buyO.ask).toFixed(2);
+      if(credit <= 0.02) continue;
+      const maxLoss = +(width - credit).toFixed(2);
+      if(maxLoss <= 0) continue;
+      const rr    = +(credit / maxLoss).toFixed(2);
+      const bep   = +(sellK + credit).toFixed(2);
+      const delta = sellO.delta;
+      const ev    = +((1 - delta) * credit - delta * maxLoss).toFixed(2);
+      spreads.push({ bs:sellK, ss:buyK, bp:sellO.bid, sp:buyO.ask,
+        net:credit, mp:credit, maxLoss, rr, bep, width,
+        bep_dist: +((bep - spy) / spy * 100).toFixed(2),
+        iv:sellO.iv, delta, ev, creditType:true });
+    }
+  }
+  const valid = spreads.filter(s => s.ev >= 0.20);
+  const pool  = valid.length > 0 ? valid : spreads;
+  return pool.sort((a, b) => b.ev - a.ev).slice(0, 6);
 }
 
 // ========== Seeded PRNG (Mulberry32) ==========
@@ -495,10 +577,13 @@ function analyzeChecklist(sc) {
     step4Msg = `DTE ${sc.expiryDays}日 > 35日 — 注意（セータコスト増）`;
   }
 
-  // STEP⑤ スプレッド選択
-  const rrMin = sc.vix <= 20 ? 1.3 : 1.5;
+  // STEP⑤ スプレッド選択（デビット: R/R≥1.5統一、クレジット: 売りΔ≤0.30）
+  const rrMin = 1.5;
+  const step5DebitMsg = `R/R ≥ 1.5（全状況統一）| ATM最近接優先 | EV ≥ $20`;
+  const step5CreditMsg = `売りデルタ ≤ 0.30（OTM選択）| EV ≥ $20`;
+  // デフォルトはデビット表示（選択後に動的切替）
   const step5Status = 'info';
-  const step5Msg = `R/R ≥ ${rrMin}（VIX${sc.vix<=20?' ≤ 20 → 1.3':' > 20 → 1.5'}）| ATM最近接優先 | EV ≥ $20 — 下表で確認`;
+  const step5Msg = step5DebitMsg;
 
   const absoluteSkip = step1Status === 'ng' || step2Status === 'ng' || sc.expiryDays < 14;
 
@@ -510,14 +595,21 @@ function analyzeChecklist(sc) {
                          `VIX ${sc.vix} ≤ 20 — ブルコール優先`,
   };
 
+  const ivpRec = sc.ivPct >= 70
+    ? { label:`IVp ${sc.ivPct}%`, msg:'クレジット推奨（プレミアム割高）', color:'#c084fc' }
+    : sc.ivPct < 30
+    ? { label:`IVp ${sc.ivPct}%`, msg:'デビット推奨（プレミアム割安）', color:'#4ade80' }
+    : { label:`IVp ${sc.ivPct}%`, msg:'どちらでも可（R/R・EV次第）', color:'#fbbf24' };
+
   return {
     step1:{status:step1Status, msg:step1Msg},
     step2:{status:step2Status, msg:step2Msg},
     step3:{status:step3Status, msg:step3Msg},
     step4:{status:step4Status, msg:step4Msg},
     step5:{status:step5Status, msg:step5Msg},
+    step5DebitMsg, step5CreditMsg,
     absoluteSkip, dirRec: bullSignal ? 'bull' : 'bear',
-    rrMin, vixRec, callDelta, putDelta,
+    rrMin, vixRec, ivpRec, callDelta, putDelta,
     smaAndDeltaContradict, deltaTooSmall,
     eventHighStd: criticalDuring.length > 0 && sc.vix <= 25,
   };
@@ -557,12 +649,19 @@ function buildChecklistHTML(cl) {
       🚫 絶対見送り条件に該当 — 「見送り」を選択してください
     </div>` : '';
 
+  const ivpRec = cl.ivpRec || { label:'IVp ?', msg:'不明', color:'#475569' };
   return `<div class="card" style="padding:14px 16px">
-    <div class="section-title" style="margin-bottom:10px">5ステップ エントリー判定</div>
+    <div class="section-title" style="margin-bottom:10px">6ステップ エントリー判定</div>
     ${skipBanner}${stepsHTML}
-    <div style="background:#141920;border-radius:6px;padding:7px 12px;margin-top:6px;display:flex;align-items:center;gap:10px">
-      <div style="font-size:10px;color:#475569;font-weight:700;white-space:nowrap">VIX環境</div>
-      <div style="font-size:11px;color:${vixColor}">${cl.vixRec.msg}</div>
+    <div style="display:flex;gap:6px;margin-top:6px">
+      <div style="flex:1;background:#141920;border-radius:6px;padding:7px 12px;display:flex;align-items:center;gap:8px">
+        <div style="font-size:10px;color:#475569;font-weight:700;white-space:nowrap">VIX環境</div>
+        <div style="font-size:11px;color:${vixColor}">${cl.vixRec.msg}</div>
+      </div>
+      <div style="flex:1;background:#141920;border-radius:6px;padding:7px 12px;display:flex;align-items:center;gap:8px">
+        <div style="font-size:10px;color:#475569;font-weight:700;white-space:nowrap">${ivpRec.label}</div>
+        <div style="font-size:11px;color:${ivpRec.color}">${ivpRec.msg}</div>
+      </div>
     </div>
   </div>`;
 }
@@ -933,15 +1032,34 @@ function renderQuestion(sc, reviewMode) {
     </div>` : `
     <div class="card">
       <div class="section-title">戦略選択</div>
-      <div style="display:flex;gap:10px;margin-bottom:14px">
-        <button class="btn btn-bull" id="btnBull" onclick="selectStrat('bull')" style="flex:1;padding:12px">
-          📈 ブルコール<br><span style="font-size:11px;opacity:0.7">強気 — 上昇を期待</span>
+      ${sc.ivPct >= 70
+        ? `<div style="background:#1a0f2e;border:1px solid #6d28d9;border-radius:8px;padding:9px 12px;margin-bottom:10px;font-size:12px;color:#c084fc;font-weight:600">
+            💜 IVパーセンタイル ${sc.ivPct}% ≥ 70% — クレジットスプレッド推奨（プレミアムが割高・売り有利）
+           </div>`
+        : sc.ivPct < 30
+        ? `<div style="background:#0d1f10;border:1px solid #166534;border-radius:8px;padding:9px 12px;margin-bottom:10px;font-size:12px;color:#4ade80;font-weight:600">
+            💚 IVパーセンタイル ${sc.ivPct}% &lt; 30% — デビットスプレッド推奨（プレミアムが割安・買い有利）
+           </div>`
+        : `<div style="background:#1a1400;border:1px solid #713f12;border-radius:8px;padding:9px 12px;margin-bottom:10px;font-size:12px;color:#fbbf24;font-weight:600">
+            🟡 IVパーセンタイル ${sc.ivPct}%（30〜70%）— デビット・クレジットどちらでも可（R/R・EV次第）
+           </div>`}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+        <button class="btn btn-bull" id="btnBull" onclick="selectStrat('bull')" style="padding:10px">
+          📈 ブルコール<br><span style="font-size:10px;opacity:0.7">強気・デビット${sc.ivPct < 30 ? ' ✦推奨' : ''}</span>
         </button>
-        <button class="btn btn-bear" id="btnBear" onclick="selectStrat('bear')" style="flex:1;padding:12px">
-          📉 ベアプット<br><span style="font-size:11px;opacity:0.7">弱気 — 下落を期待</span>
+        <button class="btn btn-bear" id="btnBear" onclick="selectStrat('bear')" style="padding:10px">
+          📉 ベアプット<br><span style="font-size:10px;opacity:0.7">弱気・デビット${sc.ivPct < 30 ? ' ✦推奨' : ''}</span>
         </button>
-        <button class="btn btn-skip" id="btnSkip" onclick="selectStrat('skip')" style="flex:1;padding:12px">
-          🚫 見送り<br><span style="font-size:11px;opacity:0.7">様子見 — 建てない</span>
+        <button class="btn btn-bull-credit" id="btnBullCredit" onclick="selectStrat('bull-credit')" style="padding:10px">
+          💜 ブルプット<br><span style="font-size:10px;opacity:0.7">強気・クレジット${sc.ivPct >= 70 ? ' ✦高IV推奨' : ''}</span>
+        </button>
+        <button class="btn btn-bear-credit" id="btnBearCredit" onclick="selectStrat('bear-credit')" style="padding:10px">
+          🟣 ベアコール<br><span style="font-size:10px;opacity:0.7">弱気・クレジット${sc.ivPct >= 70 ? ' ✦高IV推奨' : ''}</span>
+        </button>
+      </div>
+      <div style="display:flex;justify-content:center;margin-bottom:10px">
+        <button class="btn btn-skip" id="btnSkip" onclick="selectStrat('skip')" style="padding:10px 24px">
+          🚫 見送り<br><span style="font-size:10px;opacity:0.7">様子見 — 建てない</span>
         </button>
       </div>
       <div id="spreadSection" style="display:none">
@@ -977,11 +1095,21 @@ function renderQuestion(sc, reviewMode) {
   requestAnimationFrame(() => renderChart(sc));
 }
 
+function stratLabel(strat) {
+  if(strat==='bull')        return '📈 ブルコール';
+  if(strat==='bear')        return '📉 ベアプット';
+  if(strat==='bull-credit') return '💜 ブルプット';
+  if(strat==='bear-credit') return '🟣 ベアコール';
+  return '🚫 見送り';
+}
+
 function selectStrat(strat) {
   state.selectedStrat = strat;
   state.selectedSpread = null;
   document.getElementById('btnBull').classList.toggle('selected', strat==='bull');
   document.getElementById('btnBear').classList.toggle('selected', strat==='bear');
+  document.getElementById('btnBullCredit').classList.toggle('selected', strat==='bull-credit');
+  document.getElementById('btnBearCredit').classList.toggle('selected', strat==='bear-credit');
   document.getElementById('btnSkip').classList.toggle('selected', strat==='skip');
 
   // オプションチェーンのハイライトをリセット
@@ -1003,6 +1131,12 @@ function selectStrat(strat) {
 
   const sc = state.questions[state.current];
   const cl = state.checklist;
+
+  // STEP⑤メッセージをクレジット/デビットで動的切替
+  if(cl) {
+    const isCredit = strat === 'bull-credit' || strat === 'bear-credit';
+    cl.step5 = { status:'info', msg: isCredit ? cl.step5CreditMsg : cl.step5DebitMsg };
+  }
 
   // 絶対見送り条件の警告
   const box = document.getElementById('hintBox');
@@ -1028,23 +1162,50 @@ function selectStrat(strat) {
 
 function renderSpreadTable(sc, strat) {
   const cl = state.checklist;
-  const spreads = generateSpreads(sc.spy, sc.vix, strat, sc.expiryDays, state.spreadWidth, state.spreadAtmOnly, sc.rate);
+  const isCredit = strat === 'bull-credit' || strat === 'bear-credit';
+  const spreads = isCredit
+    ? generateCreditSpreads(sc.spy, sc.vix, strat, sc.expiryDays, state.spreadWidth, sc.rate)
+    : generateSpreads(sc.spy, sc.vix, strat, sc.expiryDays, state.spreadWidth, state.spreadAtmOnly, sc.rate);
+
+  // クレジット用にテーブルヘッダーを切り替え
+  const thead = document.querySelector('#spreadTable thead tr');
+  if(thead) {
+    if(isCredit) {
+      thead.innerHTML = '<th>ストライク（売り/買い）</th><th>受取</th><th>最大損失</th><th>受取率</th><th>売りΔ</th><th>EV</th><th>BEP</th><th>決済目安</th>';
+    } else {
+      thead.innerHTML = '<th>ストライク</th><th>コスト</th><th>最大利益</th><th>R/R</th><th>コスト率</th><th>EV</th><th>BEP</th><th>決済目安</th>';
+    }
+  }
 
   const tbody = document.getElementById('spreadBody');
   tbody.innerHTML = spreads.map((s,i) => {
-    const highStd = s.rr >= 1.8 && s.ev >= 0.30;
-    const rowStyle = highStd ? 'border-left:3px solid #f59e0b' : '';
-    const starMark = highStd ? '<span style="color:#f59e0b;margin-left:4px">⭐</span>' : '';
-    return `<tr onclick="selectSpread(${i})" id="row-${i}" style="${rowStyle}">
-      <td style="font-weight:600">$${s.bs}/$${s.ss}${starMark}</td>
-      <td style="color:#ef4444">-$${(s.net*100).toFixed(0)}</td>
-      <td style="color:#10b981">+$${(s.mp*100).toFixed(0)}</td>
-      <td class="${s.rr>=2?'rr-good':s.rr>=(cl&&cl.rrMin||1.5)?'rr-ok':'rr-low'}">${s.rr}</td>
-      <td style="color:${s.costRatio<=0.5?'#10b981':'#ef4444'}">${(s.costRatio*100).toFixed(0)}%</td>
-      <td style="color:${s.ev>=0.20?'#10b981':s.ev>0?'#f59e0b':'#ef4444'}">${s.ev>0?'+':''}$${(s.ev*100).toFixed(0)}</td>
-      <td style="color:#94a3b8">$${s.bep} <small style="color:#475569">(${s.bep_dist>0?'+':''}${s.bep_dist}%)</small></td>
-      <td style="color:#a78bfa">${Math.floor(sc.expiryDays/3)}日後</td>
-    </tr>`;
+    if(isCredit) {
+      const evColor = s.ev >= 0.20 ? '#10b981' : s.ev > 0 ? '#f59e0b' : '#ef4444';
+      return `<tr onclick="selectSpread(${i})" id="row-${i}">
+        <td style="font-weight:600">$${s.bs}/$${s.ss}</td>
+        <td style="color:#10b981">+$${(s.net*100).toFixed(0)}</td>
+        <td style="color:#ef4444">-$${(s.maxLoss*100).toFixed(0)}</td>
+        <td class="${s.rr>=0.5?'rr-good':s.rr>=0.3?'rr-ok':'rr-low'}">${s.rr}</td>
+        <td style="color:${s.delta<=0.30?'#10b981':'#ef4444'}">${s.delta.toFixed(3)}</td>
+        <td style="color:${evColor}">${s.ev>0?'+':''}$${(s.ev*100).toFixed(0)}</td>
+        <td style="color:#94a3b8">$${s.bep} <small style="color:#475569">(${s.bep_dist>0?'+':''}${s.bep_dist}%)</small></td>
+        <td style="color:#a78bfa">${Math.floor(sc.expiryDays/3)}日後</td>
+      </tr>`;
+    } else {
+      const highStd = s.rr >= 1.8 && s.ev >= 0.30;
+      const rowStyle = highStd ? 'border-left:3px solid #f59e0b' : '';
+      const starMark = highStd ? '<span style="color:#f59e0b;margin-left:4px">⭐</span>' : '';
+      return `<tr onclick="selectSpread(${i})" id="row-${i}" style="${rowStyle}">
+        <td style="font-weight:600">$${s.bs}/$${s.ss}${starMark}</td>
+        <td style="color:#ef4444">-$${(s.net*100).toFixed(0)}</td>
+        <td style="color:#10b981">+$${(s.mp*100).toFixed(0)}</td>
+        <td class="${s.rr>=2?'rr-good':s.rr>=(cl&&cl.rrMin||1.5)?'rr-ok':'rr-low'}">${s.rr}</td>
+        <td style="color:${s.costRatio<=0.5?'#10b981':'#ef4444'}">${(s.costRatio*100).toFixed(0)}%</td>
+        <td style="color:${s.ev>=0.20?'#10b981':s.ev>0?'#f59e0b':'#ef4444'}">${s.ev>0?'+':''}$${(s.ev*100).toFixed(0)}</td>
+        <td style="color:#94a3b8">$${s.bep} <small style="color:#475569">(${s.bep_dist>0?'+':''}${s.bep_dist}%)</small></td>
+        <td style="color:#a78bfa">${Math.floor(sc.expiryDays/3)}日後</td>
+      </tr>`;
+    }
   }).join('');
 
   state.currentSpreads = spreads;
@@ -1102,16 +1263,24 @@ function selectSpread(idx) {
 function showHint() {
   const sc = state.questions[state.current];
   const cl = state.checklist;
+  const strat = state.selectedStrat;
+  const isCredit = strat === 'bull-credit' || strat === 'bear-credit';
   const lines = [];
 
   if(cl.absoluteSkip) lines.push('🚫 絶対見送り条件あり — 見送りが正解です');
 
   lines.push(`① ${cl.step1.msg}`);
-  if(cl.step2.status !== 'ok') lines.push(`② ${cl.step2.msg}`);
-  else lines.push(`② イベントなし — OK`);
+  lines.push(`② ${cl.step2.status !== 'ok' ? cl.step2.msg : 'イベントなし — OK'}`);
   lines.push(`③ ${cl.step3.msg}`);
+  if(cl.ivpRec) lines.push(`　 IVパーセンタイル: ${cl.ivpRec.label} — ${cl.ivpRec.msg}`);
   lines.push(`④ ${cl.step4.msg}`);
-  lines.push(`⑤ R/R ≥ ${cl.rrMin} | EV ≥ $20 のスプレッドをATM最近接で選択`);
+  if(isCredit) {
+    lines.push(`⑤ 売りデルタ ≤ 0.30（OTM） | EV ≥ $20 を確認`);
+    lines.push(`⑥ EV = (1−売りΔ)×受取 − 売りΔ×最大損失`);
+  } else {
+    lines.push(`⑤ R/R ≥ 1.5（全状況統一） | ATM最近接で選択`);
+    lines.push(`⑥ EV ≥ $20 を確認（Δ×最大利益 − (1−Δ)×コスト）`);
+  }
 
   const box = document.getElementById('hintBox');
   box.style.display = 'block';
@@ -1168,7 +1337,7 @@ function renderLimitOrderScreen(sc, strat, spread, reason) {
         </div>
         <div>
           <div style="font-size:10px;color:#475569;margin-bottom:3px">戦略</div>
-          <div style="color:#94a3b8;font-weight:600;font-size:13px">${strat==='bull'?'📈 ブルコール':'📉 ベアプット'} $${spread.bs}/$${spread.ss}</div>
+          <div style="color:#94a3b8;font-weight:600;font-size:13px">${stratLabel(strat)} $${spread.bs}/$${spread.ss}</div>
         </div>
       </div>
 
@@ -1292,18 +1461,36 @@ function simulateHoldingPath(sc, strat, spread, limitOrder) {
     if (d === expiryDays) {
       if (strat === 'bull') {
         unrealizedPnl = Math.round((Math.max(0, curSpy - spread.bs) - Math.max(0, curSpy - spread.ss) - spread.net) * 100);
-      } else {
+      } else if (strat === 'bear') {
         unrealizedPnl = Math.round((Math.max(0, spread.bs - curSpy) - Math.max(0, spread.ss - curSpy) - spread.net) * 100);
+      } else if (strat === 'bull-credit') {
+        const sv = Math.max(0, spread.bs - curSpy);
+        const bv = Math.max(0, spread.ss - curSpy);
+        unrealizedPnl = Math.round((spread.net - (sv - bv)) * 100);
+      } else { // bear-credit
+        const sv = Math.max(0, curSpy - spread.bs);
+        const bv = Math.max(0, curSpy - spread.ss);
+        unrealizedPnl = Math.round((spread.net - (sv - bv)) * 100);
       }
     } else {
       if (strat === 'bull') {
         const lv = bsGreeks(curSpy, spread.bs, remainingT, rate, sigmaL, 'call').price;
         const sv = bsGreeks(curSpy, spread.ss, remainingT, rate, sigmaS, 'call').price;
         unrealizedPnl = Math.round((lv - sv - spread.net) * 100);
-      } else {
+      } else if (strat === 'bear') {
         const lv = bsGreeks(curSpy, spread.bs, remainingT, rate, sigmaL, 'put').price;
         const sv = bsGreeks(curSpy, spread.ss, remainingT, rate, sigmaS, 'put').price;
         unrealizedPnl = Math.round((lv - sv - spread.net) * 100);
+      } else if (strat === 'bull-credit') {
+        // short put@bs, long put@ss
+        const sellV = bsGreeks(curSpy, spread.bs, remainingT, rate, sigmaL, 'put').price;
+        const buyV  = bsGreeks(curSpy, spread.ss, remainingT, rate, sigmaS, 'put').price;
+        unrealizedPnl = Math.round((spread.net - (sellV - buyV)) * 100);
+      } else { // bear-credit
+        // short call@bs, long call@ss
+        const sellV = bsGreeks(curSpy, spread.bs, remainingT, rate, sigmaL, 'call').price;
+        const buyV  = bsGreeks(curSpy, spread.ss, remainingT, rate, sigmaS, 'call').price;
+        unrealizedPnl = Math.round((spread.net - (sellV - buyV)) * 100);
       }
     }
 
@@ -1421,8 +1608,8 @@ function renderAutoExitResult(sc, strat, spread, sim) {
       </div>
       ${sc.shock ? `<div style="background:#2a1f00;border:1px solid #5a3a00;border-radius:8px;padding:10px;font-size:12px;color:#f59e0b;margin-bottom:12px">💡 ${sc.shock}</div>` : ''}
       <div style="font-size:12px;color:#64748b;line-height:1.8">
-        <div>戦略: <span style="color:#fff">${strat==='bull'?'📈 ブルコール':'📉 ベアプット'} $${spread.bs}/$${spread.ss}</span></div>
-        <div>エントリーコスト: <span style="color:#ef4444">-$${(spread.net*100).toFixed(0)}</span>　最大利益: <span style="color:#10b981">+$${(spread.mp*100).toFixed(0)}</span>　R/R: ${spread.rr}</div>
+        <div>戦略: <span style="color:#fff">${stratLabel(strat)} $${spread.bs}/$${spread.ss}</span></div>
+        <div>${spread.creditType ? `受取: <span style="color:#10b981">+$${(spread.net*100).toFixed(0)}</span>　最大損失: <span style="color:#ef4444">-$${(spread.maxLoss*100).toFixed(0)}</span>　受取率: ${spread.rr}` : `エントリーコスト: <span style="color:#ef4444">-$${(spread.net*100).toFixed(0)}</span>　最大利益: <span style="color:#10b981">+$${(spread.mp*100).toFixed(0)}</span>　R/R: ${spread.rr}`}</div>
         <div>指値: <span style="color:#10b981">+$${state.limitOrder.targetProfit}</span>　逆指値: <span style="color:#ef4444">-$${state.limitOrder.stopLoss}</span></div>
       </div>
     </div>
@@ -1740,7 +1927,10 @@ function renderResult(sc, pnl, pnlDollar, isWin) {
   if(currentChart) { try { currentChart.remove(); } catch(e) {} currentChart = null; }
   const spread = state.selectedSpread;
   const strat = state.selectedStrat;
-  const correctDir = (strat==='bear' && sc.endSpy < sc.spy) || (strat==='bull' && sc.endSpy > sc.spy);
+  const correctDir = (strat==='bear' && sc.endSpy < sc.spy)
+    || (strat==='bull' && sc.endSpy > sc.spy)
+    || (strat==='bull-credit' && sc.endSpy > sc.spy)
+    || (strat==='bear-credit' && sc.endSpy < sc.spy);
 
   // 価格推移の簡易表示
   const priceChangePct = (sc.endSpy - sc.spy)/sc.spy*100;
@@ -1811,9 +2001,11 @@ function renderResult(sc, pnl, pnlDollar, isWin) {
       </div>
       ${sc.shock ? `<div style="background:#2a1f00;border:1px solid #5a3a00;border-radius:8px;padding:10px;font-size:12px;color:#f59e0b;margin-bottom:12px">💡 ${sc.shock}</div>` : ''}
       <div style="font-size:12px;color:#64748b;line-height:1.8">
-        <div>戦略: <span style="color:#fff">${strat==='bull'?'📈 ブルコール':'📉 ベアプット'} $${spread.bs}/$${spread.ss}</span></div>
-        <div>エントリーコスト: <span style="color:#ef4444">-$${(spread.net*100).toFixed(0)}</span>　最大利益: <span style="color:#10b981">+$${(spread.mp*100).toFixed(0)}</span>　R/R: ${spread.rr}</div>
-        <div>コスト率: <span style="color:${spread.costRatio<=0.5?'#10b981':'#ef4444'}">${(spread.costRatio*100).toFixed(0)}%</span>　EV: <span style="color:${spread.ev>0?'#10b981':'#ef4444'}">${spread.ev>0?'+':''}$${(spread.ev*100).toFixed(0)}</span></div>
+        <div>戦略: <span style="color:#fff">${stratLabel(strat)} $${spread.bs}/$${spread.ss}</span></div>
+        ${spread.creditType
+          ? `<div>受取: <span style="color:#10b981">+$${(spread.net*100).toFixed(0)}</span>　最大損失: <span style="color:#ef4444">-$${(spread.maxLoss*100).toFixed(0)}</span>　受取率: ${spread.rr}</div>`
+          : `<div>エントリーコスト: <span style="color:#ef4444">-$${(spread.net*100).toFixed(0)}</span>　最大利益: <span style="color:#10b981">+$${(spread.mp*100).toFixed(0)}</span>　R/R: ${spread.rr}</div>`}
+        <div>EV: <span style="color:${spread.ev>0?'#10b981':'#ef4444'}">${spread.ev>0?'+':''}$${(spread.ev*100).toFixed(0)}</span></div>
         <div>BEP: $${spread.bep} (${spread.bep_dist>0?'+':''}${spread.bep_dist}%)</div>
         <div>方向判断: <span style="color:${correctDir?'#10b981':'#ef4444'}">${correctDir?'✓ 正解':'✗ 不正解'}</span>${!correctDir&&isWin?' (方向は違ったがBEP内で利益)':''}</div>
       </div>
@@ -1937,7 +2129,7 @@ function generateAnalysisText() {
 
     lines.push(`\n## 問題 #${i+1}｜${sc.date}`);
     lines.push(`**状況**: ${sc.desc}`);
-    lines.push(`**市場**: SPY $${sc.spy} | SMA20 $${sc.sma20}（${trend} 乖離${smaDev}%）| VIX ${sc.vix} | 推定IV ${(sc.vix*1.1).toFixed(1)}% | DTE ${sc.expiryDays}日`);
+    lines.push(`**市場**: SPY $${sc.spy} | SMA20 $${sc.sma20}（${trend} 乖離${smaDev}%）| VIX ${sc.vix} | 推定IV ${(sc.vix*1.1).toFixed(1)}% | IVp ${sc.ivPct}% | DTE ${sc.expiryDays}日`);
     lines.push(`**イベント**: ${eventsInPeriod.length > 0 ? eventsInPeriod.map(e=>e.date+' '+e.event).join('、') : 'なし'}`);
 
     function stIcon(s) { return s==='ok'?'✓':s==='warn'?'⚠':s==='ng'?'✗':'→'; }
@@ -1953,9 +2145,13 @@ function generateAnalysisText() {
       lines.push(`**私の選択**: 🚫 見送り`);
     } else {
       const sp = h.spread;
-      const stratLabel = h.strat === 'bull' ? '📈 ブルコール' : '📉 ベアプット';
-      lines.push(`**私の選択**: ${stratLabel} $${sp.bs}/$${sp.ss}`);
-      lines.push(`  コスト $${(sp.net*100).toFixed(0)} | 最大利益 $${(sp.mp*100).toFixed(0)} | R/R ${sp.rr} | コスト率 ${(sp.costRatio*100).toFixed(0)}% | EV ${sp.ev>0?'+':''}$${(sp.ev*100).toFixed(0)}`);
+      const isCredit = h.strat === 'bull-credit' || h.strat === 'bear-credit';
+      lines.push(`**私の選択**: ${stratLabel(h.strat)} $${sp.bs}/$${sp.ss}${isCredit ? '（クレジット）' : ''}`);
+      if(isCredit) {
+        lines.push(`  受取 $${(sp.net*100).toFixed(0)} | 最大損失 $${((sp.maxLoss||0)*100).toFixed(0)} | 売りΔ ${sp.delta.toFixed(3)} | EV ${sp.ev>0?'+':''}$${(sp.ev*100).toFixed(0)}`);
+      } else {
+        lines.push(`  コスト $${(sp.net*100).toFixed(0)} | 最大利益 $${(sp.mp*100).toFixed(0)} | R/R ${sp.rr} | EV ${sp.ev>0?'+':''}$${(sp.ev*100).toFixed(0)}`);
+      }
     }
 
     if(h.reason) lines.push(`**判断理由**: ${h.reason}`);

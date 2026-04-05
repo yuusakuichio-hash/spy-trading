@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SPY 5ステップ エントリー判定フロー v2.0</title>
+<title>SPY オプション エントリー判定フロー v3.0</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f5f5f5;padding:20px;min-height:100vh}
@@ -22,7 +22,6 @@ h1{font-size:15px;font-weight:600;color:#111;margin-bottom:16px;padding-bottom:1
 .chip-gray{background:#f0f0f0;color:#666}
 .chip-purple{background:#EEEDFE;color:#3C3489}
 .arrow-down{text-align:center;height:18px;display:flex;align-items:center;justify-content:center;padding-left:32px}
-.section-head{font-size:11px;font-weight:500;color:#aaa;letter-spacing:1px;text-transform:uppercase;padding:14px 0 6px 46px}
 .matrix{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px}
 .matrix-cell{border-radius:6px;padding:7px 10px;border:0.5px solid #eee;font-size:11px;background:#fafafa}
 .matrix-cell .mc-top{font-weight:500;font-size:11px;margin-bottom:2px;color:#888}
@@ -43,11 +42,20 @@ h1{font-size:15px;font-weight:600;color:#111;margin-bottom:16px;padding-bottom:1
 .result-title.r{color:#a32d2d}
 .result-sub{font-size:11px;color:#666;line-height:1.5}
 .footer{margin-top:16px;padding-top:12px;border-top:1px solid #eee;font-size:11px;color:#aaa;text-align:right}
+/* 分岐ボックス */
+.branch-wrap{margin-left:32px;margin-top:4px;margin-bottom:4px;display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.branch-box{border-radius:8px;padding:10px 12px;border:0.5px solid #eee;font-size:11px}
+.branch-box-debit{background:#f0faf2;border-color:#a8d5b5}
+.branch-box-credit{background:#f3f0fe;border-color:#c4b8f8}
+.branch-title{font-size:11px;font-weight:700;margin-bottom:5px}
+.branch-title-debit{color:#1e7e34}
+.branch-title-credit{color:#3C3489}
+.branch-row{padding:2px 0;color:#444;line-height:1.5}
 </style>
 </head>
 <body>
 <div class="wrap">
-<h1>SPY オプション — エントリー判定フロー v2.0</h1>
+<h1>SPY オプション — エントリー判定フロー v3.0</h1>
 <div class="flow-wrap">
 
 <!-- STEP① VIX + 方向判定 -->
@@ -84,13 +92,13 @@ h1{font-size:15px;font-weight:600;color:#111;margin-bottom:16px;padding-bottom:1
   <div class="step-body">
     <div class="step-label">重要イベントのタイミング確認</div>
     <div class="ev-grid" style="grid-template-columns:repeat(3,1fr)">
-      <div class="ev-cell chip-red" style="background:#fce8e6;color:#a32d2d"><div class="ec-t">前日 / 当日</div>即見送り</div>
-      <div class="ev-cell chip-red" style="background:#fce8e6;color:#a32d2d"><div class="ec-t">満期3日以内</div>即見送り</div>
-      <div class="ev-cell chip-red" style="background:#fce8e6;color:#a32d2d"><div class="ec-t">保有期間中<br>+ VIX&gt;25</div>見送り</div>
+      <div class="ev-cell" style="background:#fce8e6;color:#a32d2d"><div class="ec-t">前日 / 当日</div>即見送り</div>
+      <div class="ev-cell" style="background:#fce8e6;color:#a32d2d"><div class="ec-t">満期3日以内</div>即見送り</div>
+      <div class="ev-cell" style="background:#fce8e6;color:#a32d2d"><div class="ec-t">保有期間中<br>+ VIX&gt;25</div>見送り</div>
     </div>
     <div class="ev-grid" style="grid-template-columns:1fr 1fr;margin-top:6px">
-      <div class="ev-cell chip-amber" style="background:#fff3cd;color:#856404"><div class="ec-t">保有期間中<br>+ VIX≤25</div>高基準で検討</div>
-      <div class="ev-cell chip-green" style="background:#e6f4ea;color:#1e7e34"><div class="ec-t">PCEのみ / イベントなし</div>OK</div>
+      <div class="ev-cell" style="background:#fff3cd;color:#856404"><div class="ec-t">保有期間中<br>+ VIX≤25</div>高基準で検討</div>
+      <div class="ev-cell" style="background:#e6f4ea;color:#1e7e34"><div class="ec-t">PCEのみ / イベントなし</div>OK</div>
     </div>
     <div class="warn-box" style="margin-top:6px">「高基準で検討」= R/R ≥ 1.8 かつ EV ≥ $30 必須</div>
   </div>
@@ -98,20 +106,31 @@ h1{font-size:15px;font-weight:600;color:#111;margin-bottom:16px;padding-bottom:1
 
 <div class="arrow-down"><svg width="12" height="14" viewBox="0 0 12 14"><path d="M6 0v11M1 8l5 6 5-6" fill="none" stroke="#ccc" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
 
-<!-- STEP③ 推定IV -->
+<!-- STEP③ 推定IV + 戦略選択 -->
 <div class="step-row">
   <div class="step-num">③</div>
   <div class="step-body">
-    <div class="step-label">推定IV（VIX×1.1 / 実取引はmoomooのIV値）</div>
-    <div class="row2">
+    <div class="step-label">推定IV + 戦略選択</div>
+    <div style="font-size:10px;font-weight:600;color:#aaa;letter-spacing:0.5px;margin-bottom:4px">エントリー可否（推定IV = VIX×1.1）</div>
+    <div class="row2" style="margin-bottom:8px">
       <span class="chip chip-green">IV ≤ 45% → OK</span>
       <span class="chip chip-amber">45–70% → 警告</span>
       <span class="chip chip-red">IV &gt; 70% → 即見送り</span>
     </div>
+    <div style="font-size:10px;font-weight:600;color:#aaa;letter-spacing:0.5px;margin-bottom:4px">戦略選択（IVパーセンタイル）</div>
+    <div class="row2" style="margin-bottom:6px">
+      <span class="chip chip-green">IVp ≤ 30% → デビット優先</span>
+      <span class="chip chip-amber">IVp 30〜70% → どちらでも可</span>
+      <span class="chip chip-purple">IVp ≥ 70% → クレジット優先</span>
+    </div>
+    <div class="warn-box">
+      <div>IVパーセンタイルはmoomooで確認</div>
+      <div>推定IV（VIX×1.1）はエントリー可否のみに使用</div>
+    </div>
   </div>
 </div>
 
-<div style="height:4px"></div>
+<div class="arrow-down"><svg width="12" height="14" viewBox="0 0 12 14"><path d="M6 0v11M1 8l5 6 5-6" fill="none" stroke="#ccc" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
 
 <!-- STEP④ DTE -->
 <div class="step-row">
@@ -119,7 +138,7 @@ h1{font-size:15px;font-weight:600;color:#111;margin-bottom:16px;padding-bottom:1
   <div class="step-body">
     <div class="step-label">DTE（残存日数）</div>
     <div class="row2">
-      <span class="chip chip-red">14日未満 → NG</span>
+      <span class="chip chip-red">14日未満 → 見送り</span>
       <span class="chip chip-amber">14–21日 → 注意</span>
       <span class="chip chip-green">21–35日 → 最適</span>
       <span class="chip chip-amber">35日超 → 注意</span>
@@ -129,23 +148,46 @@ h1{font-size:15px;font-weight:600;color:#111;margin-bottom:16px;padding-bottom:1
 
 <div style="height:4px"></div>
 
-<!-- STEP⑤ スプレッド選択 -->
+<!-- STEP⑤ スプレッド選択（デビット / クレジット分岐） -->
 <div class="step-row">
   <div class="step-num">⑤</div>
   <div class="step-body">
     <div class="step-label">スプレッド選択</div>
-    <div class="warn-box" style="background:#fafafa;border-color:#eee;color:#333">
-      <div style="font-weight:600;margin-bottom:4px">優先順位</div>
-      <div>① R/R最低条件クリア</div>
-      <div style="padding-left:12px;color:#555">VIX ≤ 20：R/R ≥ 1.3　／　VIX &gt; 20：R/R ≥ 1.5</div>
-      <div style="padding-left:12px;color:#555">イベント高基準：R/R ≥ 1.8</div>
-      <div style="margin-top:4px">② その中でATMに最も近いものを選ぶ</div>
-      <div style="margin-top:4px">③ EV ≥ $20（またはコストの5%以上）を確認</div>
+    <div class="branch-wrap">
+      <div class="branch-box branch-box-debit">
+        <div class="branch-title branch-title-debit">デビットスプレッド</div>
+        <div class="branch-row">・R/R ≥ 1.5（全状況共通）</div>
+        <div class="branch-row">・ATMに最も近いものを選ぶ</div>
+      </div>
+      <div class="branch-box branch-box-credit">
+        <div class="branch-title branch-title-credit">クレジットスプレッド</div>
+        <div class="branch-row">・売りデルタ ≤ 0.30</div>
+        <div class="branch-row">・ATMから離れたOTMを売る</div>
+      </div>
     </div>
-    <div class="row2" style="margin-top:6px">
-      <span class="chip chip-green">R/R ≥ 1.3（VIX≤20）</span>
-      <span class="chip chip-green">R/R ≥ 1.5（VIX&gt;20）</span>
-      <span class="chip chip-amber">EV ≥ $20 確認</span>
+  </div>
+</div>
+
+<div style="height:4px"></div>
+
+<!-- STEP⑥ EV確認 -->
+<div class="step-row">
+  <div class="step-num">⑥</div>
+  <div class="step-body">
+    <div class="step-label">EV確認（期待値）</div>
+    <div class="row2" style="margin-bottom:6px">
+      <span class="chip chip-green">EV ≥ $20 → OK</span>
+      <span class="chip chip-red">EV &lt; $20 → 見送り</span>
+    </div>
+    <div class="branch-wrap">
+      <div class="branch-box branch-box-debit">
+        <div class="branch-title branch-title-debit">デビット計算式</div>
+        <div class="branch-row" style="color:#555">Δ×最大利益 − (1−Δ)×コスト</div>
+      </div>
+      <div class="branch-box branch-box-credit">
+        <div class="branch-title branch-title-credit">クレジット計算式</div>
+        <div class="branch-row" style="color:#555">(1−売りΔ)×受取 − 売りΔ×最大損失</div>
+      </div>
     </div>
   </div>
 </div>
@@ -168,7 +210,7 @@ h1{font-size:15px;font-weight:600;color:#111;margin-bottom:16px;padding-bottom:1
 </div>
 
 </div>
-<div class="footer">v2.0 — セータ・コスト率を削除・矛盾シグナル例外なし</div>
+<div class="footer">v3.0 — デビット・クレジット統合版</div>
 </div>
 </body>
 </html>

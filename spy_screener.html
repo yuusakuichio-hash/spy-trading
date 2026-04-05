@@ -140,6 +140,30 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;backgrou
     <button class="btn btn-secondary" style="margin-top:10px" onclick="runClaude()">再評価</button>
   </div>
 
+  <!-- Manual Input Form (shown when all proxies fail) -->
+  <div id="manualForm" style="display:none" class="card">
+    <div class="section-title" style="margin-bottom:12px">📝 手動入力モード（API取得失敗時）</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+      <div class="input-group">
+        <label>SPY 現在値（$）*</label>
+        <input type="number" id="manSpy" placeholder="560.00" step="0.01">
+      </div>
+      <div class="input-group">
+        <label>VIX *</label>
+        <input type="number" id="manVix" placeholder="18.5" step="0.1">
+      </div>
+      <div class="input-group">
+        <label>SMA20（省略可 → SPY値を使用）</label>
+        <input type="number" id="manSma" placeholder="555.00" step="0.01">
+      </div>
+      <div class="input-group">
+        <label>IVパーセンタイル % （省略可 → 50%）</label>
+        <input type="number" id="manIvp" placeholder="50" min="0" max="100">
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="runManual()">▶ 手動実行</button>
+  </div>
+
   <!-- Settings -->
   <div class="card">
     <button class="settings-toggle" onclick="toggleSettings()">
@@ -176,6 +200,7 @@ const YF_URLS = [
   'https://query2.finance.yahoo.com/v8/finance/chart/'
 ];
 const MIN_DTE = 7, MAX_DTE = 45, TOP_N = 5, SPREAD_WIDTH = 5;
+const CREDIT_SELL_DELTA_MAX = 0.40; // デルタ上限（0.30→0.40に緩和）
 const RATE = 0.053;
 
 // ========== CORSプロキシ フォールバック ==========
@@ -458,21 +483,28 @@ function generateDebitSpreads(spy,vix,dir,dte){
 // ========== クレジットスプレッド生成 ==========
 function generateCreditSpreads(spy,vix,dir,dte){
   const atm=Math.round(spy); const spreads=[];
+  let cntTotal=0, cntDelta=0, cntCredit=0, cntMaxLoss=0, cntEV=0;
   if(dir==='bull-credit'){
-    for(let offset=-1;offset>=-12;offset--){
+    for(let offset=-1;offset>=-15;offset--){
+      cntTotal++;
       const sellK=atm+offset, buyK=sellK-SPREAD_WIDTH;
       const sellO=strikeData(spy,vix,sellK,'put',dte);
       const buyO =strikeData(spy,vix,buyK, 'put',dte);
-      if(sellO.delta>0.30) continue;
+      if(sellO.delta>CREDIT_SELL_DELTA_MAX) continue;
+      cntDelta++;
       const credit=+(sellO.bid-buyO.ask).toFixed(2);
       if(credit<=.02) continue;
+      cntCredit++;
       const maxLoss=+(SPREAD_WIDTH-credit).toFixed(2);
       if(maxLoss<=0) continue;
+      cntMaxLoss++;
       const rr=+(credit/maxLoss).toFixed(2);
       const bep=+(sellK-credit).toFixed(2);
       const bepDist=+((spy-bep)/spy*100).toFixed(2);
+      // EV = (1-売りΔ)×受取 - 売りΔ×最大損失  ※各項は1単位（×100で1契約）
       const ev=+((1-sellO.delta)*credit-sellO.delta*maxLoss).toFixed(2);
       if(ev*100<20) continue;
+      cntEV++;
       spreads.push({id:`BC${sellK}/${buyK}-${dte}`,
         type:'bull-credit', strat:'ブルプット（クレジット）',
         sellStrike:sellK, buyStrike:buyK, net:credit, mp:credit, maxLoss, rr, bep, bepDist,
@@ -480,20 +512,26 @@ function generateCreditSpreads(spy,vix,dir,dte){
         evDollar:+(ev*100).toFixed(0), creditType:true});
     }
   } else {
-    for(let offset=1;offset<=12;offset++){
+    for(let offset=1;offset<=15;offset++){
+      cntTotal++;
       const sellK=atm+offset, buyK=sellK+SPREAD_WIDTH;
       const sellO=strikeData(spy,vix,sellK,'call',dte);
       const buyO =strikeData(spy,vix,buyK, 'call',dte);
-      if(sellO.delta>0.30) continue;
+      if(sellO.delta>CREDIT_SELL_DELTA_MAX) continue;
+      cntDelta++;
       const credit=+(sellO.bid-buyO.ask).toFixed(2);
       if(credit<=.02) continue;
+      cntCredit++;
       const maxLoss=+(SPREAD_WIDTH-credit).toFixed(2);
       if(maxLoss<=0) continue;
+      cntMaxLoss++;
       const rr=+(credit/maxLoss).toFixed(2);
       const bep=+(sellK+credit).toFixed(2);
       const bepDist=+((bep-spy)/spy*100).toFixed(2);
+      // EV = (1-売りΔ)×受取 - 売りΔ×最大損失
       const ev=+((1-sellO.delta)*credit-sellO.delta*maxLoss).toFixed(2);
       if(ev*100<20) continue;
+      cntEV++;
       spreads.push({id:`BRc${sellK}/${buyK}-${dte}`,
         type:'bear-credit', strat:'ベアコール（クレジット）',
         sellStrike:sellK, buyStrike:buyK, net:credit, mp:credit, maxLoss, rr, bep, bepDist,
@@ -501,6 +539,7 @@ function generateCreditSpreads(spy,vix,dir,dte){
         evDollar:+(ev*100).toFixed(0), creditType:true});
     }
   }
+  console.log(`[クレジット ${dir} DTE${dte}] 総数:${cntTotal} → Δ≤${CREDIT_SELL_DELTA_MAX}:${cntDelta} → credit>0:${cntCredit} → maxLoss>0:${cntMaxLoss} → EV≥$20:${cntEV} → 採用:${spreads.length}`);
   return spreads.sort((a,b)=>b.ev-a.ev).slice(0,TOP_N);
 }
 
@@ -584,9 +623,9 @@ function checkEntry(spread, spy, sma20, vix, callDelta, putDelta, eventInfo, ivp
   total++;
   if(isCred){
     const sd=spread.sellDelta||0;
-    const ok5=sd<=0.30;
+    const ok5=sd<=CREDIT_SELL_DELTA_MAX;
     steps.push({n:'⑤',title:'売りデルタ確認',status:ok5?'ok':'ng',
-      detail:`売りΔ ${sd.toFixed(3)} ${ok5?'≤0.30 OTM ✓':'>0.30 ATM寄りすぎ NG'}`,badge:ok5?'OK':'NG'});
+      detail:`売りΔ ${sd.toFixed(3)} ${ok5?`≤${CREDIT_SELL_DELTA_MAX} OTM ✓`:`>${CREDIT_SELL_DELTA_MAX} NG`}`,badge:ok5?'OK':'NG'});
     if(ok5) passCount++;
   } else {
     const ok5=spread.rr>=1.5;
@@ -848,6 +887,51 @@ ${creditList}
   }
 }
 
+// ========== 手動入力モード ==========
+async function runManual() {
+  const spyPrice = parseFloat(document.getElementById('manSpy').value);
+  const vixToday = parseFloat(document.getElementById('manVix').value);
+  if(!spyPrice || !vixToday) { alert('SPY・VIX を入力してください'); return; }
+  const smaVal = parseFloat(document.getElementById('manSma').value) || spyPrice;
+  const ivpVal = parseInt(document.getElementById('manIvp').value) || 50;
+
+  const {callDelta, putDelta} = calcATMDelta(spyPrice, 21, vixToday);
+  const m = {
+    spyPrice, spyPrev: spyPrice, spyChange: 0,
+    sma20: smaVal,
+    vixToday, vixYest: vixToday, vixChange: 0,
+    ivPercentile: ivpVal,
+    vixMin: vixToday, vixMax: vixToday,
+    callDelta, putDelta
+  };
+  m._ivp = ivpVal;
+  state.market = m;
+
+  const eventInfo = getEventInfo();
+  state.eventInfo = eventInfo;
+
+  renderMarketGrid(m, ivpVal);
+  renderStratBanner(ivpVal);
+  renderEventBanner(eventInfo);
+
+  const exps = getExpirations();
+  if(exps.length === 0) {
+    document.getElementById('appContent').innerHTML = '<div class="error-box">有効な満期日が見つかりません（7〜45 DTE）</div>';
+    return;
+  }
+
+  spreadCounter = 0;
+  state.topPicks = [];
+  renderSpreads(exps, m, eventInfo, ivpVal);
+  document.getElementById('lastUpdate').textContent = `手動入力: ${new Date().toLocaleTimeString('ja-JP')}`;
+
+  const apiKey = localStorage.getItem('anthropic_key');
+  if(apiKey) {
+    document.getElementById('claudeSection').style.display = 'block';
+    await runClaude();
+  }
+}
+
 // ========== メインスクリーナー ==========
 async function runScreener() {
   const btn=document.getElementById('refreshBtn');
@@ -898,9 +982,11 @@ async function runScreener() {
     }
   } catch(e) {
     document.getElementById('appContent').innerHTML=`<div class="error-box">
-      <strong>データ取得エラー</strong><br>${e.message}<br><br>
-      <small>Yahoo Finance APIへのアクセスに失敗しました。CORSプロキシの状況を確認してください。</small>
+      <strong>データ取得エラー（全プロキシ失敗）</strong><br>${e.message}<br><br>
+      <small>全CORSプロキシが失敗しました。下の「手動入力モード」でSPY・VIX値を入力してスプレッド計算を実行できます。</small>
     </div>`;
+    document.getElementById('manualForm').style.display = 'block';
+    document.getElementById('marketGrid').style.display = 'none';
     console.error(e);
   } finally {
     btn.disabled=false; btn.textContent='▶ スクリーン実行';
