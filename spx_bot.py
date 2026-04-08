@@ -311,26 +311,30 @@ class TradeEngine:
             )
             log.info("Trade context connected")
 
-            # ── Unlock trade ──────────────────────────────────────────────
-            if TRADE_PASSWORD:
-                ret, data = self.trade_ctx.unlock_trade(password=TRADE_PASSWORD)
-                if ret != RET_OK:
-                    log.error(f"unlock_trade failed: {data}")
-                    pushover(
-                        "取引ロック解除失敗",
-                        f"unlock_trade failed: {str(data)[:150]}",
-                        priority=1,
-                    )
-                    self.trade_ctx.close()
-                    self.trade_ctx = None
-                    return False
-                log.info("unlock_trade: success")
-                pushover("取引ロック解除成功", "Bot起動・取引ロック解除完了", priority=0)
-            else:
-                log.warning("TRADE_PASSWORD not set; skipping unlock_trade")
-
-            # Resolve account ID dynamically
+            # Resolve account ID first (determines REAL vs SIMULATE)
             self._resolve_account()
+
+            # ── Unlock trade (REAL account only) ─────────────────────────
+            if self.trade_env == TrdEnv.REAL:
+                if TRADE_PASSWORD:
+                    ret, data = self.trade_ctx.unlock_trade(password=TRADE_PASSWORD)
+                    if ret != RET_OK:
+                        log.error(f"unlock_trade failed: {data}")
+                        pushover(
+                            "取引ロック解除失敗",
+                            f"unlock_trade failed: {str(data)[:150]}",
+                            priority=1,
+                        )
+                        self.trade_ctx.close()
+                        self.trade_ctx = None
+                        return False
+                    log.info("unlock_trade: success")
+                    pushover("取引ロック解除成功", "Bot起動・取引ロック解除完了", priority=0)
+                else:
+                    log.warning("TRADE_PASSWORD not set; skipping unlock_trade")
+            else:
+                log.info(f"SIMULATE mode ({self.account_id}); unlock_trade不要")
+
             return True
         except Exception as e:
             log.error(f"Trade connect failed: {e}")
