@@ -144,17 +144,17 @@ jobs:
           done
           echo "injected=false" >> $GITHUB_OUTPUT
 
-      # ── STEP 3: Fallback — Vultr reboot + startup script ───────────────────
+      # ── STEP 3: Fallback — Vultr startup script + SSH key API + reboot ───────
       - name: Inject key via startup script + reboot (fallback)
         if: steps.direct_ssh.outputs.direct != 'true' && steps.inject.outputs.injected != 'true'
         run: |
           python3 << 'PYEOF'
-          import urllib.request, urllib.parse, json, os, base64, time, sys
+          import urllib.request, urllib.error, urllib.parse, json, os, base64, time, sys, socket
 
-          api_key     = os.environ["VULTR_API_KEY"]
-          instance_id = os.environ["INSTANCE_ID"]
-          pubkey      = os.environ["VPS_SSH_PUBKEY"]
-          vps_ip      = os.environ["VPS_IP"]
+          api_key     = os.environ["VULTR_API_KEY"].strip()
+          instance_id = os.environ["INSTANCE_ID"].strip()
+          pubkey      = os.environ["VPS_SSH_PUBKEY"].strip()
+          vps_ip      = os.environ["VPS_IP"].strip()
 
           def api(method, path, body=None):
               url = f"https://api.vultr.com/v2{path}"
@@ -164,10 +164,42 @@ jobs:
                            "Content-Type": "application/json"})
               try:
                   with urllib.request.urlopen(req, timeout=15) as r:
-                      return json.loads(r.read()) if r.length else {}
+                      raw = r.read()
+                      return json.loads(raw) if raw else {}
+              except urllib.error.HTTPError as e:
+                  body_text = e.read().decode("utf-8", errors="replace")
+                  print(f"  HTTP {e.code} {e.reason}: {body_text}")
+                  return {"error": f"HTTP {e.code}", "body": body_text}
               except Exception as e:
+                  print(f"  Exception: {e}")
                   return {"error": str(e)}
 
+          if not instance_id:
+              print("No instance_id — cannot attach startup script")
+              sys.exit(0)
+
+          # ── Method A: Register SSH key via Vultr Keys API ──────────────────
+          print("=== Method A: Vultr SSH Keys API ===")
+          ssh_key_resp = api("POST", "/ssh-keys", {"name": "spxbot-deploy", "ssh_key": pubkey})
+          print(f"SSH key API response: {json.dumps(ssh_key_resp)}")
+          ssh_key_id = ssh_key_resp.get("ssh_key", {}).get("id", "")
+
+          if ssh_key_id:
+              print(f"SSH key registered: {ssh_key_id}")
+              # Attach to instance
+              patch_resp = api("PATCH", f"/instances/{instance_id}", {"sshkey_id": [ssh_key_id]})
+              print(f"PATCH instance response: {json.dumps(patch_resp)}")
+          else:
+              # Key may already exist — list and find it
+              list_resp = api("GET", "/ssh-keys")
+              for k in list_resp.get("ssh_keys", []):
+                  if k.get("ssh_key", "").strip() == pubkey or k.get("name") == "spxbot-deploy":
+                      ssh_key_id = k["id"]
+                      print(f"Found existing SSH key: {ssh_key_id}")
+                      break
+
+          # ── Method B: Startup script injection ────────────────────────────
+          print("=== Method B: Startup script ===")
           script = (
               "#!/bin/bash\n"
               "mkdir -p /root/.ssh\n"
@@ -177,28 +209,41 @@ jobs:
               "chmod 600 /root/.ssh/authorized_keys\n"
           )
           encoded = base64.b64encode(script.encode()).decode()
+
+          # Delete old script with same name first (avoid duplicate error)
+          list_scripts = api("GET", "/startup-scripts")
+          for s in list_scripts.get("startup_scripts", []):
+              if s.get("name") == "inject-spxbot-key":
+                  del_resp = api("DELETE", f"/startup-scripts/{s['id']}")
+                  print(f"Deleted old script {s['id']}")
+
           resp = api("POST", "/startup-scripts",
                      {"name": "inject-spxbot-key", "script": encoded, "type": "boot"})
+          print(f"Create script response: {json.dumps(resp)}")
           script_id = resp.get("startup_script", {}).get("id", "")
-          print(f"Startup script created: {script_id}")
+          print(f"Startup script ID: '{script_id}'")
 
           if script_id:
-              api("PATCH", f"/instances/{instance_id}", {"startup_script_id": script_id})
+              patch_resp = api("PATCH", f"/instances/{instance_id}",
+                               {"startup_script_id": script_id})
+              print(f"Attach script response: {json.dumps(patch_resp)}")
+          else:
+              print("Script creation failed — proceeding with reboot only (Method A may be sufficient)")
 
-          # Reboot
+          # ── Reboot VPS ─────────────────────────────────────────────────────
           print("Rebooting VPS...")
-          api("POST", f"/instances/{instance_id}/reboot")
+          reboot_resp = api("POST", f"/instances/{instance_id}/reboot")
+          print(f"Reboot response: {json.dumps(reboot_resp)}")
 
           # Wait for SSH
-          import socket
-          print("Waiting for SSH (up to 3 min)...")
-          for i in range(18):
+          print("Waiting for SSH (up to 4 min)...")
+          for i in range(24):
               time.sleep(10)
               try:
                   s = socket.create_connection((vps_ip, 22), timeout=5)
                   s.close()
                   print(f"SSH available after {(i+1)*10}s")
-                  time.sleep(10)
+                  time.sleep(15)
                   break
               except Exception:
                   print(f"  waiting... {(i+1)*10}s")
