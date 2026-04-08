@@ -64,14 +64,8 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H ${{ secrets.VPS_IP }} >> ~/.ssh/known_hosts 2>/dev/null || true
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no root@${{ secrets.VPS_IP }} \
-            'python3 -c "
-import json, pathlib
-f = pathlib.Path(\"/root/spxbot/recovery_count.json\")
-d = json.loads(f.read_text()) if f.exists() else {\"count\": 0}
-d[\"count\"] = d.get(\"count\", 0) + 1
-f.write_text(json.dumps(d))
-print(\"recovery_count incremented to\", d[\"count\"])
-"' || echo "SSH log failed (non-fatal)"
+            'python3 -c "import json,pathlib; f=pathlib.Path(\"/root/spxbot/recovery_count.json\"); d=json.loads(f.read_text()) if f.exists() else {\"count\":0}; d[\"count\"]=d.get(\"count\",0)+1; f.write_text(json.dumps(d)); print(\"recovery_count:\",d[\"count\"])"' \
+            || echo "SSH log failed (non-fatal)"
 
       - name: Send Pushover alert on recovery failure
         if: steps.check.outputs.status == 'unhealthy' && steps.verify.outputs.recovered == 'false'

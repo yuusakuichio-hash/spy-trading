@@ -73,19 +73,12 @@ jobs:
       - name: Send Pushover completion notice
         if: success()
         run: |
+          MSG="✅ verify.py 12/12 GO | commit: ${{ github.sha }}"
           curl -s -X POST https://api.pushover.net/1/messages.json \
             -d "token=${{ secrets.PUSHOVER_TOKEN }}" \
             -d "user=${{ secrets.PUSHOVER_USER }}" \
             -d "title=SPX Bot デプロイ完了" \
-            -d "message=✅ ヘルスチェック
-✅ 日次サマリー (9:00 JST)
-✅ 月次CSV
-✅ ユニットテスト (33件)
-✅ メモリ監視
-✅ logrotate
-✅ 証拠金チェック (¥500,000閾値)
-✅ verify.py 12/12 GO
-commit: ${{ github.sha }}" \
+            -d "message=${MSG}" \
             -d "priority=0"
 
       - name: Send Pushover failure notice
