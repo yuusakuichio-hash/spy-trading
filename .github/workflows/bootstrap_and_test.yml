@@ -114,32 +114,35 @@ jobs:
       - name: Inject SSH key via password
         id: inject
         if: steps.direct_ssh.outputs.direct != 'true'
+        env:
+          VPS_PASS: ${{ secrets.VPS_ROOT_PASSWORD }}
+          VPS_IP: ${{ secrets.VPS_IP }}
+          PUBKEY: ${{ secrets.VPS_SSH_PUBKEY }}
         run: |
           sudo apt-get install -y sshpass -qq 2>/dev/null || true
-          PUBKEY="${{ secrets.VPS_SSH_PUBKEY }}"
-          DEFAULT_PW="${{ steps.vultr.outputs.default_pw }}"
-          VPS_IP="${{ secrets.VPS_IP }}"
 
-          if [ -z "$DEFAULT_PW" ]; then
-            echo "No default_password from Vultr API"
-            echo "injected=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
+          # Try secrets.VPS_ROOT_PASSWORD first, then vultr default_pw
+          PASSWORDS=("$VPS_PASS" "${{ steps.vultr.outputs.default_pw }}")
 
-          RESULT=$(sshpass -p "$DEFAULT_PW" ssh \
-            -o StrictHostKeyChecking=no \
-            -o ConnectTimeout=10 \
-            -o PasswordAuthentication=yes \
-            root@$VPS_IP \
-            "mkdir -p /root/.ssh && chmod 700 /root/.ssh && echo '$PUBKEY' >> /root/.ssh/authorized_keys && sort -u /root/.ssh/authorized_keys -o /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys && echo INJECT_OK" 2>&1 || echo INJECT_FAIL)
-
-          if echo "$RESULT" | grep -q INJECT_OK; then
-            echo "SSH key injected via password"
-            echo "injected=true" >> $GITHUB_OUTPUT
-          else
-            echo "Password inject failed: $RESULT"
-            echo "injected=false" >> $GITHUB_OUTPUT
-          fi
+          for PW in "${PASSWORDS[@]}"; do
+            [ -z "$PW" ] && continue
+            echo "Trying password auth..."
+            RESULT=$(sshpass -p "$PW" ssh \
+              -o StrictHostKeyChecking=no \
+              -o ConnectTimeout=10 \
+              -o PasswordAuthentication=yes \
+              -o PubkeyAuthentication=no \
+              -o PreferredAuthentications=password \
+              root@$VPS_IP \
+              "mkdir -p /root/.ssh && chmod 700 /root/.ssh && echo '$PUBKEY' >> /root/.ssh/authorized_keys && sort -u /root/.ssh/authorized_keys -o /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys && echo INJECT_OK" 2>&1 || echo "FAIL:$?")
+            if echo "$RESULT" | grep -q INJECT_OK; then
+              echo "SSH key injected via password"
+              echo "injected=true" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            echo "Attempt failed: $RESULT"
+          done
+          echo "injected=false" >> $GITHUB_OUTPUT
 
       # ── STEP 3: Fallback — Vultr reboot + startup script ───────────────────
       - name: Inject key via startup script + reboot (fallback)
