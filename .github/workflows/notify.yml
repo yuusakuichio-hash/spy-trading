@@ -1,0 +1,31 @@
+name: Send Pushover Notification
+
+on:
+  workflow_dispatch:
+    inputs:
+      title:
+        description: 'Notification title'
+        required: true
+        default: 'SPX Bot'
+      message:
+        description: 'Message body'
+        required: true
+        default: 'Test message'
+      priority:
+        description: 'Priority (0=normal, 1=high)'
+        required: false
+        default: '0'
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Pushover
+        run: |
+          curl -s -X POST https://api.pushover.net/1/messages.json \
+            -d "token=${{ secrets.PUSHOVER_TOKEN }}" \
+            -d "user=${{ secrets.PUSHOVER_USER }}" \
+            -d "title=${{ github.event.inputs.title }}" \
+            -d "message=${{ github.event.inputs.message }}" \
+            -d "priority=${{ github.event.inputs.priority }}"
+          echo "Pushover sent"
