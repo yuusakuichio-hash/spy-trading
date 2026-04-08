@@ -1,84 +1,84 @@
-# SPY Credit Spread Strategy Specification
+# SPY クレジットスプレッド戦略仕様書
 
-## Instruments
+## 取引対象
 
-- **Underlying**: SPY (SPDR S&P 500 ETF)
-- **Expiry**: 0DTE (Mon/Wed/Fri), 1DTE (Tue/Thu)
-- **Structure**: Credit spreads only
+- **原資産**：SPY（SPDR S&P 500 ETF）
+- **満期**：0DTE（月/水/金）、1DTE（火/木）
+- **構造**：クレジットスプレッドのみ
 
-## Entry Rules
+## エントリールール
 
-### Timing
-- 10:30 ET (primary entry)
-- 14:00 ET (secondary entry, direction-match only)
+### タイミング
+- ET 10:30（メインエントリー）
+- ET 14:00（セカンダリーエントリー、方向一致時のみ）
 
-### Direction Filter
-- SPY > 20-day SMA → **Bull Put Spread** (sell OTM put, buy further OTM put)
-- SPY < 20-day SMA → **Bear Call Spread** (sell OTM call, buy further OTM call)
-- 14:00 entry: skip if current direction differs from 10:30 direction
+### 方向フィルター
+- SPY > 20日SMA → **ブルプットスプレッド**（OTMプット売り＋さらにOTMプット買い）
+- SPY < 20日SMA → **ベアコールスプレッド**（OTMコール売り＋さらにOTMコール買い）
+- 14:00エントリー：10:30と方向が異なる場合はスキップ
 
-### VIX Gate
-- VIX >= 25 → no trade
+### VIXゲート
+- VIX >= 25 → トレードなし
 
-## Strike Selection
+## ストライク選択
 
-- Sell delta: ~0.20 OTM
-- Buy strike: sell strike ± $5 (fixed $5 spread width)
+- 売りデルタ：約0.20 OTM
+- 買いストライク：売りストライク ± $5（固定スプレッド幅）
 
-## Position Sizing
+## ポジションサイジング
 
-| Condition | Portfolio % |
-|-----------|------------|
-| Default | 20% |
-| VIX spike +20% vs prev close | 40% |
-| OpEx week | 30% |
-| Friday or Monday | 25% |
+| 条件 | ポートフォリオ比率 |
+|------|-----------------|
+| デフォルト | 20% |
+| VIXが前日終値比+20%急騰 | 40% |
+| OpEx週 | 30% |
+| 金曜日または月曜日 | 25% |
 
-**Seasonal multipliers:**
-- Sep/Oct: × 0.5
-- Jul/Nov: × 1.5
+**季節性乗数：**
+- 9月/10月：× 0.5
+- 7月/11月：× 1.5
 
-Each contract: $5 wide × 100 = $500 margin required.
+1枚あたり：$5幅 × 100 = 証拠金$500必要。
 
-## Exit Rules
+## 決済ルール
 
-| Rule | Trigger |
-|------|---------|
-| Profit target | P&L >= +50% of credit received |
-| Stop loss | P&L <= -200% of credit received |
-| Force close | 15:50 ET (market on close) |
-| Alert | 15:55 ET if positions still open |
+| ルール | 発動条件 |
+|--------|---------|
+| 利確目標 | 損益 >= 受取プレミアムの+50% |
+| 損切り | 損益 <= 受取プレミアムの-200% |
+| 強制決済 | ET 15:50（引け成行） |
+| アラート | ET 15:55 時点でポジション残存 |
 
-## Tail Hedge
+## テールヘッジ
 
-- Buy 1 delta-0.05 OTM put per trading day (once per day)
-- Max cost: $10 per contract
-- Skip if price exceeds limit
+- 取引日ごとにデルタ0.05のOTMプットを1枚買い（1日1回）
+- 最大コスト：$10/枚
+- 指値超過時はスキップ
 
-## No-Trade Days
+## トレード禁止日
 
-- FOMC, CPI, NFP event days
-- Quarterly OpEx (3rd Friday of Mar/Jun/Sep/Dec)
-- Day before NYSE market holiday
-- NYSE market holidays
+- FOMC、CPI、NFP 発表日
+- 四半期OpEx（3月/6月/9月/12月の第3金曜日）
+- NYSE市場休場日の前日
+- NYSE市場休場日
 
-## Alerts (Pushover — critical only)
+## アラート（Pushover — 重大なもののみ）
 
-1. **Naked position**: Leg2 failed AND Leg1 buyback failed
-2. **15:55 residual**: Positions remain open after 15:55 ET
-3. **3 consecutive startup failures**: OpenD connection fails 3x in a row
-4. **Bot crash**: Unhandled exception in main loop
+1. **裸ポジション**：Leg2失敗かつLeg1買戻し失敗
+2. **15:55残存ポジション**：ET 15:55 以降もポジションが残っている
+3. **起動失敗3連続**：OpenD接続が3回連続で失敗
+4. **Botクラッシュ**：メインループで未処理例外発生
 
-## Leg Failure Handling
+## Leg失敗時の処理
 
-1. Sell Leg1 → wait 1s
-2. Buy Leg2 (3 attempts, 2s apart)
-3. If Leg2 fails all 3: buy back Leg1 (3 attempts)
-4. If Leg1 buyback fails: send CRITICAL Pushover alert (naked position)
+1. Leg1売り → 1秒待機
+2. Leg2買い（3回試行、2秒間隔）
+3. Leg2が3回とも失敗した場合：Leg1を買い戻す（3回試行）
+4. Leg1買戻しも失敗した場合：Pushoverに重大アラート送信（裸ポジション）
 
-## Infrastructure
+## インフラ
 
-- VPS: ConoHa (160.251.138.33), Ubuntu 22.04
-- API: moomoo OpenD v10.2.6208 → futu-api Python SDK
-- Logs: /var/log/spx_bot/bot.log
-- Systemd: network → opend → spx_bot
+- VPS：ConoHa（160.251.138.33）、Ubuntu 22.04
+- API：moomoo OpenD v10.2.6208 → futu-api Python SDK
+- ログ：/var/log/spx_bot/bot.log
+- systemd起動順序：network → opend → spx_bot

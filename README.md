@@ -1,63 +1,63 @@
-# SPY 0DTE/1DTE Credit Spread Bot
+# SPY 0DTE/1DTE クレジットスプレッド Bot
 
-Automated SPY options trading bot running on a VPS (ConoHa Ubuntu 22.04).
+VPS（ConoHa Ubuntu 22.04）上で稼働するSPYオプション自動売買Botです。
 
-## Architecture
+## アーキテクチャ
 
 ```
-moomoo OpenD (API gateway)
-    └── spx_bot.py (Python 3, systemd service)
-            └── Pushover (critical alerts only)
+moomoo OpenD（APIゲートウェイ）
+    └── spx_bot.py（Python 3、systemdサービス）
+            └── Pushover（重大アラートのみ）
 ```
 
-## Deployment Status
+## デプロイ状況
 
-| Step | Status |
-|------|--------|
-| VPS SSH access | ✅ Done |
-| spx_bot.py implementation | ✅ Done |
-| moomoo OpenD headless login | 🔄 Pending moomoo support |
-| systemd opend + spx_bot services | ⏳ After OpenD login resolved |
-| Live trading | ⏳ After OpenD login resolved |
+| ステップ | 状態 |
+|----------|------|
+| VPS SSHアクセス | ✅ 完了 |
+| spx_bot.py 実装 | ✅ 完了 |
+| moomoo OpenD ヘッドレスログイン | 🔄 moomooサポート対応待ち |
+| systemd opend + spx_bot サービス設定 | ⏳ OpenDログイン解決後 |
+| 本番トレード開始 | ⏳ OpenDログイン解決後 |
 
-## Strategy Overview
+## 戦略概要
 
-See [STRATEGY.md](STRATEGY.md) for full specification.
+詳細は [STRATEGY.md](STRATEGY.md) を参照。
 
-**Key parameters:**
-- Instrument: SPY (0DTE Mon/Wed/Fri, 1DTE Tue/Thu)
-- Entry: 10:30 ET and 14:00 ET
-- Direction: Bull Put Spread (SPY > SMA20) / Bear Call Spread (SPY < SMA20)
-- VIX gate: no trade if VIX >= 25
-- Profit target: 50% of credit received
-- Stop loss: 200% of credit received
-- Force close: 15:50 ET
+**主要パラメータ：**
+- 対象銘柄：SPY（0DTE 月/水/金、1DTE 火/木）
+- エントリー：ET 10:30 と ET 14:00
+- 方向：ブルプットスプレッド（SPY > SMA20）／ベアコールスプレッド（SPY < SMA20）
+- VIXゲート：VIX >= 25 の場合はトレードなし
+- 利確目標：受取プレミアムの50%
+- 損切り：受取プレミアムの200%
+- 強制決済：ET 15:50
 
-## Files
+## ファイル構成
 
-- `spx_bot.py` — Main bot (production-ready, dry-run mode if OpenD not connected)
-- `STRATEGY.md` — Full strategy specification
+- `spx_bot.py` — メインBot（本番対応済み、OpenD未接続時はドライランモード）
+- `STRATEGY.md` — 戦略仕様書
 
-## Running
+## 実行方法
 
 ```bash
-# Install dependencies
+# 依存パッケージのインストール
 pip install futu-api requests
 
-# Run (dry-run mode if OpenD not connected)
+# 実行（OpenD未接続時はドライランモード）
 python3 spx_bot.py
 
-# Production (via systemd after OpenD login)
+# 本番運用（OpenDログイン後にsystemd経由で）
 systemctl start spx_bot
 ```
 
-## Alerts (Pushover)
+## アラート（Pushover）
 
-Critical alerts only:
-- Naked position risk (Leg2 failed + Leg1 buyback failed)
-- 15:55 ET residual position
-- 3 consecutive startup failures
-- Bot crash
+重大なアラートのみ通知：
+- 裸ポジションリスク（Leg2失敗かつLeg1買戻し失敗）
+- ET 15:55 時点での残存ポジション
+- 起動失敗3連続
+- Botクラッシュ
 
 ## 資金計画（ロードマップ）
 
@@ -70,15 +70,3 @@ Critical alerts only:
 | 2027年4月 | 600万円以上 | **40万円以上** | 🎯 目標 |
 
 ※月30万円追加入金込み・複利計算
-
-## 📈 Roadmap
-
-| Period | Capital | Monthly Target (8%) | Status |
-|--------|---------|---------------------|--------|
-| Apr 2026 | ¥1.2M | ~¥100K | ⏳ Bot launch |
-| Jul 2026 | ¥2.1M | ~¥170K | ⏳ |
-| Oct 2026 | ¥3.2M | ~¥260K | ⏳ |
-| Jan 2027 | ¥4.5M | ~¥360K | ⏳ |
-| Apr 2027 | ¥6M+ | **¥400K+** | 🎯 Goal |
-
-*Includes ¥300K/month additional deposits + compound growth*
