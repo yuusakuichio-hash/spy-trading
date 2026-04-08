@@ -227,17 +227,16 @@ jobs:
       - name: Report SSH status
         if: steps.ssh_verify.outputs.ssh_ok != 'true'
         run: |
+          MSG="SSH blocked. Add pubkey to VPS via Vultr console then re-run workflow."
           curl -s -X POST https://api.pushover.net/1/messages.json \
-            -F "token=${{ secrets.PUSHOVER_TOKEN }}" \
-            -F "user=${{ secrets.PUSHOVER_USER }}" \
-            -F "title=⚠️ VPS SSH接続不可" \
-            -F "message=SSH鍵がVPSに未登録。
-Vultrコンソールで下記コマンド実行後、ワークフローを再実行してください:
-mkdir -p /root/.ssh && echo '${{ secrets.VPS_SSH_PUBKEY }}' >> /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys
-
-または: VULTR_API_KEY Secretを正しいキーに更新してください。" \
-            -F "priority=1"
+            -d "token=${{ secrets.PUSHOVER_TOKEN }}" \
+            -d "user=${{ secrets.PUSHOVER_USER }}" \
+            -d "title=VPS SSH blocked" \
+            -d "message=${MSG}" \
+            -d "priority=1" || true
           echo "SSH unavailable - skipping VPS tests"
+          echo "To fix: add the following pubkey to /root/.ssh/authorized_keys on the VPS:"
+          echo "${{ secrets.VPS_SSH_PUBKEY }}"
 
       # ── STEP 5: Deploy latest code ──────────────────────────────────────────
       - name: Deploy latest files
@@ -327,21 +326,16 @@ mkdir -p /root/.ssh && echo '${{ secrets.VPS_SSH_PUBKEY }}' >> /root/.ssh/author
       - name: STEP6 Pushover notification
         if: steps.ssh_verify.outputs.ssh_ok == 'true'
         run: |
-          VERIFY=$(grep "RESULT:" /tmp/verify.txt 2>/dev/null | tail -1 || echo "verify done")
-          LIVE=$(grep -E "PASS|FAIL" /tmp/live_test.txt 2>/dev/null | tail -3 | tr '\n' ' ' || echo "live test done")
-          MSG="$(date -u '+%Y-%m-%d %H:%M UTC')
-          verify: ${VERIFY}
-          live: ${LIVE}
-          health: OK
-          bot dry run: 3min OK
-          systemd: spxbot/health running
-          次回取引日にエントリー可能"
+          VERIFY=$(grep "RESULT:" /tmp/verify.txt 2>/dev/null | tail -1 | tr -d '\n' || echo "verify done")
+          LIVE=$(grep -c "PASS" /tmp/live_test.txt 2>/dev/null || echo "0")
+          TS=$(date -u '+%Y-%m-%d %H:%M UTC')
+          MSG="${TS} verify:${VERIFY} live_pass:${LIVE} health:OK bot:3min systemd:running"
           curl -s -X POST https://api.pushover.net/1/messages.json \
-            -F "token=${{ secrets.PUSHOVER_TOKEN }}" \
-            -F "user=${{ secrets.PUSHOVER_USER }}" \
-            -F "title=✅ 米国市場テスト完了" \
-            -F "message=${MSG}" \
-            -F "priority=0"
+            -d "token=${{ secrets.PUSHOVER_TOKEN }}" \
+            -d "user=${{ secrets.PUSHOVER_USER }}" \
+            -d "title=Market Test Complete" \
+            -d "message=${MSG}" \
+            -d "priority=0"
 
       # ── Final summary ───────────────────────────────────────────────────────
       - name: Summary
