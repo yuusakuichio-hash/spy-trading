@@ -1,0 +1,17 @@
+[Unit]
+Description=SPX Bot Health Server (port 8080)
+After=network.target spxbot.service
+Wants=spxbot.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/spxbot
+ExecStart=/usr/bin/python3 /root/spxbot/health_server.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -6,10 +6,12 @@ Full production implementation with dynamic sizing, tail hedge, event calendar
 
 import os
 import sys
+import csv
 import json
 import time
 import logging
 import datetime
+import resource
 import requests
 import traceback
 import zoneinfo
@@ -31,7 +33,7 @@ def _load_env_file():
 _load_env_file()
 
 # ── Logging ──────────────────────────────────────────────────────────────────
-LOG_DIR = Path("/var/log/spx_bot")
+LOG_DIR = Path(os.environ.get("SPX_LOG_DIR", "/var/log/spx_bot"))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(
@@ -51,6 +53,8 @@ PUSHOVER_USER  = "u2cevk8nktib3sr148rw2hs78ecvux"
 EVENTS_FILE     = Path("/root/events.json")
 FAILURES_FILE   = Path("/root/spx_bot_failures.json")
 TRADE_LOCK_FILE = Path("/root/trade_lock.json")
+MONTHLY_CSV_DIR = Path("/var/log/spx_bot")
+MEMORY_WARN_MB  = 450  # Warn if RSS exceeds this (MB)
 TRADE_PASSWORD  = os.environ.get("TRADE_PASSWORD", "")
 OPEND_HOST     = "127.0.0.1"
 OPEND_PORT     = 11111
@@ -65,8 +69,20 @@ FORCE_CLOSE_H  = 15
 FORCE_CLOSE_M  = 50
 ENTRY_TIMES    = [(10, 30), (14, 0)]
 
-# US market holidays 2026 (NYSE)
-US_HOLIDAYS_2026 = {
+# US market holidays 2025–2027 (NYSE)
+US_HOLIDAYS = {
+    # 2025
+    datetime.date(2025, 1, 1),   # New Year's Day
+    datetime.date(2025, 1, 20),  # MLK Day
+    datetime.date(2025, 2, 17),  # Presidents' Day
+    datetime.date(2025, 4, 18),  # Good Friday
+    datetime.date(2025, 5, 26),  # Memorial Day
+    datetime.date(2025, 6, 19),  # Juneteenth
+    datetime.date(2025, 7, 4),   # Independence Day
+    datetime.date(2025, 9, 1),   # Labor Day
+    datetime.date(2025, 11, 27), # Thanksgiving
+    datetime.date(2025, 12, 25), # Christmas
+    # 2026
     datetime.date(2026, 1, 1),   # New Year's Day
     datetime.date(2026, 1, 19),  # MLK Day
     datetime.date(2026, 2, 16),  # Presidents' Day
@@ -78,7 +94,20 @@ US_HOLIDAYS_2026 = {
     datetime.date(2026, 11, 26), # Thanksgiving
     datetime.date(2026, 11, 27), # Day after Thanksgiving (early close, skip)
     datetime.date(2026, 12, 25), # Christmas
+    # 2027
+    datetime.date(2027, 1, 1),   # New Year's Day
+    datetime.date(2027, 1, 18),  # MLK Day
+    datetime.date(2027, 2, 15),  # Presidents' Day
+    datetime.date(2027, 3, 26),  # Good Friday
+    datetime.date(2027, 5, 31),  # Memorial Day
+    datetime.date(2027, 6, 18),  # Juneteenth (observed)
+    datetime.date(2027, 7, 5),   # Independence Day (observed)
+    datetime.date(2027, 9, 6),   # Labor Day
+    datetime.date(2027, 11, 25), # Thanksgiving
+    datetime.date(2027, 12, 24), # Christmas (observed)
 }
+# Keep legacy alias for backward compat
+US_HOLIDAYS_2026 = US_HOLIDAYS
 
 # No-trade event keywords
 NOTRADE_KEYWORDS = ["fomc", "cpi", "nfp", "non-farm", "opex", "quadruple",
@@ -127,6 +156,39 @@ def save_failures(count: int):
     except Exception as e:
         log.warning(f"Could not save failure count: {e}")
 
+# ── Monthly CSV trade log ─────────────────────────────────────────────────────
+def append_monthly_csv(record: dict):
+    """Append a trade record to /var/log/spx_bot/YYYY-MM.csv"""
+    try:
+        MONTHLY_CSV_DIR.mkdir(parents=True, exist_ok=True)
+        now = datetime.datetime.now(ET)
+        csv_path = MONTHLY_CSV_DIR / f"{now.strftime('%Y-%m')}.csv"
+        fieldnames = ["timestamp", "direction", "sell_strike", "buy_strike",
+                      "qty", "net_credit", "result", "pnl"]
+        write_header = not csv_path.exists()
+        with open(csv_path, "a", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+            if write_header:
+                writer.writeheader()
+            record.setdefault("timestamp", now.isoformat())
+            writer.writerow(record)
+        log.info(f"Monthly CSV updated: {csv_path}")
+    except Exception as e:
+        log.warning(f"monthly CSV write failed: {e}")
+
+# ── Memory monitor ────────────────────────────────────────────────────────────
+def check_memory_usage():
+    """Warn via Pushover if process RSS exceeds MEMORY_WARN_MB."""
+    try:
+        rss_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        # Linux: kb, macOS: bytes
+        rss_mb = rss_kb / 1024 if sys.platform != "darwin" else rss_kb / (1024 * 1024)
+        if rss_mb > MEMORY_WARN_MB:
+            log.warning(f"Memory usage high: {rss_mb:.0f} MB > {MEMORY_WARN_MB} MB")
+            pushover("SPX Bot", f"⚠️メモリ使用量 {rss_mb:.0f}MB が閾値 {MEMORY_WARN_MB}MB を超えました")
+    except Exception as e:
+        log.warning(f"Memory check failed: {e}")
+
 # ── Event calendar ────────────────────────────────────────────────────────────
 def fetch_events_weekly():
     """Monday: fetch investing.com economic calendar → events.json"""
@@ -174,7 +236,7 @@ def is_notrade_today() -> bool:
     tomorrow = today + datetime.timedelta(days=1)
 
     # No-trade if next trading day is a market holiday
-    if tomorrow in US_HOLIDAYS_2026:
+    if tomorrow in US_HOLIDAYS:
         log.info(f"Next day ({tomorrow}) is a market holiday → no trade")
         return True
 
@@ -667,6 +729,14 @@ class SPXBot:
                 f"✅エントリー {time_key}ET {dir_label} "
                 f"SELL {sell_strike:.0f}{opt_label}/BUY {buy_strike:.0f}{opt_label} {qty}枚 {credit_str}"
             )
+            append_monthly_csv({
+                "direction": direction,
+                "sell_strike": sell_strike,
+                "buy_strike": buy_strike,
+                "qty": qty,
+                "net_credit": net_credit,
+                "result": "entered",
+            })
 
             # Tail hedge: buy delta-0.05 OTM put (daily, once)
             if "hedge" not in self.traded_times:
@@ -727,7 +797,7 @@ class SPXBot:
     def _notrade_reason_for_date(self, target: datetime.date) -> str:
         """Return human-readable no-trade reason for target date, or '' if tradeable."""
         day_after = target + datetime.timedelta(days=1)
-        if day_after in US_HOLIDAYS_2026:
+        if day_after in US_HOLIDAYS:
             return f"翌日祝日({day_after})"
         if target.month in (3, 6, 9, 12) and target.weekday() == 4:
             first_day = target.replace(day=1)
@@ -782,6 +852,47 @@ class SPXBot:
             pushover("SPX Bot", expiry_warn, priority=1)
             log.warning(f"Nightly: {expiry_warn}")
 
+    def run_daily_summary_jst(self):
+        """9:00 JST (= 20:00 ET) daily summary + expiry/holiday check."""
+        now_et = datetime.datetime.now(ET)
+        jst = zoneinfo.ZoneInfo("Asia/Tokyo")
+        now_jst = now_et.astimezone(jst)
+        today_jst = now_jst.date()
+
+        # Check if today JST is a US holiday (next ET trading day)
+        next_et = (now_et + datetime.timedelta(days=1)).date()
+        holiday_note = ""
+        if next_et in US_HOLIDAYS:
+            holiday_note = f"\n🎌次回取引日({next_et})は米国祝日のため休場です。"
+
+        # Quarterly OpEx check for next ET day
+        opex_note = ""
+        if next_et.month in (3, 6, 9, 12) and next_et.weekday() == 4:
+            first_day = next_et.replace(day=1)
+            first_friday = first_day + datetime.timedelta(days=(4 - first_day.weekday()) % 7)
+            third_friday = first_friday + datetime.timedelta(weeks=2)
+            if next_et == third_friday:
+                opex_note = "\n⚠️明日は四半期OpEx(SQ日)のためノートレード予定。"
+
+        # Lock expiry check
+        lock_note = self._get_lock_expiry_warning()
+        if lock_note:
+            lock_note = f"\n{lock_note}"
+
+        # Build summary
+        traded = [k for k in self.traded_times if k not in ("direction", "nightly_checked", "hedge", "daily_summary")]
+        if traded:
+            summary = f"本日エントリー: {len(traded)}回\n取引時刻: {', '.join(traded)}"
+        else:
+            summary = "本日エントリーなし"
+
+        msg = (
+            f"📊 SPX Bot 日次サマリー ({today_jst.strftime('%Y/%m/%d')} 09:00 JST)\n"
+            f"{summary}{holiday_note}{opex_note}{lock_note}"
+        )
+        pushover("SPX Bot 日次レポート", msg)
+        log.info(f"Daily summary sent: {summary}")
+
     def run_forever(self):
         log.info("=== SPX Bot starting ===")
         fetch_events_weekly()
@@ -814,10 +925,17 @@ class SPXBot:
                 now = datetime.datetime.now(ET)
                 h, m = now.hour, now.minute
 
-                # 20:00 ET (= 9:00 JST) nightly check: notrade + lock expiry
+                # 20:00 ET (= 9:00 JST): daily summary + notrade/lock check
                 if h == 20 and m == 0 and "nightly_checked" not in self.traded_times:
+                    self.run_daily_summary_jst()
                     self.run_nightly_jst_check()
                     self.traded_times["nightly_checked"] = True
+                    self.traded_times["daily_summary"] = True
+
+                # Hourly memory check
+                if m == 0 and f"memcheck_{h}" not in self.traded_times:
+                    check_memory_usage()
+                    self.traded_times[f"memcheck_{h}"] = True
 
                 # Market hours: 9:30–16:00 ET
                 if not (9 <= h < 16 or (h == 9 and m >= 30)):

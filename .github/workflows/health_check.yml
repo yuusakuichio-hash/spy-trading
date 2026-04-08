@@ -1,0 +1,66 @@
+name: VPS Health Check
+
+on:
+  schedule:
+    # Every 5 minutes
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+
+    steps:
+      - name: Check VPS health endpoint
+        id: check
+        run: |
+          HTTP_CODE=$(curl -s -o /tmp/health_resp.json -w "%{http_code}" \
+            --connect-timeout 10 --max-time 20 \
+            http://${{ secrets.VPS_IP }}:8080/health || echo "000")
+          echo "http_code=$HTTP_CODE" >> $GITHUB_OUTPUT
+          cat /tmp/health_resp.json 2>/dev/null || echo "(no response)"
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "status=healthy" >> $GITHUB_OUTPUT
+          else
+            echo "status=unhealthy" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Restart VPS via Vultr API
+        id: restart
+        if: steps.check.outputs.status == 'unhealthy'
+        run: |
+          echo "Health check failed (HTTP ${{ steps.check.outputs.http_code }}). Attempting Vultr reboot..."
+          RESP=$(curl -s -X POST \
+            -H "Authorization: Bearer ${{ secrets.VULTR_API_KEY }}" \
+            "https://api.vultr.com/v2/instances/${{ secrets.VULTR_INSTANCE_ID }}/reboot")
+          echo "Vultr API response: $RESP"
+          # Wait 120s for VPS to come back
+          sleep 120
+
+      - name: Verify recovery after restart
+        id: verify
+        if: steps.check.outputs.status == 'unhealthy'
+        run: |
+          for i in 1 2 3; do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+              --connect-timeout 10 --max-time 20 \
+              http://${{ secrets.VPS_IP }}:8080/health || echo "000")
+            echo "Attempt $i: HTTP $HTTP_CODE"
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "recovered=true" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "recovered=false" >> $GITHUB_OUTPUT
+
+      - name: Send Pushover alert on recovery failure
+        if: steps.check.outputs.status == 'unhealthy' && steps.verify.outputs.recovered == 'false'
+        run: |
+          curl -s -X POST https://api.pushover.net/1/messages.json \
+            -d "token=${{ secrets.PUSHOVER_TOKEN }}" \
+            -d "user=${{ secrets.PUSHOVER_USER }}" \
+            -d "title=VPS障害・復旧失敗" \
+            -d "message=SPX Bot VPS (${{ secrets.VPS_IP }}) がダウンし、Vultr再起動後も復旧しませんでした。手動対応が必要です。" \
+            -d "priority=1"
