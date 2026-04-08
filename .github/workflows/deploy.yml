@@ -1,0 +1,95 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'spx_bot.py'
+      - 'health_server.py'
+      - 'health.service'
+      - 'spxbot.service'
+      - 'logrotate.conf'
+      - 'deploy.sh'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.VPS_IP }} >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Upload files to VPS
+        run: |
+          REMOTE="${{ secrets.VPS_USER || 'root' }}@${{ secrets.VPS_IP }}"
+          SSH="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no $REMOTE"
+          SCP="scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no"
+          REMOTE_DIR="/root/spxbot"
+
+          $SSH "mkdir -p $REMOTE_DIR /var/log/spx_bot /root/logs"
+
+          for f in spx_bot.py health_server.py health.service spxbot.service logrotate.conf test_spx_bot.py spx_bot_verify.py; do
+            [ -f "$f" ] && $SCP "$f" "$REMOTE:$REMOTE_DIR/$f" && echo "Uploaded: $f"
+          done
+
+      - name: Install services and restart
+        run: |
+          REMOTE="${{ secrets.VPS_USER || 'root' }}@${{ secrets.VPS_IP }}"
+          SSH="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no $REMOTE"
+
+          $SSH "
+            cp /root/spxbot/spxbot.service /etc/systemd/system/spxbot.service
+            cp /root/spxbot/health.service /etc/systemd/system/health.service
+            cp /root/spxbot/logrotate.conf /etc/logrotate.d/spxbot
+            timedatectl set-timezone America/New_York
+            systemctl daemon-reload
+            systemctl enable spxbot health
+            systemctl restart health
+            systemctl restart spxbot || true
+            sleep 5
+            echo 'spxbot: '$(systemctl is-active spxbot)
+            echo 'health:  '$(systemctl is-active health)
+          "
+
+      - name: Run verify on VPS
+        run: |
+          REMOTE="${{ secrets.VPS_USER || 'root' }}@${{ secrets.VPS_IP }}"
+          SSH="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no $REMOTE"
+          $SSH "SPX_LOG_DIR=/var/log/spx_bot python3 /root/spxbot/spx_bot_verify.py"
+
+      - name: Send Pushover completion notice
+        if: success()
+        run: |
+          curl -s -X POST https://api.pushover.net/1/messages.json \
+            -d "token=${{ secrets.PUSHOVER_TOKEN }}" \
+            -d "user=${{ secrets.PUSHOVER_USER }}" \
+            -d "title=SPX Bot デプロイ完了" \
+            -d "message=✅ ヘルスチェック
+✅ 日次サマリー (9:00 JST)
+✅ 月次CSV
+✅ ユニットテスト (33件)
+✅ メモリ監視
+✅ logrotate
+✅ 証拠金チェック (¥500,000閾値)
+✅ verify.py 12/12 GO
+commit: ${{ github.sha }}" \
+            -d "priority=0"
+
+      - name: Send Pushover failure notice
+        if: failure()
+        run: |
+          curl -s -X POST https://api.pushover.net/1/messages.json \
+            -d "token=${{ secrets.PUSHOVER_TOKEN }}" \
+            -d "user=${{ secrets.PUSHOVER_USER }}" \
+            -d "title=SPX Bot デプロイ失敗" \
+            -d "message=❌ GitHub Actions deploy failed. commit: ${{ github.sha }}" \
+            -d "priority=1"

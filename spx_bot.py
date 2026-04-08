@@ -284,8 +284,26 @@ class MarketData:
             self.quote_ctx = OpenQuoteContext(host=OPEND_HOST, port=OPEND_PORT)
             log.info("Quote context connected")
             return True
+        except OSError as e:
+            if "Connection refused" in str(e) or "timed out" in str(e).lower():
+                msg = f"❌OpenD接続タイムアウト/拒否: {e}"
+                log.error(msg)
+                pushover("SPX Bot OpenD障害", f"接続タイムアウト・OpenD未起動の可能性: {str(e)[:100]}", priority=1)
+            else:
+                log.error(f"Quote connect OSError: {e}")
+                pushover("SPX Bot OpenD障害", f"Quote接続エラー: {str(e)[:100]}", priority=1)
+            return False
         except Exception as e:
-            log.error(f"Quote connect failed: {e}")
+            err_str = str(e).lower()
+            if "auth" in err_str or "login" in err_str or "password" in err_str:
+                log.error(f"Quote connect auth failure: {e}")
+                pushover("SPX Bot OpenD障害", f"認証失敗: {str(e)[:100]}", priority=1)
+            elif "limit" in err_str or "rate" in err_str or "too many" in err_str:
+                log.error(f"Quote connect API limit: {e}")
+                pushover("SPX Bot OpenD障害", f"API制限: {str(e)[:100]}", priority=0)
+            else:
+                log.error(f"Quote connect failed: {e}")
+                pushover("SPX Bot OpenD障害", f"Quote接続失敗: {str(e)[:100]}", priority=1)
             return False
 
     def close(self):
@@ -410,8 +428,25 @@ class TradeEngine:
                 self.unlock_ok = True  # SIMULATE needs no unlock
 
             return True
+        except OSError as e:
+            if "Connection refused" in str(e) or "timed out" in str(e).lower():
+                log.error(f"Trade connect timeout/refused: {e}")
+                pushover("SPX Bot OpenD障害", f"Trade接続タイムアウト・OpenD未起動の可能性: {str(e)[:100]}", priority=1)
+            else:
+                log.error(f"Trade connect OSError: {e}")
+                pushover("SPX Bot OpenD障害", f"Trade接続エラー: {str(e)[:100]}", priority=1)
+            return False
         except Exception as e:
-            log.error(f"Trade connect failed: {e}")
+            err_str = str(e).lower()
+            if "auth" in err_str or "login" in err_str or "password" in err_str:
+                log.error(f"Trade connect auth failure: {e}")
+                pushover("SPX Bot OpenD障害", f"Trade認証失敗: {str(e)[:100]}", priority=1)
+            elif "limit" in err_str or "rate" in err_str or "too many" in err_str:
+                log.error(f"Trade connect API limit: {e}")
+                pushover("SPX Bot OpenD障害", f"Trade API制限: {str(e)[:100]}", priority=0)
+            else:
+                log.error(f"Trade connect failed: {e}")
+                pushover("SPX Bot OpenD障害", f"Trade接続失敗: {str(e)[:100]}", priority=1)
             return False
 
     def _resolve_account(self):
@@ -474,6 +509,21 @@ class TradeEngine:
         log.error(f"accinfo_query failed for acc_id={self.account_id}: {data}")
         pushover("SPX Bot", "⚠️残高取得失敗・フォールバック使用中($2,500)", priority=0)
         return 2500.0
+
+    def check_startup_margin(self, usd_to_jpy: float = 150.0) -> bool:
+        """Startup margin check: warn and halt entries if balance < ¥500,000.
+        Returns True if margin is sufficient, False if entries should be skipped."""
+        capital = self.get_account_cash()
+        jpy_equiv = capital * usd_to_jpy
+        MARGIN_THRESHOLD_JPY = 500_000
+        if jpy_equiv < MARGIN_THRESHOLD_JPY:
+            msg = (f"⚠️証拠金不足: ${capital:,.0f} (≈¥{jpy_equiv:,.0f}) "
+                   f"< ¥{MARGIN_THRESHOLD_JPY:,} → エントリー停止")
+            log.warning(msg)
+            pushover("SPX Bot 証拠金警告", msg, priority=1)
+            return False
+        log.info(f"Margin check OK: ${capital:,.0f} (≈¥{jpy_equiv:,.0f})")
+        return True
 
     def calc_position_size(self, cash: float, vix: float, vix_prev: Optional[float]) -> int:
         """Dynamic position sizing per strategy spec."""
@@ -623,6 +673,7 @@ class SPXBot:
         # traded_times is a dict: key → True for entry times, "direction" → direction string
         self.traded_times: dict = {}
         self.consecutive_start_failures: int = load_failures()
+        self._margin_ok: bool = True  # set False if startup margin check fails
 
     def get_expiry(self) -> str:
         """0DTE on Mon/Wed/Fri, 1DTE on Tue/Thu."""
@@ -920,6 +971,9 @@ class SPXBot:
         save_failures(0)
         log.info("Connected to OpenD successfully")
 
+        # ── Startup margin check ──────────────────────────────────────────
+        self._margin_ok = self.eng.check_startup_margin()
+
         try:
             while True:
                 now = datetime.datetime.now(ET)
@@ -953,9 +1007,13 @@ class SPXBot:
                     time.sleep(3600)
                     continue
 
-                # Entry check
+                # Entry check (skip if margin insufficient)
                 if self.should_enter(h, m):
-                    self.run_entry()
+                    if getattr(self, "_margin_ok", True):
+                        self.run_entry()
+                    else:
+                        log.warning("Entry skipped: startup margin check failed")
+                        self.traded_times[f"{h}:{m:02d}"] = True
 
                 # Exit check
                 self.check_exits()

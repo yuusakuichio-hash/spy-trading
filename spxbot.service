@@ -1,0 +1,21 @@
+[Unit]
+Description=SPX Bot 0DTE/1DTE Credit Spread Trading Bot
+After=network.target opend.service
+Wants=opend.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/spxbot
+EnvironmentFile=-/root/spxbot/.env
+ExecStart=/usr/bin/python3 /root/spxbot/spx_bot.py
+Restart=always
+RestartSec=30
+StartLimitIntervalSec=300
+StartLimitBurst=3
+StandardOutput=journal
+StandardError=journal
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
