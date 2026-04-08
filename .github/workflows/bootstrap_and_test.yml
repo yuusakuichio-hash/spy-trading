@@ -9,7 +9,7 @@ on:
 
 jobs:
   bootstrap:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, local-ip]
     timeout-minutes: 25
 
     env:
