@@ -8,12 +8,14 @@ import json
 import subprocess
 import datetime
 import os
+import time
 import http.server
 import socketserver
 import logging
 from pathlib import Path
 
 PORT = 8080
+_START_TIME = time.time()
 LOG_DIR = Path("/var/log/spx_bot")
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -109,6 +111,9 @@ class HealthHandler(http.server.BaseHTTPRequestHandler):
 
         payload = {
             "status": "ok" if status_code == 200 else "degraded",
+            "uptime": int(time.time() - _START_TIME),
+            "bot": "running" if services.get("spxbot") == "active" else "stopped",
+            "opend": "connected" if services.get("opend") == "active" else "disconnected",
             "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
             "services": services,
             "memory": mem,

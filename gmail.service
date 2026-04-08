@@ -1,16 +1,16 @@
 [Unit]
-Description=SPX Bot 0DTE/1DTE Credit Spread Trading Bot
-After=network.target opend.service health.service
-Wants=opend.service
+Description=Gmail AI Monitor for SPX Bot
+After=network.target spxbot.service
+Wants=network.target
 
 [Service]
 Type=simple
 User=root
 WorkingDirectory=/root/spxbot
 EnvironmentFile=-/root/spxbot/.env
-ExecStart=/usr/bin/python3 /root/spxbot/spx_bot.py
+ExecStart=/usr/bin/python3 /root/spxbot/gmail_monitor.py
 Restart=always
-RestartSec=30
+RestartSec=60
 StartLimitIntervalSec=300
 StartLimitBurst=3
 StandardOutput=journal

@@ -10,6 +10,8 @@ on:
       - 'spxbot.service'
       - 'logrotate.conf'
       - 'deploy.sh'
+      - 'gmail_monitor.py'
+      - 'gmail.service'
   workflow_dispatch:
 
 jobs:
@@ -37,7 +39,7 @@ jobs:
 
           $SSH "mkdir -p $REMOTE_DIR /var/log/spx_bot /root/logs"
 
-          for f in spx_bot.py health_server.py health.service spxbot.service logrotate.conf test_spx_bot.py spx_bot_verify.py; do
+          for f in spx_bot.py health_server.py health.service spxbot.service logrotate.conf test_spx_bot.py spx_bot_verify.py gmail_monitor.py gmail.service; do
             [ -f "$f" ] && $SCP "$f" "$REMOTE:$REMOTE_DIR/$f" && echo "Uploaded: $f"
           done
 
@@ -50,9 +52,11 @@ jobs:
             cp /root/spxbot/spxbot.service /etc/systemd/system/spxbot.service
             cp /root/spxbot/health.service /etc/systemd/system/health.service
             cp /root/spxbot/logrotate.conf /etc/logrotate.d/spxbot
+            [ -f /root/spxbot/gmail.service ] && cp /root/spxbot/gmail.service /etc/systemd/system/gmail.service || true
             timedatectl set-timezone America/New_York
             systemctl daemon-reload
             systemctl enable spxbot health
+            systemctl enable gmail 2>/dev/null || true
             systemctl restart health
             systemctl restart spxbot || true
             sleep 5

@@ -1,7 +1,7 @@
 [Unit]
 Description=SPX Bot Health Server (port 8080)
-After=network.target spxbot.service
-Wants=spxbot.service
+After=network.target opend.service
+Wants=opend.service
 
 [Service]
 Type=simple

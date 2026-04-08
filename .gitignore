@@ -3,6 +3,10 @@
 *.env
 .env.*
 
+# Gmail OAuth2 credentials — NEVER commit
+credentials.json
+gmail_token.json
+
 # Saxo token
 .saxo_token.json
 

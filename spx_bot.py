@@ -50,11 +50,16 @@ log = logging.getLogger("spx_bot")
 ET = zoneinfo.ZoneInfo("America/New_York")
 PUSHOVER_TOKEN = "a5rb9ipb3yrdanv3vk4n8x28qt7io9"
 PUSHOVER_USER  = "u2cevk8nktib3sr148rw2hs78ecvux"
-EVENTS_FILE     = Path("/root/events.json")
-FAILURES_FILE   = Path("/root/spx_bot_failures.json")
-TRADE_LOCK_FILE = Path("/root/trade_lock.json")
-MONTHLY_CSV_DIR = Path("/var/log/spx_bot")
-MEMORY_WARN_MB  = 450  # Warn if RSS exceeds this (MB)
+EVENTS_FILE          = Path("/root/events.json")
+FAILURES_FILE        = Path("/root/spx_bot_failures.json")
+TRADE_LOCK_FILE      = Path("/root/trade_lock.json")
+MONTHLY_CSV_DIR      = Path("/var/log/spx_bot")
+PNL_FILE             = Path("/root/spxbot/pnl.json")
+MEMORY_WARN_FILE     = Path("/root/spxbot/memory_warn.json")
+RECOVERY_COUNT_FILE  = Path("/root/spxbot/recovery_count.json")
+REPORTS_DIR          = Path("/root/spxbot/reports")
+MEMORY_WARN_MB       = 450  # Legacy: process RSS threshold (MB)
+MEMORY_WARN_PCT      = 80   # System-wide memory usage % threshold
 TRADE_PASSWORD  = os.environ.get("TRADE_PASSWORD", "")
 OPEND_HOST     = "127.0.0.1"
 OPEND_PORT     = 11111
@@ -176,16 +181,65 @@ def append_monthly_csv(record: dict):
     except Exception as e:
         log.warning(f"monthly CSV write failed: {e}")
 
+# ── pnl.json management ───────────────────────────────────────────────────────
+def load_pnl() -> list:
+    """Load pnl.json, return list of trade records."""
+    try:
+        if PNL_FILE.exists():
+            return json.loads(PNL_FILE.read_text()).get("trades", [])
+    except Exception:
+        pass
+    return []
+
+def append_pnl_entry(record: dict):
+    """Append trade record to pnl.json (entries + exits)."""
+    try:
+        PNL_FILE.parent.mkdir(parents=True, exist_ok=True)
+        trades = load_pnl()
+        record.setdefault("date", datetime.datetime.now(ET).strftime("%Y-%m-%d"))
+        record.setdefault("ts", datetime.datetime.now(ET).isoformat())
+        trades.append(record)
+        PNL_FILE.write_text(json.dumps({"trades": trades}, indent=2))
+    except Exception as e:
+        log.warning(f"pnl.json write failed: {e}")
+
 # ── Memory monitor ────────────────────────────────────────────────────────────
 def check_memory_usage():
-    """Warn via Pushover if process RSS exceeds MEMORY_WARN_MB."""
+    """Check system-wide memory usage %. If >MEMORY_WARN_PCT, flag for morning summary (no immediate push)."""
     try:
-        rss_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        # Linux: kb, macOS: bytes
-        rss_mb = rss_kb / 1024 if sys.platform != "darwin" else rss_kb / (1024 * 1024)
-        if rss_mb > MEMORY_WARN_MB:
-            log.warning(f"Memory usage high: {rss_mb:.0f} MB > {MEMORY_WARN_MB} MB")
-            pushover("SPX Bot", f"⚠️メモリ使用量 {rss_mb:.0f}MB が閾値 {MEMORY_WARN_MB}MB を超えました")
+        with open("/proc/meminfo") as f:
+            info = {}
+            for line in f.readlines():
+                parts = line.split()
+                if len(parts) >= 2:
+                    info[parts[0].rstrip(":")] = int(parts[1])
+        total = info.get("MemTotal", 0)
+        available = info.get("MemAvailable", 0)
+        if total == 0:
+            return
+        used_pct = (total - available) / total * 100
+        if used_pct > MEMORY_WARN_PCT:
+            log.warning(f"System memory high: {used_pct:.1f}% > {MEMORY_WARN_PCT}%")
+            try:
+                MEMORY_WARN_FILE.parent.mkdir(parents=True, exist_ok=True)
+                data = {}
+                if MEMORY_WARN_FILE.exists():
+                    data = json.loads(MEMORY_WARN_FILE.read_text())
+                data["count"] = data.get("count", 0) + 1
+                data["max_pct"] = max(float(data.get("max_pct", 0)), used_pct)
+                data["last"] = datetime.datetime.now(ET).isoformat()
+                MEMORY_WARN_FILE.write_text(json.dumps(data))
+            except Exception as e:
+                log.warning(f"Memory warn flag write failed: {e}")
+    except FileNotFoundError:
+        # /proc/meminfo not available (macOS dev): fall back to RSS check
+        try:
+            rss_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            rss_mb = rss_kb / (1024 * 1024) if sys.platform == "darwin" else rss_kb / 1024
+            if rss_mb > MEMORY_WARN_MB:
+                log.warning(f"Process RSS high: {rss_mb:.0f}MB > {MEMORY_WARN_MB}MB")
+        except Exception:
+            pass
     except Exception as e:
         log.warning(f"Memory check failed: {e}")
 
@@ -676,14 +730,20 @@ class SPXBot:
         self._margin_ok: bool = True  # set False if startup margin check fails
 
     def get_expiry(self) -> str:
-        """0DTE on Mon/Wed/Fri, 1DTE on Tue/Thu."""
+        """0DTE on Mon/Wed/Fri, 1DTE on Tue/Thu.
+        If calculated expiry is a US market holiday, use previous business day."""
         now = datetime.datetime.now(ET)
         wd  = now.weekday()
-        if wd in (0, 2, 4):  # Mon, Wed, Fri
-            return now.strftime("%Y-%m-%d")
-        else:
-            next_day = now + datetime.timedelta(days=1)
-            return next_day.strftime("%Y-%m-%d")
+        if wd in (0, 2, 4):  # Mon, Wed, Fri → 0DTE
+            expiry_date = now.date()
+        else:                 # Tue, Thu → 1DTE
+            expiry_date = (now + datetime.timedelta(days=1)).date()
+        # Adjust backward if expiry falls on a holiday or weekend
+        for _ in range(10):
+            if expiry_date not in US_HOLIDAYS and expiry_date.weekday() < 5:
+                break
+            expiry_date -= datetime.timedelta(days=1)
+        return expiry_date.strftime("%Y-%m-%d")
 
     def should_enter(self, current_hour: int, current_min: int) -> bool:
         for h, m in ENTRY_TIMES:
@@ -788,6 +848,14 @@ class SPXBot:
                 "net_credit": net_credit,
                 "result": "entered",
             })
+            append_pnl_entry({
+                "event": "entry",
+                "direction": direction,
+                "sell_strike": sell_strike,
+                "buy_strike": buy_strike,
+                "qty": qty,
+                "net_credit": net_credit,
+            })
 
             # Tail hedge: buy delta-0.05 OTM put (daily, once)
             if "hedge" not in self.traded_times:
@@ -837,10 +905,22 @@ class SPXBot:
             if pl_ratio >= PROFIT_TARGET:
                 log.info(f"Profit target {pl_ratio:.1%} >= {PROFIT_TARGET:.0%} → closing {pos.get('code')}")
                 self.eng.close_all_positions("profit_target")
+                append_pnl_entry({
+                    "event": "exit", "reason": "profit_target",
+                    "code": pos.get("code", ""), "qty": pos.get("qty", 0),
+                    "pnl_usd": round(float(current_pl), 2),
+                    "pl_ratio": round(pl_ratio, 4),
+                })
                 break
             elif pl_ratio <= -STOP_LOSS_MULT:
                 log.info(f"Stop loss {pl_ratio:.1%} <= -{STOP_LOSS_MULT:.0%} → closing {pos.get('code')}")
                 self.eng.close_all_positions("stop_loss")
+                append_pnl_entry({
+                    "event": "exit", "reason": "stop_loss",
+                    "code": pos.get("code", ""), "qty": pos.get("qty", 0),
+                    "pnl_usd": round(float(current_pl), 2),
+                    "pl_ratio": round(pl_ratio, 4),
+                })
                 break
 
     # ── Nightly helpers (20:00 ET = 9:00 JST) ────────────────────────────────
@@ -903,46 +983,143 @@ class SPXBot:
             pushover("SPX Bot", expiry_warn, priority=1)
             log.warning(f"Nightly: {expiry_warn}")
 
+    def _export_monthly_pnl_csv(self):
+        """1st of month: export pnl.json → reports/trades_YYYYMM.csv with USD/JPY rate."""
+        try:
+            REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+            now_et = datetime.datetime.now(ET)
+            # Export previous month
+            first_this_month = now_et.date().replace(day=1)
+            prev_month = first_this_month - datetime.timedelta(days=1)
+            month_str = prev_month.strftime("%Y%m")
+
+            # Fetch USD/JPY rate via yfinance (best-effort)
+            usdjpy = 150.0
+            try:
+                import yfinance as yf
+                ticker = yf.Ticker("JPY=X")
+                hist = ticker.history(period="1d")
+                if not hist.empty:
+                    usdjpy = float(hist["Close"].iloc[-1])
+                    log.info(f"USD/JPY rate: {usdjpy:.2f}")
+            except Exception as e:
+                log.warning(f"yfinance USD/JPY fetch failed: {e}")
+
+            trades = load_pnl()
+            month_prefix = prev_month.strftime("%Y-%m")
+            month_trades = [t for t in trades if t.get("date", "").startswith(month_prefix)]
+
+            if not month_trades:
+                log.info(f"No trades in {month_prefix} to export")
+                return
+
+            csv_path = REPORTS_DIR / f"trades_{month_str}.csv"
+            fieldnames = ["date", "ts", "event", "direction", "sell_strike", "buy_strike",
+                          "qty", "net_credit", "pnl_usd", "pnl_jpy", "reason", "pl_ratio"]
+            with open(csv_path, "w", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+                writer.writeheader()
+                for t in month_trades:
+                    t["usdjpy"] = usdjpy
+                    pnl_usd = t.get("pnl_usd", 0) or 0
+                    t["pnl_jpy"] = round(pnl_usd * usdjpy, 0)
+                    writer.writerow(t)
+            log.info(f"Monthly CSV exported: {csv_path} ({len(month_trades)} trades, USD/JPY={usdjpy:.2f})")
+            pushover("SPX Bot", f"📄月次CSV出力: {csv_path.name} ({len(month_trades)}件, ¥{usdjpy:.1f}/$)")
+        except Exception as e:
+            log.warning(f"Monthly CSV export failed: {e}")
+
     def run_daily_summary_jst(self):
-        """9:00 JST (= 20:00 ET) daily summary + expiry/holiday check."""
+        """9:00 JST (= 20:00 ET) daily summary.
+        Full report on issues; compact 1-line when all normal."""
         now_et = datetime.datetime.now(ET)
         jst = zoneinfo.ZoneInfo("Asia/Tokyo")
         now_jst = now_et.astimezone(jst)
         today_jst = now_jst.date()
 
-        # Check if today JST is a US holiday (next ET trading day)
+        # ── 1. Yesterday's P&L (current ET session date, just ended at 16:00 ET)
+        session_date = now_et.strftime("%Y-%m-%d")
+        pnl_data = load_pnl()
+        session_trades = [t for t in pnl_data if t.get("date") == session_date]
+        entries  = [t for t in session_trades if t.get("event") == "entry"]
+        exits    = [t for t in session_trades if t.get("event") == "exit"]
+        session_pnl = sum(t.get("pnl_usd", 0) or 0 for t in exits)
+        wins     = sum(1 for t in exits if (t.get("pnl_usd") or 0) > 0)
+        losses   = len(exits) - wins
+
+        # ── 2. Weekly P&L (past 5 ET trading days)
+        week_start = now_et.date() - datetime.timedelta(days=5)
+        week_trades = [t for t in pnl_data
+                       if t.get("event") == "exit" and t.get("date", "") >= str(week_start)]
+        weekly_pnl = sum(t.get("pnl_usd", 0) or 0 for t in week_trades)
+        total_pnl  = sum(t.get("pnl_usd", 0) or 0
+                         for t in pnl_data if t.get("event") == "exit")
+
+        # ── 3. Memory warning flag
+        mem_warn = ""
+        try:
+            if MEMORY_WARN_FILE.exists():
+                mw = json.loads(MEMORY_WARN_FILE.read_text())
+                if mw.get("count", 0) > 0:
+                    mem_warn = f"⚠️メモリ警告{mw['count']}回(最大{mw.get('max_pct', 0):.0f}%)"
+                MEMORY_WARN_FILE.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+        # ── 4. Auto-recovery count (written by health_check GitHub Actions via SSH)
+        recovery_warn = ""
+        try:
+            if RECOVERY_COUNT_FILE.exists():
+                rc = json.loads(RECOVERY_COUNT_FILE.read_text())
+                count = rc.get("count", 0)
+                if count > 0:
+                    recovery_warn = f"夜中に自動復旧{count}回"
+                RECOVERY_COUNT_FILE.write_text(json.dumps({"count": 0}))
+        except Exception:
+            pass
+
+        # ── 5. Today's trade plan (upcoming ET session)
         next_et = (now_et + datetime.timedelta(days=1)).date()
-        holiday_note = ""
-        if next_et in US_HOLIDAYS:
-            holiday_note = f"\n🎌次回取引日({next_et})は米国祝日のため休場です。"
-
-        # Quarterly OpEx check for next ET day
-        opex_note = ""
-        if next_et.month in (3, 6, 9, 12) and next_et.weekday() == 4:
-            first_day = next_et.replace(day=1)
-            first_friday = first_day + datetime.timedelta(days=(4 - first_day.weekday()) % 7)
-            third_friday = first_friday + datetime.timedelta(weeks=2)
-            if next_et == third_friday:
-                opex_note = "\n⚠️明日は四半期OpEx(SQ日)のためノートレード予定。"
-
-        # Lock expiry check
-        lock_note = self._get_lock_expiry_warning()
-        if lock_note:
-            lock_note = f"\n{lock_note}"
-
-        # Build summary
-        traded = [k for k in self.traded_times if k not in ("direction", "nightly_checked", "hedge", "daily_summary")]
-        if traded:
-            summary = f"本日エントリー: {len(traded)}回\n取引時刻: {', '.join(traded)}"
+        notrade_reason = self._notrade_reason_for_date(next_et)
+        if next_et.weekday() >= 5:
+            plan_str = "週末休場"
+        elif notrade_reason:
+            plan_str = f"ノートレード({notrade_reason})"
         else:
-            summary = "本日エントリーなし"
+            # ET entry times → JST (EDT = UTC-4, JST = UTC+9, diff = +13h)
+            jst_times = [f"{(h + 13) % 24}:{m:02d}" for h, m in ENTRY_TIMES]
+            plan_str = "・".join(jst_times) + " JST"
 
-        msg = (
-            f"📊 SPX Bot 日次サマリー ({today_jst.strftime('%Y/%m/%d')} 09:00 JST)\n"
-            f"{summary}{holiday_note}{opex_note}{lock_note}"
-        )
-        pushover("SPX Bot 日次レポート", msg)
-        log.info(f"Daily summary sent: {summary}")
+        # ── 6. Lock expiry warning
+        lock_note = self._get_lock_expiry_warning()
+
+        # ── Determine compact vs. full report
+        has_trades = bool(entries or exits)
+        has_issues = bool(mem_warn or recovery_warn or lock_note or
+                          session_pnl != 0 or has_trades)
+
+        if not has_issues:
+            msg = f"✅全正常 | 今日:{plan_str}"
+            pushover("SPX Bot", msg)
+        else:
+            lines = [f"📊SPX Bot日次 ({today_jst.strftime('%m/%d')} 09:00JST)"]
+            if exits:
+                lines.append(f"昨日: {len(entries)}エントリー {wins}勝{losses}敗 P&L:${session_pnl:+.0f}")
+            elif entries:
+                lines.append(f"昨日: {len(entries)}エントリー(決済未確認)")
+            else:
+                lines.append("昨日: エントリーなし")
+            lines.append(f"今日予定: {plan_str}")
+            if recovery_warn:
+                lines.append(f"🔄{recovery_warn}")
+            if mem_warn:
+                lines.append(mem_warn)
+            if lock_note:
+                lines.append(lock_note)
+            lines.append(f"週間: ${weekly_pnl:+.0f} / 累計: ${total_pnl:+.0f}")
+            msg = "\n".join(lines)
+            pushover("SPX Bot 日次レポート", msg)
+        log.info(f"Daily summary sent: {msg[:100]}")
 
     def run_forever(self):
         log.info("=== SPX Bot starting ===")
@@ -985,6 +1162,12 @@ class SPXBot:
                     self.run_nightly_jst_check()
                     self.traded_times["nightly_checked"] = True
                     self.traded_times["daily_summary"] = True
+                    # Monthly CSV export on 1st of JST month
+                    jst = zoneinfo.ZoneInfo("Asia/Tokyo")
+                    now_jst = now.astimezone(jst)
+                    if now_jst.day == 1 and "monthly_export" not in self.traded_times:
+                        self._export_monthly_pnl_csv()
+                        self.traded_times["monthly_export"] = True
 
                 # Hourly memory check
                 if m == 0 and f"memcheck_{h}" not in self.traded_times:

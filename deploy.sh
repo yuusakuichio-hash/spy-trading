@@ -38,6 +38,8 @@ FILES=(
     test_spx_bot.py
     spx_bot_verify.py
     logrotate.conf
+    gmail_monitor.py
+    gmail.service
 )
 for f in "${FILES[@]}"; do
     echo "  → $f"
@@ -53,8 +55,10 @@ echo "[5/8] Installing systemd services..."
 $SSH "
     cp $REMOTE_DIR/spxbot.service /etc/systemd/system/spxbot.service
     cp $REMOTE_DIR/health.service /etc/systemd/system/health.service
+    [ -f $REMOTE_DIR/gmail.service ] && cp $REMOTE_DIR/gmail.service /etc/systemd/system/gmail.service || true
     systemctl daemon-reload
     systemctl enable spxbot health
+    systemctl enable gmail 2>/dev/null || true
     echo '  ✅ Services registered'
 "
 

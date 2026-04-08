@@ -9,7 +9,7 @@ on:
 jobs:
   health-check:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 20
 
     steps:
       - name: Check VPS health endpoint
@@ -35,8 +35,9 @@ jobs:
             -H "Authorization: Bearer ${{ secrets.VULTR_API_KEY }}" \
             "https://api.vultr.com/v2/instances/${{ secrets.VULTR_INSTANCE_ID }}/reboot")
           echo "Vultr API response: $RESP"
-          # Wait 120s for VPS to come back
-          sleep 120
+          # Wait 10 minutes for VPS to come back
+          echo "Waiting 600s for VPS restart..."
+          sleep 600
 
       - name: Verify recovery after restart
         id: verify
@@ -54,6 +55,23 @@ jobs:
             sleep 30
           done
           echo "recovered=false" >> $GITHUB_OUTPUT
+
+      - name: Log recovery count to VPS (for morning summary)
+        if: steps.check.outputs.status == 'unhealthy' && steps.verify.outputs.recovered == 'true'
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.VPS_IP }} >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no root@${{ secrets.VPS_IP }} \
+            'python3 -c "
+import json, pathlib
+f = pathlib.Path(\"/root/spxbot/recovery_count.json\")
+d = json.loads(f.read_text()) if f.exists() else {\"count\": 0}
+d[\"count\"] = d.get(\"count\", 0) + 1
+f.write_text(json.dumps(d))
+print(\"recovery_count incremented to\", d[\"count\"])
+"' || echo "SSH log failed (non-fatal)"
 
       - name: Send Pushover alert on recovery failure
         if: steps.check.outputs.status == 'unhealthy' && steps.verify.outputs.recovered == 'false'
