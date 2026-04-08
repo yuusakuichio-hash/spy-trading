@@ -1,0 +1,188 @@
+name: Emergency SSH Recovery + Deploy
+
+on:
+  workflow_dispatch:
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      VPS_IP: ${{ secrets.VPS_IP }}
+      SSH_OPTS: -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.VPS_IP }} >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Try direct SSH first
+        id: direct_ssh
+        run: |
+          RESULT=$(ssh $SSH_OPTS root@$VPS_IP "echo DIRECT_OK" 2>&1 || echo "FAILED")
+          if echo "$RESULT" | grep -q DIRECT_OK; then
+            echo "direct=true" >> $GITHUB_OUTPUT
+            echo "Direct SSH works!"
+          else
+            echo "direct=false" >> $GITHUB_OUTPUT
+            echo "Direct SSH failed: $RESULT"
+          fi
+
+      - name: Get new default password via Vultr API
+        id: vultr_pw
+        if: steps.direct_ssh.outputs.direct != 'true'
+        run: |
+          python3 << 'PYEOF'
+          import urllib.request, json, os, sys
+          api_key = "${{ secrets.VULTR_API_KEY }}".strip()
+          instance_id = "49b7b2ff-21cb-42ba-a35d-10b53663cd07"
+          url = f"https://api.vultr.com/v2/instances/{instance_id}"
+          req = urllib.request.Request(url, headers={"Authorization": f"Bearer {api_key}"})
+          try:
+              with urllib.request.urlopen(req, timeout=15) as r:
+                  data = json.loads(r.read())
+              inst = data.get("instance", {})
+              pw = inst.get("default_password", "")
+              status = inst.get("status", "unknown")
+              server_status = inst.get("server_status", "unknown")
+              print(f"Instance status: {status} / {server_status}")
+              print(f"Has default password: {'yes' if pw else 'no'}")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                  f.write(f"default_pw={pw}\n")
+          except Exception as e:
+              print(f"API error: {e}")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                  f.write("default_pw=\n")
+          PYEOF
+
+      - name: Inject SSH key via new default password
+        id: inject
+        if: steps.direct_ssh.outputs.direct != 'true'
+        run: |
+          sudo apt-get install -y sshpass -qq 2>/dev/null || true
+          PUBKEY="${{ secrets.VPS_SSH_PUBKEY }}"
+          for PW in "${{ steps.vultr_pw.outputs.default_pw }}" "${{ secrets.VPS_ROOT_PASSWORD }}"; do
+            [ -z "$PW" ] && continue
+            echo "Trying password auth..."
+            RESULT=$(sshpass -p "$PW" ssh \
+              -o StrictHostKeyChecking=no -o ConnectTimeout=15 \
+              -o PasswordAuthentication=yes -o PubkeyAuthentication=no \
+              -o PreferredAuthentications=password \
+              root@$VPS_IP \
+              "mkdir -p /root/.ssh && chmod 700 /root/.ssh && echo '$PUBKEY' >> /root/.ssh/authorized_keys && sort -u /root/.ssh/authorized_keys -o /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys && echo INJECT_OK" 2>&1 || echo "FAIL")
+            if echo "$RESULT" | grep -q INJECT_OK; then
+              echo "Key injected successfully"
+              echo "injected=true" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            echo "Attempt result: ${RESULT:0:200}"
+          done
+          echo "injected=false" >> $GITHUB_OUTPUT
+
+      - name: Verify SSH
+        id: ssh_verify
+        continue-on-error: true
+        run: |
+          RESULT=$(ssh $SSH_OPTS root@$VPS_IP "echo SSH_OK && cat /etc/os-release | head -3" 2>&1)
+          echo "$RESULT"
+          if echo "$RESULT" | grep -q SSH_OK; then
+            echo "ssh_ok=true" >> $GITHUB_OUTPUT
+          else
+            echo "ssh_ok=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Install required packages on VPS
+        if: steps.ssh_verify.outputs.ssh_ok == 'true'
+        run: |
+          ssh $SSH_OPTS root@$VPS_IP bash << 'REMOTE'
+            apt-get update -qq
+            apt-get install -y python3-pip python3-requests python3-venv git xvfb -qq
+            pip3 install futu-api requests yfinance anthropic google-auth google-auth-oauthlib google-api-python-client --break-system-packages 2>&1 | tail -5
+            mkdir -p /root/spxbot /var/log/spx_bot /root/logs /root/spxbot/reports
+            echo "Package install complete"
+          REMOTE
+
+      - name: Deploy all files
+        if: steps.ssh_verify.outputs.ssh_ok == 'true'
+        run: |
+          for f in spx_bot.py health_server.py health.service spxbot.service \
+                   logrotate.conf test_spx_bot.py spx_bot_verify.py \
+                   gmail_monitor.py gmail.service; do
+            [ -f "$f" ] && scp $SSH_OPTS "$f" "root@$VPS_IP:/root/spxbot/$f" && echo "Uploaded: $f"
+          done
+          ssh $SSH_OPTS root@$VPS_IP bash << 'REMOTE'
+            cp /root/spxbot/spxbot.service /etc/systemd/system/spxbot.service
+            cp /root/spxbot/health.service /etc/systemd/system/health.service
+            [ -f /root/spxbot/gmail.service ] && cp /root/spxbot/gmail.service /etc/systemd/system/gmail.service || true
+            cp /root/spxbot/logrotate.conf /etc/logrotate.d/spxbot 2>/dev/null || true
+            timedatectl set-timezone America/New_York
+            systemctl daemon-reload
+            systemctl enable health spxbot
+            systemctl enable gmail 2>/dev/null || true
+            echo "=== Files deployed ==="
+            ls -la /root/spxbot/
+          REMOTE
+
+      - name: Run verify.py
+        if: steps.ssh_verify.outputs.ssh_ok == 'true'
+        id: verify
+        run: |
+          ssh $SSH_OPTS root@$VPS_IP \
+            "SPX_LOG_DIR=/var/log/spx_bot python3 /root/spxbot/spx_bot_verify.py" \
+            | tee /tmp/verify.txt || true
+          cat /tmp/verify.txt
+          grep "RESULT:" /tmp/verify.txt || true
+
+      - name: Start health service and test
+        if: steps.ssh_verify.outputs.ssh_ok == 'true'
+        run: |
+          ssh $SSH_OPTS root@$VPS_IP "
+            systemctl restart health 2>/dev/null || true
+            sleep 3
+            curl -s http://localhost:8080/health || echo '(health server not up yet)'
+            systemctl status health --no-pager 2>/dev/null | head -5 || true
+          " || true
+
+      - name: Pushover notification
+        if: steps.ssh_verify.outputs.ssh_ok == 'true'
+        run: |
+          VERIFY=$(grep "RESULT:" /tmp/verify.txt 2>/dev/null | tail -1 || echo "verify done")
+          curl -s -X POST https://api.pushover.net/1/messages.json \
+            -d "token=${{ secrets.PUSHOVER_TOKEN }}" \
+            -d "user=${{ secrets.PUSHOVER_USER }}" \
+            -d "title=VPS SSH復旧+デプロイ完了" \
+            -d "message=SSH access restored + files deployed. ${VERIFY}" \
+            -d "priority=0" || true
+
+      - name: Report if SSH still blocked
+        if: steps.ssh_verify.outputs.ssh_ok != 'true'
+        run: |
+          echo "================================================================"
+          echo "SSH RECOVERY FAILED — MANUAL ACTION REQUIRED"
+          echo "================================================================"
+          echo ""
+          echo "The VPS was reinstalled. To restore SSH access:"
+          echo ""
+          echo "1. Go to: https://my.vultr.com → VPS spxbot (198.13.37.17)"
+          echo "2. Click 'View Console' (KVM/VNC)"
+          echo "3. Log in with root and the VPS password"
+          echo "4. Run this command:"
+          echo ""
+          echo "   echo '${{ secrets.VPS_SSH_PUBKEY }}' >> /root/.ssh/authorized_keys"
+          echo "   chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys"
+          echo ""
+          echo "5. Re-run this workflow after adding the key"
+          echo "================================================================"
+          curl -s -X POST https://api.pushover.net/1/messages.json \
+            -d "token=${{ secrets.PUSHOVER_TOKEN }}" \
+            -d "user=${{ secrets.PUSHOVER_USER }}" \
+            -d "title=VPS手動作業が必要" \
+            -d "message=VPSが再インストールされました。VultrコンソールからSSH鍵を追加してください。" \
+            -d "priority=1" || true
