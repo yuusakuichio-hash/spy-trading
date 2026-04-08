@@ -1,7 +1,7 @@
 #!/bin/bash
 # deploy.sh — Full VPS deployment for SPX Bot
 # Usage: bash deploy.sh [SSH_KEY_PATH]
-# Example: bash deploy.sh ~/.ssh/vultr_spxbot_key
+# Example: bash deploy.sh ~/.ssh/deploy_key
 # Run from local machine with repo cloned.
 
 set -euo pipefail
@@ -10,7 +10,7 @@ VPS_IP="198.13.37.17"
 VPS_USER="root"
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 REMOTE_DIR="/root/spxbot"
-SSH_KEY="${1:-/tmp/vultr_spxbot_key}"
+SSH_KEY="${1:-$HOME/.ssh/deploy_key}"
 
 SSH="ssh -i $SSH_KEY -o StrictHostKeyChecking=no $VPS_USER@$VPS_IP"
 SCP="scp -i $SSH_KEY -o StrictHostKeyChecking=no"
