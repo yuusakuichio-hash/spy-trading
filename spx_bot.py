@@ -65,7 +65,8 @@ US_HOLIDAYS_2026 = {
 }
 
 # No-trade event keywords
-NOTRADE_KEYWORDS = ["fomc", "cpi", "nfp", "non-farm", "opex", "quadruple"]
+NOTRADE_KEYWORDS = ["fomc", "cpi", "nfp", "non-farm", "opex", "quadruple",
+                    "pce", "gdp", "jobless", "claims"]
 
 # ── Pushover ──────────────────────────────────────────────────────────────────
 def pushover(title: str, message: str, priority: int = 0) -> bool:
@@ -186,7 +187,7 @@ def is_notrade_today() -> bool:
 
 # ── moomoo futu-api client ────────────────────────────────────────────────────
 try:
-    from futu import OpenQuoteContext, OpenOptionTradeContext, TrdMarket, TrdEnv
+    from futu import OpenQuoteContext, OpenUSTradeContext, TrdMarket, TrdEnv
     from futu import TrdSide, OrderType, RET_OK
     import futu as ft
     FUTU_AVAILABLE = True
@@ -281,22 +282,47 @@ class MarketData:
 
 
 class TradeEngine:
-    def __init__(self, account_id: str = "2756"):
-        self.account_id = account_id
+    def __init__(self, account_id: str = ""):
+        self.account_id = account_id  # resolved dynamically on connect
+        self.trade_env = TrdEnv.REAL if FUTU_AVAILABLE else None
         self.trade_ctx = None
 
     def connect(self):
         if not FUTU_AVAILABLE:
             return False
         try:
-            self.trade_ctx = OpenOptionTradeContext(
+            self.trade_ctx = OpenUSTradeContext(
                 host=OPEND_HOST, port=OPEND_PORT
             )
             log.info("Trade context connected")
+            # Resolve account ID dynamically
+            self._resolve_account()
             return True
         except Exception as e:
             log.error(f"Trade connect failed: {e}")
             return False
+
+    def _resolve_account(self):
+        """Find the best available account: prefer REAL, fall back to SIMULATE."""
+        ret, data = self.trade_ctx.get_acc_list()
+        if ret != RET_OK or data.empty:
+            log.warning("get_acc_list failed; account_id unresolved")
+            return
+        # Prefer REAL account
+        real = data[data["trd_env"] == "REAL"]
+        if not real.empty:
+            self.account_id = str(int(real.iloc[0]["acc_id"]))
+            self.trade_env = TrdEnv.REAL
+            log.info(f"Resolved REAL account: acc_id={self.account_id}")
+            return
+        # Fall back to SIMULATE
+        sim = data[data["trd_env"] == "SIMULATE"]
+        if not sim.empty:
+            self.account_id = str(int(sim.iloc[0]["acc_id"]))
+            self.trade_env = TrdEnv.SIMULATE
+            log.warning(f"No REAL account found; using SIMULATE acc_id={self.account_id}")
+            return
+        log.error("No usable account found in get_acc_list()")
 
     def close(self):
         if self.trade_ctx:
@@ -305,11 +331,17 @@ class TradeEngine:
     def get_account_cash(self) -> float:
         if not FUTU_AVAILABLE or not self.trade_ctx:
             return 10000.0  # dry-run
+        if not self.account_id:
+            log.error("account_id not resolved; cannot query cash")
+            return 0.0
         ret, data = self.trade_ctx.accinfo_query(
-            trd_env=TrdEnv.REAL, acc_id=int(self.account_id)
+            trd_env=self.trade_env, acc_id=int(self.account_id)
         )
         if ret == RET_OK and not data.empty:
-            return float(data.iloc[0]["cash"])
+            cash = float(data.iloc[0]["cash"])
+            log.info(f"Account cash ({self.trade_env} acc={self.account_id}): ${cash:,.2f}")
+            return cash
+        log.error(f"accinfo_query failed for acc_id={self.account_id}: {data}")
         return 0.0
 
     def calc_position_size(self, cash: float, vix: float, vix_prev: Optional[float]) -> int:
@@ -353,7 +385,7 @@ class TradeEngine:
             log.info(f"[DRY-RUN] {direction}: SELL {sell_code} / BUY {buy_code} qty={qty}")
             return True
 
-        env = TrdEnv.REAL
+        env = self.trade_env
         acc = int(self.account_id)
 
         # Leg1: Sell
@@ -412,7 +444,7 @@ class TradeEngine:
         ret, data = self.trade_ctx.place_order(
             price=0, qty=qty, code=put_code,
             trd_side=TrdSide.BUY, order_type=OrderType.MARKET,
-            trd_env=TrdEnv.REAL, acc_id=int(self.account_id)
+            trd_env=self.trade_env, acc_id=int(self.account_id)
         )
         if ret == RET_OK:
             log.info(f"Tail hedge placed: {put_code} qty={qty}")
@@ -424,7 +456,7 @@ class TradeEngine:
         if not FUTU_AVAILABLE or not self.trade_ctx:
             return []
         ret, data = self.trade_ctx.position_list_query(
-            trd_env=TrdEnv.REAL, acc_id=int(self.account_id)
+            trd_env=self.trade_env, acc_id=int(self.account_id)
         )
         if ret == RET_OK:
             return data.to_dict("records")
@@ -437,7 +469,7 @@ class TradeEngine:
             log.info(f"No positions to close ({reason})")
             return
         log.info(f"Force closing {len(positions)} positions ({reason})")
-        env = TrdEnv.REAL
+        env = self.trade_env
         acc = int(self.account_id)
         for pos in positions:
             code = pos.get("code", "")
