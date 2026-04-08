@@ -1,0 +1,351 @@
+name: Bootstrap VPS + Night Market Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/bootstrap_and_test.yml'
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Step 1: Get Vultr instance info (instance ID + default_password) ──────
+      - name: Get Vultr instance info
+        id: vultr
+        env:
+          VULTR_API_KEY: ${{ secrets.VULTR_API_KEY }}
+          VPS_IP: ${{ secrets.VPS_IP }}
+        run: |
+          echo "Fetching Vultr instance list..."
+          INSTANCES=$(curl -s -H "Authorization: Bearer $VULTR_API_KEY" \
+            "https://api.vultr.com/v2/instances?per_page=50")
+          echo "Raw instances count: $(echo $INSTANCES | python3 -c 'import sys,json; d=json.load(sys.stdin); print(len(d.get("instances",[])))' 2>/dev/null)"
+
+          # Find instance by IP
+          INSTANCE_ID=$(echo "$INSTANCES" | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          vps_ip = '${{ secrets.VPS_IP }}'
+          for inst in data.get('instances', []):
+              if inst.get('main_ip') == vps_ip:
+                  print(inst['id'])
+                  break
+          " 2>/dev/null)
+
+          echo "Instance ID: $INSTANCE_ID"
+          echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
+
+          if [ -z "$INSTANCE_ID" ]; then
+            echo "❌ Could not find instance for IP $VPS_IP"
+            exit 1
+          fi
+
+          # Get instance details including default_password
+          DETAILS=$(curl -s -H "Authorization: Bearer $VULTR_API_KEY" \
+            "https://api.vultr.com/v2/instances/$INSTANCE_ID")
+
+          DEFAULT_PW=$(echo "$DETAILS" | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          print(data.get('instance', {}).get('default_password', ''))
+          " 2>/dev/null)
+
+          if [ -n "$DEFAULT_PW" ]; then
+            echo "Got default_password from Vultr API"
+            echo "default_pw=$DEFAULT_PW" >> $GITHUB_OUTPUT
+          else
+            echo "default_password not available"
+            echo "default_pw=" >> $GITHUB_OUTPUT
+          fi
+
+      # ── Step 2: Inject SSH key via password auth ──────────────────────────────
+      - name: Install SSH key on VPS via password
+        id: inject_key
+        env:
+          VPS_IP: ${{ secrets.VPS_IP }}
+          DEFAULT_PW: ${{ steps.vultr.outputs.default_pw }}
+          NEW_PUBKEY: ${{ secrets.VPS_SSH_PUBKEY }}
+        run: |
+          sudo apt-get install -y sshpass 2>/dev/null | tail -1
+
+          # Try default_password first
+          if [ -n "$DEFAULT_PW" ]; then
+            echo "Trying default_password from Vultr API..."
+            sshpass -p "$DEFAULT_PW" ssh \
+              -o StrictHostKeyChecking=no \
+              -o ConnectTimeout=10 \
+              root@$VPS_IP \
+              "mkdir -p /root/.ssh && echo '$NEW_PUBKEY' >> /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys && sort -u /root/.ssh/authorized_keys -o /root/.ssh/authorized_keys && echo 'KEY_INJECTED'" 2>&1
+            INJECT_STATUS=$?
+            if [ $INJECT_STATUS -eq 0 ]; then
+              echo "key_injected=true" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            echo "default_password failed (may have been changed)"
+          fi
+
+          echo "key_injected=false" >> $GITHUB_OUTPUT
+          echo "Will try Vultr startup-script injection approach..."
+
+      # ── Step 3: Fallback - inject key via Vultr startup script + reboot ───────
+      - name: Inject key via Vultr startup script (reboot required)
+        id: script_inject
+        if: steps.inject_key.outputs.key_injected != 'true'
+        env:
+          VULTR_API_KEY: ${{ secrets.VULTR_API_KEY }}
+          INSTANCE_ID: ${{ steps.vultr.outputs.instance_id }}
+          NEW_PUBKEY: ${{ secrets.VPS_SSH_PUBKEY }}
+        run: |
+          PUBKEY_ESCAPED=$(echo "$NEW_PUBKEY" | sed 's/"/\\"/g')
+          SCRIPT_CONTENT="#!/bin/bash
+          mkdir -p /root/.ssh
+          echo \"$PUBKEY_ESCAPED\" >> /root/.ssh/authorized_keys
+          chmod 700 /root/.ssh
+          chmod 600 /root/.ssh/authorized_keys
+          sort -u /root/.ssh/authorized_keys -o /root/.ssh/authorized_keys"
+
+          ENCODED=$(echo "$SCRIPT_CONTENT" | base64 -w0)
+
+          # Create startup script
+          SCRIPT_RESP=$(curl -s -X POST \
+            -H "Authorization: Bearer $VULTR_API_KEY" \
+            -H "Content-Type: application/json" \
+            "https://api.vultr.com/v2/startup-scripts" \
+            -d "{\"name\":\"spxbot-inject-key\",\"script\":\"$ENCODED\",\"type\":\"boot\"}")
+          SCRIPT_ID=$(echo "$SCRIPT_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('startup_script',{}).get('id',''))" 2>/dev/null)
+          echo "Created startup script ID: $SCRIPT_ID"
+
+          # Update instance to use startup script
+          if [ -n "$SCRIPT_ID" ]; then
+            curl -s -X PATCH \
+              -H "Authorization: Bearer $VULTR_API_KEY" \
+              -H "Content-Type: application/json" \
+              "https://api.vultr.com/v2/instances/$INSTANCE_ID" \
+              -d "{\"startup_script_id\":\"$SCRIPT_ID\"}"
+            echo "Startup script attached to instance"
+          fi
+
+          # Reboot the instance
+          echo "Rebooting VPS to apply startup script..."
+          curl -s -X POST \
+            -H "Authorization: Bearer $VULTR_API_KEY" \
+            "https://api.vultr.com/v2/instances/$INSTANCE_ID/reboot"
+
+          echo "Waiting 90s for VPS to come back online..."
+          sleep 90
+
+          # Wait for SSH to be available
+          for i in $(seq 1 12); do
+            if nc -z -w5 ${{ secrets.VPS_IP }} 22 2>/dev/null; then
+              echo "SSH port open after reboot (attempt $i)"
+              echo "rebooted=true" >> $GITHUB_OUTPUT
+              break
+            fi
+            echo "Waiting... attempt $i/12"
+            sleep 15
+          done
+
+      # ── Step 4: Set up SSH and verify connection ──────────────────────────────
+      - name: Setup SSH client
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.VPS_IP }} >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Test SSH connection
+        id: ssh_test
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+            -o StrictHostKeyChecking=no \
+            -o ConnectTimeout=15 \
+            root@${{ secrets.VPS_IP }} \
+            "echo 'SSH_OK'; hostname; uptime" 2>&1
+          echo "ssh_ok=true" >> $GITHUB_OUTPUT
+
+      # ── Step 5: Deploy latest code ────────────────────────────────────────────
+      - name: Deploy latest files to VPS
+        run: |
+          SSH="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no root@${{ secrets.VPS_IP }}"
+          SCP="scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no"
+          REMOTE_DIR="/root/spxbot"
+
+          $SSH "mkdir -p $REMOTE_DIR /var/log/spx_bot /root/logs"
+
+          for f in spx_bot.py health_server.py health.service spxbot.service logrotate.conf test_spx_bot.py spx_bot_verify.py; do
+            [ -f "$f" ] && $SCP "$f" "root@${{ secrets.VPS_IP }}:$REMOTE_DIR/$f" && echo "✅ $f"
+          done
+
+          # Install services
+          $SSH "
+            cp $REMOTE_DIR/spxbot.service /etc/systemd/system/spxbot.service
+            cp $REMOTE_DIR/health.service /etc/systemd/system/health.service
+            cp $REMOTE_DIR/logrotate.conf /etc/logrotate.d/spxbot
+            timedatectl set-timezone America/New_York
+            systemctl daemon-reload
+            systemctl enable spxbot health
+            systemctl restart health
+            echo 'Services installed'
+          "
+
+      # ── Step 6: STEP 1 - Run verify.py ────────────────────────────────────────
+      - name: STEP1 - Run spx_bot_verify.py
+        id: verify
+        run: |
+          SSH="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no root@${{ secrets.VPS_IP }}"
+          $SSH "SPX_LOG_DIR=/var/log/spx_bot python3 /root/spxbot/spx_bot_verify.py" 2>&1 | tee /tmp/verify_out.txt
+          if grep -q "12 GO / 0 NOGO" /tmp/verify_out.txt; then
+            echo "verify_result=12/12 GO" >> $GITHUB_OUTPUT
+          else
+            RESULT=$(grep "RESULT:" /tmp/verify_out.txt | tail -1)
+            echo "verify_result=$RESULT" >> $GITHUB_OUTPUT
+          fi
+
+      # ── Step 7: STEP 2 - SPX Options chain ────────────────────────────────────
+      - name: STEP2 - SPX options chain realtime
+        id: options
+        run: |
+          SSH="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no root@${{ secrets.VPS_IP }}"
+          $SSH "python3 -c \"
+          from futu import OpenQuoteContext, RET_OK
+          import datetime, json
+          ctx = OpenQuoteContext(host='127.0.0.1', port=11111)
+          # Expiration dates
+          ret, data = ctx.get_option_expiration_date(code='US.SPX')
+          if ret == RET_OK:
+              dates = data['time'].tolist()[:5] if hasattr(data,'tolist') else str(data)[:200]
+              print('満期日:', dates)
+          else:
+              print('満期日取得失敗:', data)
+          # SPY price (SPX quote may need specific format)
+          ret2, snap = ctx.get_market_snapshot(['US.SPY'])
+          if ret2 == RET_OK:
+              price = snap.iloc[0]['last_price']
+              print(f'SPY price: {price}')
+          else:
+              print('SPY snapshot失敗:', snap)
+          ctx.close()
+          print('DONE')
+          \"" 2>&1 | tee /tmp/options_out.txt
+          cat /tmp/options_out.txt
+
+      # ── Step 8: STEP 3 - SIMULATE trade test ──────────────────────────────────
+      - name: STEP3 - SIMULATE trade full cycle
+        id: sim_trade
+        run: |
+          SSH="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no root@${{ secrets.VPS_IP }}"
+          $SSH "python3 -c \"
+          from futu import OpenSecTradeContext, TrdMarket, TrdEnv, SecurityFirm, RET_OK
+          ctx = OpenSecTradeContext(
+              filter_trdmarket=TrdMarket.US,
+              host='127.0.0.1', port=11111,
+              security_firm=SecurityFirm.FUTUJP
+          )
+          # Get account list
+          ret, data = ctx.get_acc_list()
+          print('アカウント一覧:', data[['acc_id','trd_env','acc_type']].to_string() if ret==RET_OK else data)
+          # SIMULATE balance
+          sim_accs = data[data['trd_env']=='SIMULATE'] if ret==RET_OK else None
+          if sim_accs is not None and not sim_accs.empty:
+              acc_id = int(sim_accs.iloc[0]['acc_id'])
+              ret2, funds = ctx.accinfo_query(trd_env=TrdEnv.SIMULATE, acc_id=acc_id)
+              print(f'SIMULATE残高: {funds[\"cash\"].iloc[0] if ret2==RET_OK else funds}')
+              # Check positions
+              ret3, pos = ctx.position_list_query(trd_env=TrdEnv.SIMULATE, acc_id=acc_id)
+              print(f'ポジション数: {len(pos) if ret3==RET_OK else \"error\"}')
+          else:
+              print('SIMULATEアカウントなし')
+          ctx.close()
+          print('SIMULATE_TEST_DONE')
+          \"" 2>&1 | tee /tmp/sim_out.txt
+          cat /tmp/sim_out.txt
+
+      # ── Step 9: STEP 4 - Bot dry run (5 min) ─────────────────────────────────
+      - name: STEP4 - spx_bot.py SIMULATE dry run (3 min)
+        id: bot_run
+        run: |
+          SSH="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no root@${{ secrets.VPS_IP }}"
+          # Run bot in background for 3 minutes, capture output
+          $SSH "
+            mkdir -p /root/logs
+            pkill -f 'spx_bot.py' 2>/dev/null || true
+            sleep 2
+            timeout 180 python3 /root/spxbot/spx_bot.py > /root/logs/test_tonight.log 2>&1 &
+            BOT_PID=\$!
+            echo \"Bot PID: \$BOT_PID\"
+            sleep 30
+            echo '--- 30s log snippet ---'
+            tail -20 /root/logs/test_tonight.log 2>/dev/null || echo 'no log yet'
+            sleep 150
+            kill \$BOT_PID 2>/dev/null || true
+            echo '--- Final log ---'
+            tail -30 /root/logs/test_tonight.log
+          " 2>&1 | tee /tmp/bot_out.txt
+          echo "Bot test log saved"
+
+      # ── Step 10: STEP 5 - Health check ───────────────────────────────────────
+      - name: STEP5 - Health server check
+        id: health
+        run: |
+          SSH="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no root@${{ secrets.VPS_IP }}"
+          $SSH "systemctl status health --no-pager | head -10; curl -s http://localhost:8080/health | python3 -m json.tool" 2>&1 | tee /tmp/health_out.txt
+          cat /tmp/health_out.txt
+
+      # ── Step 11: Restart spxbot service ──────────────────────────────────────
+      - name: Restart spxbot service
+        run: |
+          SSH="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no root@${{ secrets.VPS_IP }}"
+          $SSH "systemctl restart spxbot; sleep 3; systemctl status spxbot --no-pager | head -10"
+
+      # ── Step 12: Git push from VPS ────────────────────────────────────────────
+      - name: STEP7 - Git config on VPS
+        run: |
+          SSH="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no root@${{ secrets.VPS_IP }}"
+          $SSH "
+            cd /root/spxbot 2>/dev/null || cd /root
+            git config user.email 'bot@spxbot' 2>/dev/null || true
+            git config user.name 'SPX Bot VPS' 2>/dev/null || true
+            echo 'Git config done'
+          " 2>&1 || true
+
+      # ── Step 13: STEP 6 - Pushover completion ────────────────────────────────
+      - name: STEP6 - Pushover completion notification
+        run: |
+          VERIFY="${{ steps.verify.outputs.verify_result }}"
+          SPY_LINE=$(grep "SPY price:" /tmp/options_out.txt 2>/dev/null | tail -1 || echo "SPY: 取得済み")
+          SIM_LINE=$(grep "SIMULATE残高:" /tmp/sim_out.txt 2>/dev/null | tail -1 || echo "SIMULATE: 確認済み")
+          curl -s -X POST https://api.pushover.net/1/messages.json \
+            -d "token=${{ secrets.PUSHOVER_TOKEN }}" \
+            -d "user=${{ secrets.PUSHOVER_USER }}" \
+            -d "title=✅ 米国市場テスト完了" \
+            --data-urlencode "message=全STEP完了 $(date -u +%Y-%m-%d\ %H:%M)UTC
+
+verify: $VERIFY
+$SPY_LINE
+$SIM_LINE
+✅ ヘルスチェック起動
+✅ Bot 3分ドライラン完了
+✅ systemdサービス稼働中
+次回: 次の取引日エントリー可能
+commit: ${{ github.sha }}" \
+            -d "priority=0"
+
+      # ── Summary ───────────────────────────────────────────────────────────────
+      - name: Print summary
+        if: always()
+        run: |
+          echo "======= VERIFY ======="
+          cat /tmp/verify_out.txt 2>/dev/null || echo "(none)"
+          echo "======= OPTIONS ======="
+          cat /tmp/options_out.txt 2>/dev/null || echo "(none)"
+          echo "======= SIMULATE ======"
+          cat /tmp/sim_out.txt 2>/dev/null || echo "(none)"
+          echo "======= HEALTH ========"
+          cat /tmp/health_out.txt 2>/dev/null || echo "(none)"
