@@ -323,8 +323,8 @@ class TradeEngine:
                     if ret != RET_OK:
                         log.error(f"unlock_trade failed: {data}")
                         pushover(
-                            "取引ロック解除失敗",
-                            f"unlock_trade failed: {str(data)[:150]}",
+                            "SPX Bot",
+                            f"❌取引ロック解除失敗・Bot停止: {str(data)[:120]}",
                             priority=1,
                         )
                         self.trade_ctx.close()
@@ -393,6 +393,7 @@ class TradeEngine:
             )
             return capital if capital > 0 else 2500.0
         log.error(f"accinfo_query failed for acc_id={self.account_id}: {data}")
+        pushover("SPX Bot", "⚠️残高取得失敗・フォールバック使用中($2,500)", priority=0)
         return 2500.0
 
     def calc_position_size(self, cash: float, vix: float, vix_prev: Optional[float]) -> int:
@@ -629,7 +630,11 @@ class SPXBot:
 
         dir_label = "BullPut" if direction == "bull_put" else "BearCall"
         opt_label = "P" if direction == "bull_put" else "C"
-        log.info(f"Spread: SELL {sell_code} @ strike {sell_strike} / BUY {buy_code} @ strike {buy_strike} / qty={qty}")
+        # Estimate net credit: sell at bid, buy at ask (per share × 100 = per contract)
+        sell_bid = sell_opt.get("bid_price", sell_opt.get("last_price", 0))
+        buy_ask  = buy_opt.get("ask_price", buy_opt.get("last_price", 0))
+        net_credit = round(sell_bid - buy_ask, 2)
+        log.info(f"Spread: SELL {sell_code} @ strike {sell_strike} / BUY {buy_code} @ strike {buy_strike} / qty={qty} / net_credit=${net_credit}")
         success = self.eng.place_spread(sell_code, buy_code, qty, direction)
 
         if success:
@@ -639,11 +644,11 @@ class SPXBot:
             if now.hour == 10:
                 self.traded_times["direction"] = direction
 
+            credit_str = f"${net_credit:.2f}" if net_credit > 0 else "成行"
             pushover(
                 "SPX Bot",
                 f"✅エントリー {time_key}ET {dir_label} "
-                f"SELL {sell_strike:.0f}{opt_label}/BUY {buy_strike:.0f}{opt_label} {qty}枚 "
-                f"VIX:{vix:.1f}"
+                f"SELL {sell_strike:.0f}{opt_label}/BUY {buy_strike:.0f}{opt_label} {qty}枚 {credit_str}"
             )
 
             # Tail hedge: buy delta-0.05 OTM put (daily, once)
@@ -700,31 +705,32 @@ class SPXBot:
                 self.eng.close_all_positions("stop_loss")
                 break
 
-    # ── Health check helpers ──────────────────────────────────────────────────
+    # ── Nightly helpers (20:00 ET = 9:00 JST) ────────────────────────────────
 
-    def _get_notrade_reason(self) -> str:
-        """Return human-readable reason for no-trade today."""
-        today = datetime.datetime.now(ET).date()
-        tomorrow = today + datetime.timedelta(days=1)
-        if tomorrow in US_HOLIDAYS_2026:
-            return f"翌日祝日({tomorrow})"
-        if today.month in (3, 6, 9, 12) and today.weekday() == 4:
-            first_day = today.replace(day=1)
+    def _notrade_reason_for_date(self, target: datetime.date) -> str:
+        """Return human-readable no-trade reason for target date, or '' if tradeable."""
+        day_after = target + datetime.timedelta(days=1)
+        if day_after in US_HOLIDAYS_2026:
+            return f"翌日祝日({day_after})"
+        if target.month in (3, 6, 9, 12) and target.weekday() == 4:
+            first_day = target.replace(day=1)
             first_friday = first_day + datetime.timedelta(days=(4 - first_day.weekday()) % 7)
             third_friday = first_friday + datetime.timedelta(weeks=2)
-            if today == third_friday:
+            if target == third_friday:
                 return "四半期OpEx"
         if EVENTS_FILE.exists():
             try:
                 data = json.loads(EVENTS_FILE.read_text())
-                for ev in data.get("events", []):
-                    return ev["keyword"].upper()
+                fetched = datetime.date.fromisoformat(data["fetched"])
+                if (target - fetched).days <= 7:
+                    for ev in data.get("events", []):
+                        return ev["keyword"].upper()
             except Exception:
                 pass
-        return "不明"
+        return ""
 
     def _get_lock_expiry_warning(self) -> str:
-        """Return warning if trade lock expires within 7 days, else empty string."""
+        """Return warning string if trade lock expires within 7 days, else ''."""
         try:
             if not TRADE_LOCK_FILE.exists():
                 return ""
@@ -735,56 +741,29 @@ class SPXBot:
             expiry = datetime.date.fromisoformat(expiry_str)
             days_left = (expiry - datetime.datetime.now(ET).date()).days
             if days_left <= 7:
-                return f"取引ロック期限まで{days_left}日・更新が必要です（期限:{expiry_str}）"
+                return f"⚠️取引ロック残り{days_left}日・更新必要（期限:{expiry_str}）"
         except Exception:
             pass
         return ""
 
-    def run_daily_health_check(self):
-        """Send 8:00 ET health status via Pushover."""
-        now = datetime.datetime.now(ET)
+    def run_nightly_jst_check(self):
+        """20:00 ET (= 9:00 JST) nightly check: notrade tomorrow + lock expiry."""
+        # 'tomorrow' in ET = 'today' in JST (the upcoming trading session)
+        tomorrow_et = (datetime.datetime.now(ET) + datetime.timedelta(days=1)).date()
+        wd = tomorrow_et.weekday()
 
-        # Connection / unlock status
-        connected  = FUTU_AVAILABLE and self.eng.trade_ctx is not None
-        conn_str   = "接続✅" if connected else "接続❌"
-        unlock_str = "ロック✅" if self.eng.unlock_ok else "ロック❌"
+        # No-trade notification for the upcoming session
+        if wd < 5:  # skip weekends
+            reason = self._notrade_reason_for_date(tomorrow_et)
+            if reason:
+                pushover("SPX Bot", f"⏭️今日ノートレード {reason}")
+                log.info(f"Nightly: notrade tomorrow ({tomorrow_et}): {reason}")
 
-        # Cash
-        cash      = self.eng.get_account_cash()
-        cash_str  = f"残高${cash:,.0f}"
-
-        # VIX
-        vix      = self.mkt.get_vix()
-        vix_str  = f"VIX:{vix:.1f}" if vix else "VIX:N/A"
-
-        # Today's trading plan
-        wd = now.weekday()
-        if wd >= 5:
-            plan_str = "今日:週末"
-        elif is_notrade_today():
-            reason = self._get_notrade_reason()
-            plan_str = f"今日:ノートレード({reason})"
-        elif vix and vix >= 25:
-            plan_str = f"今日:ノートレード(VIX≥25)"
-        else:
-            entry_type = "0DTE" if wd in (0, 2, 4) else "1DTE"
-            spy = self.mkt.get_spy_price()
-            sma = self.mkt.get_sma20()
-            if spy and sma:
-                direction = "BullPut" if spy > sma else "BearCall"
-            else:
-                direction = "N/A"
-            plan_str = f"今日:{direction}/{entry_type}予定"
-
-        msg = " | ".join(["✅Bot稼働", conn_str, unlock_str, cash_str, plan_str, vix_str])
-        pushover("SPX Bot 日次診断", msg)
-        log.info(f"Health check sent: {msg}")
-
-        # Lock expiry warning (separate alert)
+        # Lock expiry warning
         expiry_warn = self._get_lock_expiry_warning()
         if expiry_warn:
-            pushover("⚠️取引ロック期限警告", expiry_warn, priority=1)
-            log.warning(f"Lock expiry warning sent: {expiry_warn}")
+            pushover("SPX Bot", expiry_warn, priority=1)
+            log.warning(f"Nightly: {expiry_warn}")
 
     def run_forever(self):
         log.info("=== SPX Bot starting ===")
@@ -818,10 +797,10 @@ class SPXBot:
                 now = datetime.datetime.now(ET)
                 h, m = now.hour, now.minute
 
-                # 8:00 ET daily health check (runs outside market hours)
-                if h == 8 and m == 0 and "health_checked" not in self.traded_times:
-                    self.run_daily_health_check()
-                    self.traded_times["health_checked"] = True
+                # 20:00 ET (= 9:00 JST) nightly check: notrade + lock expiry
+                if h == 20 and m == 0 and "nightly_checked" not in self.traded_times:
+                    self.run_nightly_jst_check()
+                    self.traded_times["nightly_checked"] = True
 
                 # Market hours: 9:30–16:00 ET
                 if not (9 <= h < 16 or (h == 9 and m >= 30)):
