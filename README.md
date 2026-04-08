@@ -58,3 +58,27 @@ Critical alerts only:
 - 15:55 ET residual position
 - 3 consecutive startup failures
 - Bot crash
+
+## 資金計画（ロードマップ）
+
+| 時期 | Bot元本 | 月収益目標(8%) | 状態 |
+|------|---------|--------------|------|
+| 2026年4月 | 120万円 | 約10万円 | ⏳ Bot稼働待ち |
+| 2026年7月 | 210万円 | 約17万円 | ⏳ |
+| 2026年10月 | 320万円 | 約26万円 | ⏳ |
+| 2027年1月 | 450万円 | 約36万円 | ⏳ |
+| 2027年4月 | 600万円以上 | **40万円以上** | 🎯 目標 |
+
+※月30万円追加入金込み・複利計算
+
+## 📈 Roadmap
+
+| Period | Capital | Monthly Target (8%) | Status |
+|--------|---------|---------------------|--------|
+| Apr 2026 | ¥1.2M | ~¥100K | ⏳ Bot launch |
+| Jul 2026 | ¥2.1M | ~¥170K | ⏳ |
+| Oct 2026 | ¥3.2M | ~¥260K | ⏳ |
+| Jan 2027 | ¥4.5M | ~¥360K | ⏳ |
+| Apr 2027 | ¥6M+ | **¥400K+** | 🎯 Goal |
+
+*Includes ¥300K/month additional deposits + compound growth*
