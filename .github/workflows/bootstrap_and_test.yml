@@ -230,20 +230,34 @@ jobs:
           else:
               print("Script creation failed — proceeding with reboot only (Method A may be sufficient)")
 
-          # ── Reboot VPS ─────────────────────────────────────────────────────
-          print("Rebooting VPS...")
-          reboot_resp = api("POST", f"/instances/{instance_id}/reboot")
-          print(f"Reboot response: {json.dumps(reboot_resp)}")
+          # ── Reinstall VPS so startup script runs on first boot ─────────────
+          # Regular reboot does NOT run startup scripts; reinstall does.
+          print("Reinstalling VPS (startup script runs on first boot after reinstall)...")
+          reinstall_resp = api("POST", f"/instances/{instance_id}/reinstall",
+                               {"hostname": "spxbot"})
+          print(f"Reinstall response: {json.dumps(reinstall_resp.get('instance', {}).get('status', reinstall_resp))}")
 
-          # Wait for SSH
-          print("Waiting for SSH (up to 4 min)...")
-          for i in range(24):
+          # Wait for SSH to go DOWN first (reinstall begins)
+          print("Waiting for reinstall to start...")
+          for i in range(12):
               time.sleep(10)
               try:
                   s = socket.create_connection((vps_ip, 22), timeout=5)
                   s.close()
-                  print(f"SSH available after {(i+1)*10}s")
-                  time.sleep(15)
+                  print(f"  SSH still up at {(i+1)*10}s")
+              except Exception:
+                  print(f"  SSH down at {(i+1)*10}s — reinstall in progress")
+                  break
+
+          # Then wait for SSH to come back (reinstall + startup script ~5 min)
+          print("Waiting for VPS to come back (up to 10 min)...")
+          for i in range(60):
+              time.sleep(10)
+              try:
+                  s = socket.create_connection((vps_ip, 22), timeout=5)
+                  s.close()
+                  print(f"SSH available after {(i+1)*10}s — waiting 30s for startup script")
+                  time.sleep(30)
                   break
               except Exception:
                   print(f"  waiting... {(i+1)*10}s")
