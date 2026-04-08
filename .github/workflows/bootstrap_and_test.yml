@@ -45,25 +45,37 @@ jobs:
           # Strip whitespace/newlines (common secret encoding issue)
           api_key = api_key.strip()
 
-          # Try multiple auth header formats
+          # Try multiple auth header formats (V2 Bearer, V2 Token, V1 APIKEY, raw)
           instance_id, default_pw = "", ""
-          for auth_format in [f"Bearer {api_key}", f"Token {api_key}", api_key]:
+          attempts = [
+              ("https://api.vultr.com/v2/instances?per_page=50", {"Authorization": f"Bearer {api_key}"}),
+              ("https://api.vultr.com/v2/instances?per_page=50", {"Authorization": f"Token {api_key}"}),
+              ("https://api.vultr.com/v1/server/list",           {"APIKEY": api_key}),
+              ("https://api.vultr.com/v2/instances?per_page=50", {"Authorization": api_key}),
+          ]
+          for url, headers in attempts:
               try:
-                  req = urllib.request.Request(
-                      "https://api.vultr.com/v2/instances?per_page=50",
-                      headers={"Authorization": auth_format}
-                  )
+                  req = urllib.request.Request(url, headers=headers)
                   with urllib.request.urlopen(req, timeout=15) as r:
                       data = json.loads(r.read())
-                  print(f"Vultr API OK with format: {auth_format[:15]}...")
+                  print(f"Vultr API OK: {url[:50]}")
+                  # V2 format
                   for inst in data.get("instances", []):
                       if inst.get("main_ip") == vps_ip:
                           instance_id = inst["id"]
                           default_pw  = inst.get("default_password", "")
                           break
-                  break
+                  # V1 format (dict keyed by subid)
+                  if not instance_id and isinstance(data, dict):
+                      for subid, inst in data.items():
+                          if isinstance(inst, dict) and inst.get("main_ip") == vps_ip:
+                              instance_id = str(subid)
+                              default_pw  = inst.get("default_password", "")
+                              break
+                  if instance_id:
+                      break
               except Exception as e:
-                  print(f"Auth format {auth_format[:15]}... failed: {e}")
+                  print(f"  {url[:50]} failed: {e}")
                   continue
 
           if not instance_id:
@@ -196,12 +208,40 @@ jobs:
 
       # ── STEP 4: Verify SSH works with new key ───────────────────────────────
       - name: Verify SSH connection
+        id: ssh_verify
+        continue-on-error: true
         run: |
           ssh-keyscan -H ${{ secrets.VPS_IP }} >> ~/.ssh/known_hosts 2>/dev/null || true
-          ssh $SSH_OPTS $VPS "echo SSH_OK && hostname && uptime && systemctl is-active spxbot opend xvfb"
+          RESULT=$(ssh $SSH_OPTS $VPS "echo SSH_OK && hostname && uptime && systemctl is-active spxbot opend xvfb" 2>&1)
+          echo "$RESULT"
+          if echo "$RESULT" | grep -q SSH_OK; then
+            echo "ssh_ok=true" >> $GITHUB_OUTPUT
+          else
+            echo "ssh_ok=false" >> $GITHUB_OUTPUT
+            echo "SSH BLOCKED: Key injection failed. VPS requires manual key addition."
+            echo "Run: ssh root@${{ secrets.VPS_IP }} (via Vultr console) and add key:"
+            echo "${{ secrets.VPS_SSH_PUBKEY }}"
+          fi
+
+      # ── STEP 4b: Report and exit if SSH unavailable ──────────────────────────
+      - name: Report SSH status
+        if: steps.ssh_verify.outputs.ssh_ok != 'true'
+        run: |
+          curl -s -X POST https://api.pushover.net/1/messages.json \
+            -F "token=${{ secrets.PUSHOVER_TOKEN }}" \
+            -F "user=${{ secrets.PUSHOVER_USER }}" \
+            -F "title=⚠️ VPS SSH接続不可" \
+            -F "message=SSH鍵がVPSに未登録。
+Vultrコンソールで下記コマンド実行後、ワークフローを再実行してください:
+mkdir -p /root/.ssh && echo '${{ secrets.VPS_SSH_PUBKEY }}' >> /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys
+
+または: VULTR_API_KEY Secretを正しいキーに更新してください。" \
+            -F "priority=1"
+          echo "SSH unavailable - skipping VPS tests"
 
       # ── STEP 5: Deploy latest code ──────────────────────────────────────────
       - name: Deploy latest files
+        if: steps.ssh_verify.outputs.ssh_ok == 'true'
         run: |
           ssh $SSH_OPTS $VPS "mkdir -p /root/spxbot /var/log/spx_bot /root/logs"
           for f in spx_bot.py health_server.py health.service spxbot.service \
@@ -220,6 +260,7 @@ jobs:
 
       # ── STEP 6 (verify.py) ──────────────────────────────────────────────────
       - name: STEP1 Run spx_bot_verify.py
+        if: steps.ssh_verify.outputs.ssh_ok == 'true'
         id: verify
         run: |
           ssh $SSH_OPTS $VPS "SPX_LOG_DIR=/var/log/spx_bot python3 /root/spxbot/spx_bot_verify.py" \
@@ -228,6 +269,7 @@ jobs:
 
       # ── STEP 7 (live market test) ───────────────────────────────────────────
       - name: STEP2-3 Live market test (options + account)
+        if: steps.ssh_verify.outputs.ssh_ok == 'true'
         run: |
           ssh $SSH_OPTS $VPS "python3 /root/spxbot/test_live_market.py" \
             | tee /tmp/live_test.txt || true
@@ -235,6 +277,7 @@ jobs:
 
       # ── STEP 8 (bot dry run 3 min) ──────────────────────────────────────────
       - name: STEP4 Bot dry run (3 min)
+        if: steps.ssh_verify.outputs.ssh_ok == 'true'
         run: |
           ssh $SSH_OPTS $VPS bash << 'EOF'
             mkdir -p /root/logs
@@ -255,6 +298,7 @@ jobs:
 
       # ── STEP 9 (health server) ──────────────────────────────────────────────
       - name: STEP5 Health server
+        if: steps.ssh_verify.outputs.ssh_ok == 'true'
         run: |
           ssh $SSH_OPTS $VPS "systemctl restart health && sleep 2 && \
             systemctl status health --no-pager | head -8 && \
@@ -263,12 +307,25 @@ jobs:
 
       # ── STEP 10: Restart spxbot ─────────────────────────────────────────────
       - name: Restart spxbot service
+        if: steps.ssh_verify.outputs.ssh_ok == 'true'
         run: |
           ssh $SSH_OPTS $VPS "systemctl restart spxbot && sleep 5 && \
             systemctl status spxbot --no-pager | head -10"
 
-      # ── STEP 11: Pushover completion ────────────────────────────────────────
+      # ── STEP 11: Git config on VPS ───────────────────────────────────────────
+      - name: STEP7 Git config on VPS
+        if: steps.ssh_verify.outputs.ssh_ok == 'true'
+        run: |
+          ssh $SSH_OPTS $VPS bash << 'EOF'
+            cd /root/spxbot 2>/dev/null || cd /root
+            git config user.email 'bot@spxbot' 2>/dev/null || true
+            git config user.name 'SPX Bot VPS' 2>/dev/null || true
+          EOF
+        continue-on-error: true
+
+      # ── STEP 12: Pushover completion ────────────────────────────────────────
       - name: STEP6 Pushover notification
+        if: steps.ssh_verify.outputs.ssh_ok == 'true'
         run: |
           VERIFY=$(grep "RESULT:" /tmp/verify.txt 2>/dev/null | tail -1 || echo "verify done")
           LIVE=$(grep -E "PASS|FAIL" /tmp/live_test.txt 2>/dev/null | tail -3 | tr '\n' ' ' || echo "live test done")
