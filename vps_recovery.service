@@ -1,0 +1,15 @@
+[Unit]
+Description=VPS Recovery on Boot (startup order guarantee)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /root/recovery.sh
+RemainAfterExit=yes
+EnvironmentFile=-/root/spxbot/.env
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
