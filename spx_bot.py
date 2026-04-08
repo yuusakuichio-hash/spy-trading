@@ -203,8 +203,8 @@ def is_notrade_today() -> bool:
 
 # ── moomoo futu-api client ────────────────────────────────────────────────────
 try:
-    from futu import OpenQuoteContext, OpenUSTradeContext, TrdMarket, TrdEnv
-    from futu import TrdSide, OrderType, RET_OK
+    from futu import OpenQuoteContext, OpenSecTradeContext, TrdMarket, TrdEnv
+    from futu import TrdSide, OrderType, RET_OK, SecurityFirm
     import futu as ft
     FUTU_AVAILABLE = True
 except ImportError:
@@ -308,8 +308,10 @@ class TradeEngine:
         if not FUTU_AVAILABLE:
             return False
         try:
-            self.trade_ctx = OpenUSTradeContext(
-                host=OPEND_HOST, port=OPEND_PORT
+            self.trade_ctx = OpenSecTradeContext(
+                filter_trdmarket=TrdMarket.US,
+                host=OPEND_HOST, port=OPEND_PORT,
+                security_firm=SecurityFirm.FUTUJP,
             )
             log.info("Trade context connected")
 
@@ -321,17 +323,24 @@ class TradeEngine:
                 if TRADE_PASSWORD:
                     ret, data = self.trade_ctx.unlock_trade(password=TRADE_PASSWORD)
                     if ret != RET_OK:
-                        log.error(f"unlock_trade failed: {data}")
-                        pushover(
-                            "SPX Bot",
-                            f"❌取引ロック解除失敗・Bot停止: {str(data)[:120]}",
-                            priority=1,
-                        )
-                        self.trade_ctx.close()
-                        self.trade_ctx = None
-                        return False
-                    log.info("unlock_trade: success")
-                    self.unlock_ok = True
+                        msg_str = str(data)
+                        if "unlock button" in msg_str or "disabled in the GUI" in msg_str:
+                            # GUI AppImage disables API unlock; trading lock managed by GUI
+                            log.warning("unlock_trade API disabled in GUI mode; assuming GUI-unlocked")
+                            self.unlock_ok = True
+                        else:
+                            log.error(f"unlock_trade failed: {data}")
+                            pushover(
+                                "SPX Bot",
+                                f"❌取引ロック解除失敗・Bot停止: {msg_str[:120]}",
+                                priority=1,
+                            )
+                            self.trade_ctx.close()
+                            self.trade_ctx = None
+                            return False
+                    else:
+                        log.info("unlock_trade: success")
+                        self.unlock_ok = True
                 else:
                     log.warning("TRADE_PASSWORD not set; skipping unlock_trade")
             else:
@@ -344,17 +353,25 @@ class TradeEngine:
             return False
 
     def _resolve_account(self):
-        """Find the best available account: prefer REAL, fall back to SIMULATE."""
+        """Find the best account: prefer REAL DERIVATIVES (JP_DERIVATIVE), else any REAL, else SIMULATE."""
         ret, data = self.trade_ctx.get_acc_list()
         if ret != RET_OK or data.empty:
             log.warning("get_acc_list failed; account_id unresolved")
             return
-        # Prefer REAL account
         real = data[data["trd_env"] == "REAL"]
         if not real.empty:
+            # Prefer acc_type == DERIVATIVES (オプション専用口座)
+            deriv = real[real["acc_type"] == "DERIVATIVES"]
+            if not deriv.empty:
+                self.account_id = str(int(deriv.iloc[0]["acc_id"]))
+                self.trade_env = TrdEnv.REAL
+                jp_types = deriv.iloc[0].get("jp_acc_type", "")
+                log.info(f"Resolved REAL DERIVATIVES account: acc_id={self.account_id} jp_acc_type={jp_types}")
+                return
+            # Fall back to any REAL account
             self.account_id = str(int(real.iloc[0]["acc_id"]))
             self.trade_env = TrdEnv.REAL
-            log.info(f"Resolved REAL account: acc_id={self.account_id}")
+            log.warning(f"No DERIVATIVES account; using first REAL acc_id={self.account_id}")
             return
         # Fall back to SIMULATE
         sim = data[data["trd_env"] == "SIMULATE"]
