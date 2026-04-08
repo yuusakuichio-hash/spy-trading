@@ -16,6 +16,20 @@ import zoneinfo
 from pathlib import Path
 from typing import Optional
 
+# ── .env loader ───────────────────────────────────────────────────────────────
+def _load_env_file():
+    """Load /root/spxbot/.env into os.environ (if it exists)."""
+    env_path = Path("/root/spxbot/.env")
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            os.environ.setdefault(key.strip(), val.strip())
+
+_load_env_file()
+
 # ── Logging ──────────────────────────────────────────────────────────────────
 LOG_DIR = Path("/var/log/spx_bot")
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -36,6 +50,7 @@ PUSHOVER_TOKEN = "a5rb9ipb3yrdanv3vk4n8x28qt7io9"
 PUSHOVER_USER  = "u2cevk8nktib3sr148rw2hs78ecvux"
 EVENTS_FILE    = Path("/root/events.json")
 FAILURES_FILE  = Path("/root/spx_bot_failures.json")
+TRADE_PASSWORD = os.environ.get("TRADE_PASSWORD", "")
 OPEND_HOST     = "127.0.0.1"
 OPEND_PORT     = 11111
 UNDERLYING     = "SPY"
@@ -295,6 +310,25 @@ class TradeEngine:
                 host=OPEND_HOST, port=OPEND_PORT
             )
             log.info("Trade context connected")
+
+            # ── Unlock trade ──────────────────────────────────────────────
+            if TRADE_PASSWORD:
+                ret, data = self.trade_ctx.unlock_trade(password=TRADE_PASSWORD)
+                if ret != RET_OK:
+                    log.error(f"unlock_trade failed: {data}")
+                    pushover(
+                        "取引ロック解除失敗",
+                        f"unlock_trade failed: {str(data)[:150]}",
+                        priority=1,
+                    )
+                    self.trade_ctx.close()
+                    self.trade_ctx = None
+                    return False
+                log.info("unlock_trade: success")
+                pushover("取引ロック解除成功", "Bot起動・取引ロック解除完了", priority=0)
+            else:
+                log.warning("TRADE_PASSWORD not set; skipping unlock_trade")
+
             # Resolve account ID dynamically
             self._resolve_account()
             return True
