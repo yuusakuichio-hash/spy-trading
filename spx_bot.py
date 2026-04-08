@@ -48,9 +48,10 @@ log = logging.getLogger("spx_bot")
 ET = zoneinfo.ZoneInfo("America/New_York")
 PUSHOVER_TOKEN = "a5rb9ipb3yrdanv3vk4n8x28qt7io9"
 PUSHOVER_USER  = "u2cevk8nktib3sr148rw2hs78ecvux"
-EVENTS_FILE    = Path("/root/events.json")
-FAILURES_FILE  = Path("/root/spx_bot_failures.json")
-TRADE_PASSWORD = os.environ.get("TRADE_PASSWORD", "")
+EVENTS_FILE     = Path("/root/events.json")
+FAILURES_FILE   = Path("/root/spx_bot_failures.json")
+TRADE_LOCK_FILE = Path("/root/trade_lock.json")
+TRADE_PASSWORD  = os.environ.get("TRADE_PASSWORD", "")
 OPEND_HOST     = "127.0.0.1"
 OPEND_PORT     = 11111
 UNDERLYING     = "SPY"
@@ -301,6 +302,7 @@ class TradeEngine:
         self.account_id = account_id  # resolved dynamically on connect
         self.trade_env = TrdEnv.REAL if FUTU_AVAILABLE else None
         self.trade_ctx = None
+        self.unlock_ok = False  # set True after successful unlock_trade
 
     def connect(self):
         if not FUTU_AVAILABLE:
@@ -329,11 +331,12 @@ class TradeEngine:
                         self.trade_ctx = None
                         return False
                     log.info("unlock_trade: success")
-                    pushover("取引ロック解除成功", "Bot起動・取引ロック解除完了", priority=0)
+                    self.unlock_ok = True
                 else:
                     log.warning("TRADE_PASSWORD not set; skipping unlock_trade")
             else:
                 log.info(f"SIMULATE mode ({self.account_id}); unlock_trade不要")
+                self.unlock_ok = True  # SIMULATE needs no unlock
 
             return True
         except Exception as e:
@@ -559,8 +562,9 @@ class SPXBot:
         return False
 
     def run_entry(self):
-        now    = datetime.datetime.now(ET)
-        expiry = self.get_expiry()
+        now      = datetime.datetime.now(ET)
+        expiry   = self.get_expiry()
+        time_key = f"{now.hour}:{now.minute:02d}"
 
         spy      = self.mkt.get_spy_price()
         sma      = self.mkt.get_sma20()
@@ -569,6 +573,8 @@ class SPXBot:
 
         if spy is None or sma is None or vix is None:
             log.error("Market data unavailable, skipping entry")
+            pushover("SPX Bot", f"❌エントリー失敗 {time_key}ET: 市場データ取得失敗")
+            self.traded_times[time_key] = True
             return
 
         log.info(f"SPY={spy:.2f} SMA20={sma:.2f} VIX={vix:.2f} VIX_prev={vix_prev}")
@@ -576,6 +582,8 @@ class SPXBot:
         # VIX gate
         if vix >= 25:
             log.info(f"VIX={vix:.1f} >= 25 → no trade (gate)")
+            pushover("SPX Bot", f"⏭️ノートレード {time_key}ET: VIX={vix:.1f}≥25")
+            self.traded_times[time_key] = True
             return
 
         direction = "bull_put" if spy > sma else "bear_call"
@@ -586,6 +594,8 @@ class SPXBot:
             morning_dir = self.traded_times.get("direction")
             if morning_dir and morning_dir != direction:
                 log.info(f"14:00 entry: direction mismatch ({morning_dir} vs {direction}) → skip")
+                pushover("SPX Bot", f"⏭️ノートレード {time_key}ET: 方向不一致({morning_dir}→{direction})")
+                self.traded_times[time_key] = True
                 return
 
         cash = self.eng.get_account_cash()
@@ -598,6 +608,8 @@ class SPXBot:
         sell_opt = self.mkt.find_strike_by_delta(chain, SELL_DELTA, "sell")
         if not sell_opt:
             log.warning("Could not find sell strike, skipping")
+            pushover("SPX Bot", f"❌エントリー失敗 {time_key}ET: 売りストライク見つからず")
+            self.traded_times[time_key] = True
             return
 
         sell_strike = sell_opt.get("strike_price", 0)
@@ -607,22 +619,32 @@ class SPXBot:
         candidates = [o for o in chain if abs(o.get("strike_price", 0) - buy_strike) < 1.5]
         if not candidates:
             log.warning(f"Could not find buy strike near {buy_strike}, skipping")
+            pushover("SPX Bot", f"❌エントリー失敗 {time_key}ET: 買いストライク見つからず({buy_strike}近辺)")
+            self.traded_times[time_key] = True
             return
         buy_opt = min(candidates, key=lambda o: abs(o.get("strike_price", 0) - buy_strike))
 
         sell_code = sell_opt.get("code", "")
         buy_code  = buy_opt.get("code", "")
 
+        dir_label = "BullPut" if direction == "bull_put" else "BearCall"
+        opt_label = "P" if direction == "bull_put" else "C"
         log.info(f"Spread: SELL {sell_code} @ strike {sell_strike} / BUY {buy_code} @ strike {buy_strike} / qty={qty}")
         success = self.eng.place_spread(sell_code, buy_code, qty, direction)
 
         if success:
-            time_key = f"{now.hour}:{now.minute:02d}"
             self.traded_times[time_key] = True
 
             # Record morning direction for 14:00 filter
             if now.hour == 10:
                 self.traded_times["direction"] = direction
+
+            pushover(
+                "SPX Bot",
+                f"✅エントリー {time_key}ET {dir_label} "
+                f"SELL {sell_strike:.0f}{opt_label}/BUY {buy_strike:.0f}{opt_label} {qty}枚 "
+                f"VIX:{vix:.1f}"
+            )
 
             # Tail hedge: buy delta-0.05 OTM put (daily, once)
             if "hedge" not in self.traded_times:
@@ -635,6 +657,9 @@ class SPXBot:
                             self.traded_times["hedge"] = True
                     else:
                         log.info(f"Tail hedge too expensive: ${hedge_price:.2f} > ${HEDGE_MAX_COST}")
+        else:
+            self.traded_times[time_key] = True
+            pushover("SPX Bot", f"❌エントリー失敗 {time_key}ET {dir_label} 注文失敗")
 
     def check_exits(self):
         """Check P&L on open positions and apply profit/loss/force-close rules."""
@@ -675,6 +700,92 @@ class SPXBot:
                 self.eng.close_all_positions("stop_loss")
                 break
 
+    # ── Health check helpers ──────────────────────────────────────────────────
+
+    def _get_notrade_reason(self) -> str:
+        """Return human-readable reason for no-trade today."""
+        today = datetime.datetime.now(ET).date()
+        tomorrow = today + datetime.timedelta(days=1)
+        if tomorrow in US_HOLIDAYS_2026:
+            return f"翌日祝日({tomorrow})"
+        if today.month in (3, 6, 9, 12) and today.weekday() == 4:
+            first_day = today.replace(day=1)
+            first_friday = first_day + datetime.timedelta(days=(4 - first_day.weekday()) % 7)
+            third_friday = first_friday + datetime.timedelta(weeks=2)
+            if today == third_friday:
+                return "四半期OpEx"
+        if EVENTS_FILE.exists():
+            try:
+                data = json.loads(EVENTS_FILE.read_text())
+                for ev in data.get("events", []):
+                    return ev["keyword"].upper()
+            except Exception:
+                pass
+        return "不明"
+
+    def _get_lock_expiry_warning(self) -> str:
+        """Return warning if trade lock expires within 7 days, else empty string."""
+        try:
+            if not TRADE_LOCK_FILE.exists():
+                return ""
+            data = json.loads(TRADE_LOCK_FILE.read_text())
+            expiry_str = data.get("expiry", "")
+            if not expiry_str:
+                return ""
+            expiry = datetime.date.fromisoformat(expiry_str)
+            days_left = (expiry - datetime.datetime.now(ET).date()).days
+            if days_left <= 7:
+                return f"取引ロック期限まで{days_left}日・更新が必要です（期限:{expiry_str}）"
+        except Exception:
+            pass
+        return ""
+
+    def run_daily_health_check(self):
+        """Send 8:00 ET health status via Pushover."""
+        now = datetime.datetime.now(ET)
+
+        # Connection / unlock status
+        connected  = FUTU_AVAILABLE and self.eng.trade_ctx is not None
+        conn_str   = "接続✅" if connected else "接続❌"
+        unlock_str = "ロック✅" if self.eng.unlock_ok else "ロック❌"
+
+        # Cash
+        cash      = self.eng.get_account_cash()
+        cash_str  = f"残高${cash:,.0f}"
+
+        # VIX
+        vix      = self.mkt.get_vix()
+        vix_str  = f"VIX:{vix:.1f}" if vix else "VIX:N/A"
+
+        # Today's trading plan
+        wd = now.weekday()
+        if wd >= 5:
+            plan_str = "今日:週末"
+        elif is_notrade_today():
+            reason = self._get_notrade_reason()
+            plan_str = f"今日:ノートレード({reason})"
+        elif vix and vix >= 25:
+            plan_str = f"今日:ノートレード(VIX≥25)"
+        else:
+            entry_type = "0DTE" if wd in (0, 2, 4) else "1DTE"
+            spy = self.mkt.get_spy_price()
+            sma = self.mkt.get_sma20()
+            if spy and sma:
+                direction = "BullPut" if spy > sma else "BearCall"
+            else:
+                direction = "N/A"
+            plan_str = f"今日:{direction}/{entry_type}予定"
+
+        msg = " | ".join(["✅Bot稼働", conn_str, unlock_str, cash_str, plan_str, vix_str])
+        pushover("SPX Bot 日次診断", msg)
+        log.info(f"Health check sent: {msg}")
+
+        # Lock expiry warning (separate alert)
+        expiry_warn = self._get_lock_expiry_warning()
+        if expiry_warn:
+            pushover("⚠️取引ロック期限警告", expiry_warn, priority=1)
+            log.warning(f"Lock expiry warning sent: {expiry_warn}")
+
     def run_forever(self):
         log.info("=== SPX Bot starting ===")
         fetch_events_weekly()
@@ -706,6 +817,11 @@ class SPXBot:
             while True:
                 now = datetime.datetime.now(ET)
                 h, m = now.hour, now.minute
+
+                # 8:00 ET daily health check (runs outside market hours)
+                if h == 8 and m == 0 and "health_checked" not in self.traded_times:
+                    self.run_daily_health_check()
+                    self.traded_times["health_checked"] = True
 
                 # Market hours: 9:30–16:00 ET
                 if not (9 <= h < 16 or (h == 9 and m >= 30)):
