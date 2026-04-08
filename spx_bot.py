@@ -329,20 +329,30 @@ class TradeEngine:
             self.trade_ctx.close()
 
     def get_account_cash(self) -> float:
+        """Return available capital for position sizing.
+        Uses net_assets (margin-based equity) if available, else cash.
+        Fallback: $2,500 (≈ ¥379,000 ÷ 150)."""
         if not FUTU_AVAILABLE or not self.trade_ctx:
-            return 10000.0  # dry-run
+            return 2500.0  # dry-run: ¥379,000 ÷ 150
         if not self.account_id:
-            log.error("account_id not resolved; cannot query cash")
-            return 0.0
+            log.error("account_id not resolved; using fallback $2,500")
+            return 2500.0
         ret, data = self.trade_ctx.accinfo_query(
             trd_env=self.trade_env, acc_id=int(self.account_id)
         )
         if ret == RET_OK and not data.empty:
-            cash = float(data.iloc[0]["cash"])
-            log.info(f"Account cash ({self.trade_env} acc={self.account_id}): ${cash:,.2f}")
-            return cash
+            row = data.iloc[0]
+            # Prefer net_assets (total equity incl. unrealized P&L) for margin-based sizing
+            net_assets = float(row.get("net_assets", 0))
+            cash = float(row.get("cash", 0))
+            capital = net_assets if net_assets > 0 else cash
+            log.info(
+                f"Account capital ({self.trade_env} acc={self.account_id}): "
+                f"net_assets=${net_assets:,.2f} cash=${cash:,.2f} → using ${capital:,.2f}"
+            )
+            return capital if capital > 0 else 2500.0
         log.error(f"accinfo_query failed for acc_id={self.account_id}: {data}")
-        return 0.0
+        return 2500.0
 
     def calc_position_size(self, cash: float, vix: float, vix_prev: Optional[float]) -> int:
         """Dynamic position sizing per strategy spec."""
