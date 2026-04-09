@@ -1,0 +1,20 @@
+[Unit]
+Description=SPX Iron Condor Bot (0DTE/1DTE)
+After=network.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/spxbot
+EnvironmentFile=-/root/spxbot/.env
+ExecStart=/usr/bin/python3 /root/spxbot/spx_condor_bot.py
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
