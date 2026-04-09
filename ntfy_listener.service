@@ -1,0 +1,20 @@
+[Unit]
+Description=ntfy SSE listener — HUB chat bidirectional commands
+After=network.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/spxbot
+EnvironmentFile=-/root/spxbot/.env
+ExecStart=/usr/bin/python3 /root/spxbot/ntfy_listener.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
