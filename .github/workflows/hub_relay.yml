@@ -1,0 +1,77 @@
+name: HUB Relay — VPS Command
+
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        description: "Bash command to run on VPS"
+        required: true
+        type: string
+
+jobs:
+  relay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Send command to VPS webhook
+        id: exec
+        run: |
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -X POST "http://${{ secrets.VPS_IP }}:9999/command" \
+            -H "Authorization: Bearer ${{ secrets.WEBHOOK_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg cmd "${{ inputs.command }}" '{command: $cmd}')" \
+            --max-time 310)
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -n -1)
+
+          echo "http_code=$HTTP_CODE" >> $GITHUB_OUTPUT
+          echo "body=$BODY"           >> $GITHUB_OUTPUT
+
+          RC=$(echo "$BODY" | jq -r '.rc // "?"')
+          OK=$(echo "$BODY" | jq -r '.ok // false')
+          OUTPUT=$(echo "$BODY" | jq -r '.output // "(no output)"')
+
+          echo "rc=$RC"   >> $GITHUB_OUTPUT
+          echo "ok=$OK"   >> $GITHUB_OUTPUT
+
+          echo "--- VPS Output ---"
+          echo "$OUTPUT"
+          echo "------------------"
+          echo "HTTP $HTTP_CODE | rc=$RC | ok=$OK"
+
+          # Fail the step if command failed on VPS
+          [ "$OK" = "true" ] || exit 1
+
+      - name: Notify via Pushover
+        if: always()
+        env:
+          OK:      ${{ steps.exec.outputs.ok }}
+          RC:      ${{ steps.exec.outputs.rc }}
+          COMMAND: ${{ inputs.command }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ "$OK" = "true" ]; then
+            TITLE="✅ VPS実行成功"
+            PRIORITY=0
+          else
+            TITLE="❌ VPS実行失敗"
+            PRIORITY=1
+          fi
+
+          MESSAGE=$(printf "rc=%s\n$ %s\n\n%s" \
+            "$RC" \
+            "${COMMAND:0:80}" \
+            "$RUN_URL")
+
+          curl -s \
+            --form-string "token=${{ secrets.PUSHOVER_TOKEN }}" \
+            --form-string "user=${{ secrets.PUSHOVER_USER }}" \
+            --form-string "title=$TITLE" \
+            --form-string "message=$MESSAGE" \
+            --form-string "priority=$PRIORITY" \
+            --form-string "url=$RUN_URL" \
+            --form-string "url_title=Actions ログを開く" \
+            https://api.pushover.net/1/messages.json
