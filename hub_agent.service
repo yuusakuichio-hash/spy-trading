@@ -1,17 +1,20 @@
 [Unit]
-Description=HUB Command Agent (GitHub Issue polling)
+Description=GitHub hub-command agent
 After=network.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/root
-ExecStart=/usr/bin/python3 /root/hub_agent.py
+WorkingDirectory=/root/spxbot
+EnvironmentFile=-/root/spxbot/.env
+ExecStart=/usr/bin/python3 /root/spxbot/hub_agent.py
 Restart=always
-RestartSec=10
-EnvironmentFile=/root/spxbot/.env
+RestartSec=15
 StandardOutput=journal
 StandardError=journal
+TimeoutStopSec=30
 
 [Install]
 WantedBy=multi-user.target
