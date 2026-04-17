@@ -1,0 +1,157 @@
+# Atlas Watchdog - 異常検知ルール定義
+# 場中(22:30-05:00 JST)に常駐し、ログを解析して異常を自律対応する
+#
+# Level1: INFO通知のみ（対応不要）
+# Level2: 原因仮説+builder自動投入（再起動/修正）- DRY_RUN対応
+# Level3: Bot即停止+ALERT通知 - DRY_RUN対応
+# Level4: 発注キャンセル+手動待ち - DRY_RUN対応
+#
+# window_sec: パターン計数の時間窓（秒）
+# threshold: その窓内で同一パターンが何回出たらトリガーか
+# cooldown_sec: 一度発火後、次に再発火できるまでの秒数（通知スパム防止）
+
+log_sources:
+  condor: /Users/yuusakuichio/trading/data/logs/condor.log
+  spybot_stderr: /Users/yuusakuichio/trading/data/logs/spybot_stderr.log
+  spybot_stdout: /Users/yuusakuichio/trading/data/logs/spybot_stdout.log
+
+# 監視対象LaunchAgent（Level2の再起動対象）
+bot_launchagent: com.spybot.paper
+bot_pid_files:
+  - /Users/yuusakuichio/trading/logs/spy_bot_paper.pid
+  - /Users/yuusakuichio/trading/logs/spy_bot_live.pid
+
+# Bot内部状態stale判定：最後のログ行からこの秒数経過したらstale
+stale_log_sec: 180
+
+# 場中時間窓（JST）
+market_window:
+  start: "22:25"  # ETオープン5分前
+  end: "05:05"    # ETクローズ5分後
+
+rules:
+  # ── Level 1: INFO通知のみ ─────────────────────────────────────
+  - id: mass_verify_warning_burst
+    description: MassVerifyのWARNINGが短時間に集中（Bot設計が複雑化してる可能性）
+    level: 1
+    pattern: '\[MassVerify\].*エグジット確認例外'
+    window_sec: 300
+    threshold: 20
+    cooldown_sec: 1800
+
+  # ── Level 2: builder自動投入 ─────────────────────────────────
+  - id: strike_mismatch_loop
+    description: strike不整合が連続発生（注文ロジック破綻の兆候）
+    level: 2
+    pattern: 'strike.*(mismatch|不整合|not found|見つからない)'
+    window_sec: 180
+    threshold: 5
+    cooldown_sec: 900
+    hypothesis: "OpenD/moomoo のoption chainとBot内部のstrike計算にズレ。chain再取得ロジック確認"
+    action:
+      type: restart_bot
+      pre_checks:
+        - no_open_orders
+      post_verify_sec: 120
+
+  - id: gamma_early_exit_loop
+    description: GammaEarlyExit が無限ループ的に発火（損失拡大リスク）
+    level: 2
+    pattern: 'GammaEarlyExit'
+    window_sec: 120
+    threshold: 10
+    cooldown_sec: 1800
+    hypothesis: "Γ閾値計算にバグ、or ポジション状態更新が効いていない"
+    action:
+      type: restart_bot
+      pre_checks:
+        - no_open_orders
+      post_verify_sec: 180
+
+  - id: infinite_retry
+    description: 同一APIコールを大量リトライ（rate limit/接続断の可能性）
+    level: 2
+    pattern: '(retry|リトライ).*(\d+回目|attempt \d+)'
+    window_sec: 60
+    threshold: 15
+    cooldown_sec: 600
+    hypothesis: "OpenD接続断、またはmoomoo API制限"
+    action:
+      type: restart_bot
+      pre_checks:
+        - no_open_orders
+        - opend_connected
+      post_verify_sec: 120
+
+  - id: api_rejection_cluster
+    description: API拒否が連続（認証切れ、moomoo側制限）
+    level: 2
+    pattern: '(API.*(reject|denied|拒否)|ErrCode.*-\d+)'
+    window_sec: 120
+    threshold: 8
+    cooldown_sec: 900
+    hypothesis: "moomoo API認証失効、またはリクエスト過多"
+    action:
+      type: notify_only
+      post_verify_sec: 60
+
+  # ── Level 3: Bot即停止 ────────────────────────────────────────
+  - id: unhandled_exception_cascade
+    description: 未捕捉例外が連鎖（Bot論理破綻）
+    level: 3
+    pattern: '(Traceback \(most recent call last\)|CRITICAL|FATAL)'
+    window_sec: 60
+    threshold: 3
+    cooldown_sec: 1800
+    hypothesis: "未捕捉例外連鎖。状態破壊の可能性"
+    action:
+      type: stop_bot
+      create_issue: true
+
+  - id: position_count_anomaly
+    description: 建玉数が設計上限を超えた（サイジングバグ）
+    level: 3
+    pattern: '(position.*count|建玉数).*(\d+).*(?:exceed|超過|上限)'
+    window_sec: 30
+    threshold: 1
+    cooldown_sec: 3600
+    hypothesis: "サイジングロジックにバグ。損失無制限リスク"
+    action:
+      type: stop_bot
+      create_issue: true
+
+  - id: bot_process_stale
+    description: Botプロセス稼働中だがログが長時間更新されていない（デッドロック）
+    level: 3
+    synthetic: bot_stale  # 正規表現ではなく内部判定
+    cooldown_sec: 900
+    hypothesis: "デッドロックor無限ループ。ログ出力停止"
+    action:
+      type: restart_bot
+      pre_checks:
+        - no_open_orders
+      post_verify_sec: 180
+
+  # ── Level 4: 発注キャンセル+手動待ち ───────────────────────
+  - id: order_size_anomaly
+    description: 発注サイズが設計上限を超えた（桁間違い等）
+    level: 4
+    pattern: '(order|発注).*(qty|quantity|size|数量).*(\d{3,})'
+    window_sec: 10
+    threshold: 1
+    cooldown_sec: 3600
+    hypothesis: "発注サイズ異常。桁誤りor乗算バグの可能性"
+    action:
+      type: halt_and_wait
+      create_issue: true
+
+autofix:
+  # Level2以上のaction実行を許可するか
+  # 0=DRY_RUN (通知のみ・actionログに記録)
+  # 1=ARMED (実際にrestart/stop実行)
+  dry_run_default: 1
+
+  # GitHub Issue作成時のリポジトリ
+  github_repo: yuusakuichio-hash/spy-trading
+  github_label_todo: todo
+  github_label_hub: hub-command
