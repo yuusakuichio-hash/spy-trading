@@ -763,6 +763,26 @@ except ImportError as _e:
     def _gm_check_greeks_limits(greeks): return []
 
 
+# ── Self-Checking Pair qty計算 (NASA TMR) ─────────────────────────────────────
+_QTY_CALCULATOR_AVAILABLE = False
+try:
+    from common.qty_calculator import (
+        calc_qty_verified as _calc_qty_verified,
+        tmr_verify_spread_qty as _tmr_verify_spread_qty,
+        QtyMismatchError,
+    )
+    _QTY_CALCULATOR_AVAILABLE = True
+    log.info("[Module] common.qty_calculator ロード成功 (TMR発注検証有効)")
+except ImportError as _e:
+    log.warning(f"[Module] common.qty_calculator ロード失敗 → TMR検証なし: {_e}")
+    def _calc_qty_verified(cash, premium, max_risk_pct, *, min_qty=1, max_qty=None):
+        raise ImportError("common.qty_calculator not available")
+    def _tmr_verify_spread_qty(cash, spread_width, capital_pct, qty_from_calc_qty):
+        pass  # no-op fallback
+    class QtyMismatchError(Exception):
+        pass
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # VirtualPositionManager — dry-testモード用の仮想ポジション管理
 # ══════════════════════════════════════════════════════════════════════════════
@@ -10165,6 +10185,14 @@ class SPYCreditSpreadBot:
 
         cash   = self.eng.get_account_cash()
         qty    = calc_qty(cash, params, paper=self.paper)
+        # [TMR] NASA Self-Checking Pair: arithmetic を2経路で照合
+        if _QTY_CALCULATOR_AVAILABLE:
+            try:
+                _tmr_verify_spread_qty(cash, params.get("width", 10), params.get("capital_pct", 0.55), qty)
+            except QtyMismatchError:
+                pushover("SPY CS", "[TMR ERROR] qty arithmetic mismatch — order BLOCKED", priority=1)
+                self.traded_today = True
+                return
         expiry = self.get_expiry_for_mode()  # pdt_constrained: 1DTE / full: 0DTE
 
         # ── [PortfolioVega] VIX急騰時のVegaベースサイズ縮小 ─────────────────
@@ -10374,6 +10402,14 @@ class SPYCreditSpreadBot:
 
         cash   = self.eng.get_account_cash()
         qty    = calc_qty(cash, params, paper=self.paper)
+        # [TMR] NASA Self-Checking Pair: arithmetic を2経路で照合 (ORF)
+        if _QTY_CALCULATOR_AVAILABLE:
+            try:
+                _tmr_verify_spread_qty(cash, params.get("width", 10), params.get("capital_pct", 0.40), qty)
+            except QtyMismatchError:
+                pushover("SPY ORF", "[TMR ERROR] qty arithmetic mismatch — order BLOCKED", priority=1)
+                self.traded_today = True
+                return
         expiry = self.get_expiry_for_mode()  # pdt_constrained: 1DTE / full: 0DTE
 
         # ── [PortfolioVega] VIX急騰時のVegaベースサイズ縮小 (ORF) ────────────
@@ -10709,6 +10745,18 @@ class SPYCreditSpreadBot:
                         return
                     _ms_cash = self.eng.get_account_cash()
                     _ms_qty  = calc_qty(_ms_cash, _ms_params, paper=self.paper)
+                    # [TMR] NASA Self-Checking Pair: arithmetic を2経路で照合 (Multi)
+                    if _QTY_CALCULATOR_AVAILABLE:
+                        try:
+                            _tmr_verify_spread_qty(
+                                _ms_cash,
+                                _ms_params.get("width", 10),
+                                _ms_params.get("capital_pct", 0.55),
+                                _ms_qty,
+                            )
+                        except QtyMismatchError:
+                            pushover("SPY Multi", "[TMR ERROR] qty arithmetic mismatch — order BLOCKED", priority=1)
+                            return
                     if _ms_qty <= 0:
                         log.info(f"[Multi] {symbol.replace('US.','')} qty=0 → スキップ")
                         return

@@ -59,6 +59,55 @@ systemctl start spx_bot
 - 起動失敗3連続
 - Botクラッシュ
 
+## 品質保証インフラ
+
+### 1. Self-Checking Pair 発注検証 (NASA TMR思想)
+
+`common/qty_calculator.py` が全発注前の枚数計算を2つの独立した経路で検証する。
+
+| 経路 | 実装 |
+|------|------|
+| Path A | 純粋Python (`calc_qty_pure_python`) |
+| Path B | NumPy float64 (`calc_qty_numpy`) |
+| 照合 | `calc_qty_verified` — 不一致なら `QtyMismatchError` を送出し発注ブロック |
+| 統合 | `tmr_verify_spread_qty` — spy_bot.py の `calc_qty()` 結果を事後検証 |
+
+テスト: `tests/test_qty_calculator.py` (Hypothesis property-based, 100+ ケース)
+
+```bash
+python3 -m pytest tests/test_qty_calculator.py -v
+```
+
+### 2. Blinded Backtest Pre-registration (OSF準拠)
+
+バックテストを実行する前に **必ず** GitHub Issueで事前登録し、p-hackingを防ぐ。
+
+#### 手順
+
+1. GitHub Issueを作成（テンプレート: `Backtest Pre-registration`）
+   - 仮説・primary_metric・合格基準・min_trades を事前に記入
+   - **バックテスト実行前にIssueをクローズしない**
+
+2. バックテストを実行してCSVを保存
+
+3. `scripts/backtest_validator.py` で事前登録と照合
+
+```bash
+python3 scripts/backtest_validator.py \
+  --prereg-issue <Issue番号> \
+  --results-file backtest_results.csv \
+  --primary-metric sharpe_ratio \
+  --threshold ">= 1.2" \
+  --min-trades 100
+```
+
+4. `PASS` なら戦術確定。`FAIL` なら戦略レベルから再検討。
+
+#### 規律
+- primary_metric は1つのみ（事後変更禁止）
+- 合格基準はバックテスト前に固定
+- 基準未達の場合は戦術微修正ではなく戦略練り直しを検討（CLAUDE.md参照）
+
 ## 資金計画（ロードマップ）
 
 | 時期 | Bot元本 | 月収益目標(8%) | 状態 |
