@@ -691,6 +691,7 @@ FUTU_AVAILABLE = False
 try:
     from futu import (OpenQuoteContext, OpenSecTradeContext,
                       TrdMarket, TrdEnv, TrdSide, OrderType, ModifyOrderOp,
+                      TimeInForce,
                       RET_OK, SecurityFirm,
                       StockQuoteHandlerBase, SubType)
     import futu as ft
@@ -715,13 +716,16 @@ try:
     _PORTFOLIO_RISK_AVAILABLE = True
     log.info("[Module] portfolio_risk ロード成功")
 except ImportError as _e:
-    log.warning(f"[Module] portfolio_risk ロード失敗 → フォールバック動作: {_e}")
-    def can_take_risk(additional_risk, account_balance): return True
+    log.warning(f"[Module] portfolio_risk ロード失敗 → 保守的フォールバック動作: {_e}")
+    # 防衛的: モジュール不在時は新規リスクを一切取らず、DD超過扱いで新規停止・衝突扱いで重複回避
+    def can_take_risk(additional_risk, account_balance):
+        log.warning("[PortfolioRisk/fallback] 保守的判定: can_take_risk=False（モジュール未ロード）")
+        return False
     def _pr_update_positions(bot_name, positions): pass
     def _pr_clear_positions(bot_name): pass
-    def check_weekly_dd(account_balance): return False
-    def check_monthly_dd(account_balance): return False
-    def check_direction_conflict(spy_direction, momentum_direction): return False
+    def check_weekly_dd(account_balance): return True  # DD超過扱いで新規停止（保守的）
+    def check_monthly_dd(account_balance): return True  # DD超過扱いで新規停止（保守的）
+    def check_direction_conflict(spy_direction, momentum_direction): return True  # 衝突扱いで重複回避（保守的）
     def record_daily_pnl(date_str, pnl_usd, bot_name): pass
 
 # strategy_selector: 環境適応型戦術選択エンジン（Phase 1: ログ出力のみ）
@@ -2388,6 +2392,15 @@ class MarketData:
                     continue
                 chain_df = chain_df.copy()
                 chain_df["strike_price"] = chain_df["strike_price"].astype(float)
+                # [ChainGuard] center_strike±20%フィルタで銘柄混入を除外
+                if spy_price and spy_price > 0:
+                    chain_df = chain_df[
+                        (chain_df["strike_price"] - spy_price).abs() / spy_price <= 0.20
+                    ]
+                    if chain_df.empty:
+                        log.warning(f"[ATMSubscribe/ChainGuard] {self.underlying_code} "
+                                    f"center={spy_price:.1f} 全strike±20%外→銘柄混入疑い・スキップ")
+                        continue
                 chain_df["dist"] = (chain_df["strike_price"] - spy_price).abs()
                 chain_sorted = chain_df.nsmallest(3, "dist")
                 new_atm_codes.extend(chain_sorted["code"].tolist())
@@ -3817,6 +3830,7 @@ class TradeEngine:
                 price=price, qty=qty, code=code,
                 trd_side=side, order_type=OrderType.NORMAL,
                 trd_env=env, acc_id=acc,
+                time_in_force=TimeInForce.DAY,
             )
             if ret != RET_OK:
                 log.warning(f"Leg {label} limit initial failed: {data}")
@@ -3876,6 +3890,7 @@ class TradeEngine:
                 price=0, qty=qty, code=code,
                 trd_side=side, order_type=OrderType.MARKET,
                 trd_env=env, acc_id=acc,
+                time_in_force=TimeInForce.DAY,
             )
             if ret == RET_OK:
                 order_id = data.iloc[0].get("order_id", "") if not data.empty else ""
@@ -3907,7 +3922,7 @@ class TradeEngine:
         ret, data = self.trade_ctx.place_order(
             price=0, qty=qty, code=code,
             trd_side=reverse, order_type=OrderType.MARKET,
-            trd_env=env, acc_id=acc,
+            trd_env=env, acc_id=acc, time_in_force=TimeInForce.DAY,
         )
         if ret == RET_OK:
             log.info(f"Unwind OK: {label}")
@@ -4089,6 +4104,50 @@ class TradeEngine:
         except Exception:
             return False
 
+    def cancel_all_open_orders(self, reason: str = "eod_sweep") -> int:
+        """全未約定オーダーをキャンセル。15:55ET直前やshutdown時に呼ぶ。
+
+        Returns: キャンセル成功件数
+        """
+        if DRY_TEST or not FUTU_AVAILABLE or not self.trade_ctx:
+            log.info(f"[SweepCancel/{reason}] DRY_TEST or no trade_ctx → skip")
+            return 0
+        env = self.trade_env
+        acc = int(self.account_id or 0)
+        try:
+            ret, df = self.trade_ctx.order_list_query(trd_env=env, acc_id=acc)
+        except Exception as e:
+            log.warning(f"[SweepCancel/{reason}] order_list_query 例外: {e}")
+            return 0
+        if ret != RET_OK or df is None or df.empty:
+            log.info(f"[SweepCancel/{reason}] no open orders")
+            return 0
+        active_status = {"SUBMITTED", "WAITING_SUBMIT", "FILLED_PART", "SUBMITTING"}
+        canceled = 0
+        for _, row in df.iterrows():
+            status = str(row.get("order_status", ""))
+            if status not in active_status:
+                continue
+            oid = row.get("order_id")
+            if not oid:
+                continue
+            try:
+                self.trade_ctx.modify_order(
+                    modify_order_op=ModifyOrderOp.CANCEL,
+                    order_id=oid, price=0, qty=0,
+                    trd_env=env, acc_id=acc,
+                )
+                canceled += 1
+                log.info(f"[SweepCancel/{reason}] order_id={oid} code={row.get('code')} canceled")
+            except Exception as e:
+                log.warning(f"[SweepCancel/{reason}] cancel失敗 oid={oid}: {e}")
+        if canceled > 0:
+            try:
+                pushover_alert(f"[Atlas/SweepCancel] {reason}", f"{canceled}件の未約定オーダーをキャンセル")
+            except Exception:
+                pass
+        return canceled
+
     def close_all_positions(self, reason: str = "force_close") -> bool:
         """全ポジションを決済し、約定を確認する。
 
@@ -4160,6 +4219,7 @@ class TradeEngine:
                 price=0, qty=qty, code=code,
                 trd_side=side, order_type=OrderType.MARKET,
                 trd_env=env, acc_id=acc,
+                time_in_force=TimeInForce.DAY,
             )
             if ret != RET_OK:
                 log.error(f"Close order FAILED for {code} x{qty}: {data}")
@@ -4408,6 +4468,18 @@ class DemoLogger:
                 self.underlying_code, start=expiry, end=expiry, option_type=futu_opt)
             if ret != RET_OK or chain_df.empty:
                 return {"label": variant["label"], "error": "chain_failed"}
+            # [ChainGuard] center_strike±20%フィルタで銘柄混入を除外
+            spy_price_ref = getattr(self, "_cached_spy_price", None) or 0
+            if spy_price_ref > 0:
+                chain_df = chain_df.copy()
+                chain_df["strike_price"] = chain_df["strike_price"].astype(float)
+                chain_df = chain_df[
+                    (chain_df["strike_price"] - spy_price_ref).abs() / spy_price_ref <= 0.20
+                ]
+                if chain_df.empty:
+                    log.warning(f"[grid_search/ChainGuard] {self.underlying_code} "
+                                f"center={spy_price_ref:.1f} 全strike±20%外→銘柄混入疑い")
+                    return {"label": variant["label"], "error": "chain_guard_empty"}
             codes = chain_df["code"].tolist()
             ret2, snap = self.quote_ctx.get_market_snapshot(codes[:200])
             if ret2 != RET_OK or snap.empty:
@@ -7003,6 +7075,7 @@ class ORBEngine:
                     order_type=OrderType.MARKET,
                     trd_env=self.eng.trade_env,
                     acc_id=int(self.eng.account_id or 0),
+                    time_in_force=TimeInForce.DAY,
                 )
                 if ret != 0:
                     log.error(f"[ORB] 決済注文失敗: {data}")
@@ -8628,7 +8701,9 @@ class StraddleBuyEngine:
                         price=0, qty=pos.qty, code=code,
                         trd_side=TrdSide.SELL, order_type=OrderType.MARKET,
                         trd_env=self.eng.trade_env,
-                        acc_id=int(self.eng.account_id or 0))
+                        acc_id=int(self.eng.account_id or 0),
+                        time_in_force=TimeInForce.DAY,
+                    )
                     if ret != 0:
                         log.error(f"[STRADDLE_BUY] {label}決済失敗: {data}")
                         pushover_alert(f"[STRADDLE_BUY] {label}決済失敗",
@@ -8643,7 +8718,9 @@ class StraddleBuyEngine:
                         price=0, qty=abs(h_qty), code=h_code,
                         trd_side=TrdSide.SELL, order_type=OrderType.MARKET,
                         trd_env=self.eng.trade_env,
-                        acc_id=int(self.eng.account_id or 0))
+                        acc_id=int(self.eng.account_id or 0),
+                        time_in_force=TimeInForce.DAY,
+                    )
                 except Exception as e:
                     log.error(f"[STRADDLE_BUY] ヘッジレッグ決済例外 {h_code}: {e}")
 
