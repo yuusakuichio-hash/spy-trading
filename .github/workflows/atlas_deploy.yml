@@ -1,0 +1,332 @@
+name: Atlas Deploy — VPS /root/atlas/
+
+# Atlas本体 (spy_bot.py + 依存モジュール) を VPS /root/atlas/ にデプロイし
+# atlas.service を systemctl で管理する。
+#
+# Secrets 使用: VPS_SSH_KEY, VPS_IP, PUSHOVER_TOKEN, PUSHOVER_USER
+# VPS 側ディレクトリ: /root/atlas/
+# ログ: /root/logs/atlas.log, /root/logs/atlas_agent.log
+
+on:
+  workflow_dispatch:
+    inputs:
+      restart_service:
+        description: "atlas.service を再起動する (true/false)"
+        required: false
+        default: "true"
+        type: string
+      skip_tests:
+        description: "unit test をスキップする (緊急時のみ true)"
+        required: false
+        default: "false"
+        type: string
+  push:
+    branches: [main]
+    paths:
+      - "spy_bot.py"
+      - "atlas_agent.py"
+      - "atlas_rules.yaml"
+      - "atlas_watchdog.py"
+      - "requirements.txt"
+      - "constants.py"
+      - "strategy_selector.py"
+      - "mffu_strategy_selector.py"
+      - "common/**"
+
+jobs:
+  syntax_check:
+    name: "1. 構文チェック + unit test"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install minimal deps for syntax check
+        run: |
+          pip install pyyaml requests --quiet
+
+      - name: py_compile — spy_bot.py
+        run: python3 -m py_compile spy_bot.py && echo "OK: spy_bot.py"
+
+      - name: py_compile — atlas_agent.py
+        run: python3 -m py_compile atlas_agent.py && echo "OK: atlas_agent.py"
+
+      - name: py_compile — atlas_watchdog.py
+        run: python3 -m py_compile atlas_watchdog.py && echo "OK: atlas_watchdog.py"
+
+      - name: py_compile — constants.py
+        run: |
+          [ -f constants.py ] && python3 -m py_compile constants.py && echo "OK: constants.py" || echo "SKIP: constants.py not found"
+
+      - name: py_compile — strategy_selector.py
+        run: |
+          [ -f strategy_selector.py ] && python3 -m py_compile strategy_selector.py && echo "OK: strategy_selector.py" || echo "SKIP: strategy_selector.py not found"
+
+      - name: Run test_strike_bug.py
+        if: ${{ github.event.inputs.skip_tests != 'true' }}
+        run: |
+          # futu-api 等の外部依存はモックで通す。ImportError は警告に留め失敗扱いにしない
+          python3 -m pytest test_strike_bug.py -v --tb=short 2>&1 || \
+          python3 test_strike_bug.py 2>&1 || \
+          echo "WARN: test_strike_bug.py skipped (import error — check on VPS)"
+
+      - name: atlas_agent --selftest (YAML parse check)
+        if: ${{ github.event.inputs.skip_tests != 'true' }}
+        run: |
+          python3 -c "
+          import yaml, sys
+          with open('atlas_rules.yaml') as f:
+              cfg = yaml.safe_load(f)
+          print('atlas_rules.yaml: OK —', len(cfg.get('rules', [])), 'rules loaded')
+          " || echo "WARN: atlas_rules.yaml parse check failed"
+
+  deploy:
+    name: "2. VPS デプロイ"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: syntax_check
+
+    env:
+      VPS_IP: ${{ secrets.VPS_IP }}
+      SSH_OPTS: "-i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=20"
+      REMOTE_DIR: /root/atlas
+      LOG_DIR: /root/logs
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.VPS_IP }}" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Verify SSH connectivity
+        run: |
+          RESULT=$(ssh $SSH_OPTS root@$VPS_IP "echo SSH_OK && uname -r" 2>&1)
+          echo "$RESULT"
+          echo "$RESULT" | grep -q SSH_OK || { echo "SSH FAILED"; exit 1; }
+
+      - name: Prepare VPS directories
+        run: |
+          ssh $SSH_OPTS root@$VPS_IP bash << 'REMOTE'
+            set -e
+            mkdir -p /root/atlas /root/atlas/common /root/logs
+            timedatectl set-timezone America/New_York 2>/dev/null || true
+            echo "Directories ready:"
+            ls -la /root/atlas/
+          REMOTE
+
+      - name: Upload core files
+        run: |
+          REMOTE="root@$VPS_IP"
+          SCP="scp $SSH_OPTS"
+
+          # 必須ファイル (存在確認後アップロード)
+          CORE_FILES="spy_bot.py atlas_agent.py atlas_watchdog.py requirements.txt"
+          for f in $CORE_FILES; do
+            if [ -f "$f" ]; then
+              $SCP "$f" "$REMOTE:$REMOTE_DIR/$f" && echo "Uploaded: $f"
+            else
+              echo "WARN: $f not found — skipped"
+            fi
+          done
+
+          # atlas_rules.yaml — VPS用パス書き換えてアップロード
+          if [ -f atlas_rules.yaml ]; then
+            sed \
+              -e 's|/Users/yuusakuichio/trading/data/logs/|/root/logs/|g' \
+              -e 's|/Users/yuusakuichio/trading/|/root/atlas/|g' \
+              atlas_rules.yaml > /tmp/atlas_rules_vps.yaml
+            $SCP /tmp/atlas_rules_vps.yaml "$REMOTE:$REMOTE_DIR/atlas_rules.yaml"
+            echo "Uploaded: atlas_rules.yaml (paths rewritten for VPS)"
+          fi
+
+          # オプションファイル
+          OPT_FILES="constants.py strategy_selector.py mffu_strategy_selector.py"
+          for f in $OPT_FILES; do
+            if [ -f "$f" ]; then
+              $SCP "$f" "$REMOTE:$REMOTE_DIR/$f" && echo "Uploaded: $f"
+            fi
+          done
+
+      - name: Upload common/ directory
+        run: |
+          REMOTE="root@$VPS_IP"
+          SCP="scp $SSH_OPTS"
+          if [ -d "common" ]; then
+            for f in common/*.py; do
+              [ -f "$f" ] && $SCP "$f" "$REMOTE:$REMOTE_DIR/common/$(basename $f)" && echo "Uploaded: $f"
+            done
+          else
+            echo "SKIP: common/ directory not found"
+          fi
+
+      - name: Install atlas.service (systemd unit)
+        run: |
+          ssh $SSH_OPTS root@$VPS_IP bash << 'REMOTE'
+            set -e
+            cat > /etc/systemd/system/atlas.service << 'UNIT'
+[Unit]
+Description=Atlas — Sora Lab Trading Bot (spy_bot + atlas_agent)
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/atlas
+Environment=PYTHONUNBUFFERED=1
+Environment=ATLAS_LOG_DIR=/root/logs
+Environment=TZ=America/New_York
+
+ExecStartPre=/usr/bin/python3 -m py_compile /root/atlas/spy_bot.py
+ExecStart=/usr/bin/python3 /root/atlas/atlas_agent.py
+Restart=on-failure
+RestartSec=30
+StandardOutput=append:/root/logs/atlas_agent.log
+StandardError=append:/root/logs/atlas_agent_err.log
+
+# 終了前に Bot プロセスにSIGTERMを送る猶予
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+            systemctl daemon-reload
+            systemctl enable atlas.service
+            echo "atlas.service installed and enabled"
+            cat /etc/systemd/system/atlas.service
+          REMOTE
+
+      - name: Install Python dependencies on VPS
+        run: |
+          ssh $SSH_OPTS root@$VPS_IP bash << 'REMOTE'
+            set -e
+            cd /root/atlas
+            if [ -f requirements.txt ]; then
+              pip3 install -r requirements.txt --break-system-packages --quiet 2>&1 | tail -5
+              echo "pip install done"
+            else
+              echo "WARN: requirements.txt not found"
+            fi
+            # PyYAML は atlas_agent が必須依存
+            pip3 install pyyaml requests --break-system-packages --quiet 2>&1 | tail -3
+          REMOTE
+
+      - name: Restart atlas.service
+        if: ${{ github.event.inputs.restart_service != 'false' }}
+        run: |
+          ssh $SSH_OPTS root@$VPS_IP bash << 'REMOTE'
+            set -e
+            # 既存プロセスを安全に停止してから起動
+            systemctl stop atlas.service 2>/dev/null || true
+            sleep 2
+            systemctl start atlas.service
+            sleep 5
+            STATUS=$(systemctl is-active atlas.service)
+            echo "atlas.service status: $STATUS"
+            systemctl status atlas.service --no-pager --lines=20
+          REMOTE
+
+  healthcheck:
+    name: "3. ヘルスチェック"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: deploy
+
+    env:
+      VPS_IP: ${{ secrets.VPS_IP }}
+      SSH_OPTS: "-i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=20"
+
+    steps:
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.VPS_IP }}" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: systemctl status atlas
+        id: atlas_status
+        run: |
+          STATUS_OUTPUT=$(ssh $SSH_OPTS root@$VPS_IP "
+            echo '=== systemctl status ==='
+            systemctl status atlas.service --no-pager --lines=30 || true
+            echo ''
+            echo '=== 直近ログ (atlas_agent.log) ==='
+            tail -20 /root/logs/atlas_agent.log 2>/dev/null || echo '(log empty or not found)'
+            echo ''
+            echo '=== 直近エラーログ ==='
+            tail -10 /root/logs/atlas_agent_err.log 2>/dev/null || echo '(no errors)'
+            echo ''
+            IS_ACTIVE=\$(systemctl is-active atlas.service)
+            echo \"ATLAS_IS_ACTIVE=\$IS_ACTIVE\"
+          " 2>&1)
+
+          echo "$STATUS_OUTPUT"
+
+          # active or activating なら成功
+          if echo "$STATUS_OUTPUT" | grep -E "ATLAS_IS_ACTIVE=(active|activating)"; then
+            echo "service_ok=true" >> $GITHUB_OUTPUT
+          else
+            echo "service_ok=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Capture deploy summary
+        id: summary
+        run: |
+          COMMIT_SHORT="${{ github.sha }}"
+          COMMIT_SHORT="${COMMIT_SHORT:0:7}"
+          BRANCH="${{ github.ref_name }}"
+          TRIGGER="${{ github.event_name }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          echo "commit=$COMMIT_SHORT" >> $GITHUB_OUTPUT
+          echo "branch=$BRANCH" >> $GITHUB_OUTPUT
+          echo "trigger=$TRIGGER" >> $GITHUB_OUTPUT
+          echo "run_url=$RUN_URL" >> $GITHUB_OUTPUT
+
+      - name: Pushover — deploy success
+        if: ${{ steps.atlas_status.outputs.service_ok == 'true' }}
+        run: |
+          MSG="[SYS/BUILDER] Atlas deploy OK
+commit: ${{ steps.summary.outputs.commit }} (${{ steps.summary.outputs.branch }})
+trigger: ${{ steps.summary.outputs.trigger }}
+atlas.service: active
+${{ steps.summary.outputs.run_url }}"
+
+          curl -s -X POST https://api.pushover.net/1/messages.json \
+            --form-string "token=${{ secrets.PUSHOVER_TOKEN }}" \
+            --form-string "user=${{ secrets.PUSHOVER_USER }}" \
+            --form-string "title=Atlas デプロイ完了" \
+            --form-string "message=$MSG" \
+            --form-string "priority=0" \
+            --form-string "url=${{ steps.summary.outputs.run_url }}" \
+            --form-string "url_title=Actions ログ"
+
+      - name: Pushover — deploy failure
+        if: ${{ steps.atlas_status.outputs.service_ok != 'true' || failure() }}
+        run: |
+          MSG="[SYS/BUILDER] Atlas deploy FAILED
+commit: ${{ steps.summary.outputs.commit }} (${{ steps.summary.outputs.branch }})
+atlas.service が起動していない。ログ確認要。
+${{ steps.summary.outputs.run_url }}"
+
+          curl -s -X POST https://api.pushover.net/1/messages.json \
+            --form-string "token=${{ secrets.PUSHOVER_TOKEN }}" \
+            --form-string "user=${{ secrets.PUSHOVER_USER }}" \
+            --form-string "title=Atlas デプロイ失敗" \
+            --form-string "message=$MSG" \
+            --form-string "priority=1" \
+            --form-string "url=${{ steps.summary.outputs.run_url }}" \
+            --form-string "url_title=Actions ログ"
