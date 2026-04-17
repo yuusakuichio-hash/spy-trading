@@ -10,6 +10,11 @@ name: Atlas Deploy — VPS /root/atlas/
 on:
   workflow_dispatch:
     inputs:
+      approval_issue_number:
+        description: "Two-Man Rule 承認済み Issue 番号 (例: 42)"
+        required: false
+        default: ""
+        type: string
       restart_service:
         description: "atlas.service を再起動する (true/false)"
         required: false
@@ -87,11 +92,37 @@ jobs:
           print('atlas_rules.yaml: OK —', len(cfg.get('rules', [])), 'rules loaded')
           " || echo "WARN: atlas_rules.yaml parse check failed"
 
+  two_man_gate:
+    name: "2. Two-Man Rule 承認チェック"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: syntax_check
+    environment: production
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Two-Man Rule チェック
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TWO_MAN_ISSUE_NUMBER: ${{ github.event.inputs.approval_issue_number }}
+        run: |
+          python3 scripts/two_man_check.py
+          EXIT_CODE=$?
+          if [ $EXIT_CODE -eq 2 ]; then
+            echo "::error::Two-Man Rule BLOCKED — BUILDER_APPROVED / OPS_APPROVED が揃っていません。"
+            exit 2
+          elif [ $EXIT_CODE -ne 0 ]; then
+            echo "::error::Two-Man Rule チェック中にエラーが発生しました。"
+            exit 1
+          fi
+
   deploy:
-    name: "2. VPS デプロイ"
+    name: "3. VPS デプロイ"
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: syntax_check
+    needs: two_man_gate
 
     env:
       VPS_IP: ${{ secrets.VPS_IP }}
@@ -240,7 +271,7 @@ UNIT
           REMOTE
 
   healthcheck:
-    name: "3. ヘルスチェック"
+    name: "4. ヘルスチェック"
     runs-on: ubuntu-latest
     timeout-minutes: 5
     needs: deploy
