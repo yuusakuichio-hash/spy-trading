@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# pre-commit: F1対策（analyst提案・24件中10件・41.7%事前検知可）
+# - py_compile: 構文エラー即検知
+# - ruff: lint + NameError的パターン検知（F821 undefined-name 等）
+# - staged python files のみ対象
+
+set -e
+
+STAGED_PY=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.py$' || true)
+if [ -z "$STAGED_PY" ]; then
+  exit 0
+fi
+
+echo "[pre-commit] $(echo "$STAGED_PY" | wc -l | tr -d ' ') python files staged"
+
+# 1. py_compile (syntax check)
+for f in $STAGED_PY; do
+  if [ -f "$f" ]; then
+    python3 -m py_compile "$f" 2>&1 || {
+      echo "[pre-commit] SYNTAX ERROR in $f — commit blocked"
+      exit 1
+    }
+  fi
+done
+
+# 2. ruff check (catch F821 undefined-name, E722 bare except, etc)
+if command -v ruff >/dev/null 2>&1; then
+  # 致命的チェックのみ（F821/F811/F823/E9）。style関連はwarning
+  ruff check --select=E9,F821,F811,F823,F601,F602 $STAGED_PY || {
+    echo "[pre-commit] RUFF critical errors — commit blocked"
+    echo "[pre-commit] Run: ruff check --select=E9,F821,F811,F823,F601,F602 <files>"
+    exit 1
+  }
+else
+  echo "[pre-commit] ruff not installed — skipping lint"
+fi
+
+echo "[pre-commit] OK"
+exit 0

@@ -1769,7 +1769,7 @@ def save_ivr_cache(ivr: float):
 
 # ── ThetaData IVR ──────────────────────────────────────────────────────────────
 
-def _thetadata_greeks_dir(date_str: str) -> "pathlib.Path":
+def _thetadata_greeks_dir(date_str: str) -> Path:
     """data/thetadata/YYYYMMDD/ ディレクトリパスを返す。"""
     return _BASE_DIR / "thetadata" / date_str.replace("-", "")
 
@@ -6752,20 +6752,18 @@ class ORBEngine:
             return None
 
         # [P0 BUG修正 2026/04/12] underlying_code を spy_price 取得前に SPY に固定する
-        # ルートコーズ: MassVerifyループで self.mkt.underlying_code が US..SPX 等に切替わった
-        # 状態で spy_price = self._get_spy_price() を呼ぶと、_get_spy_price() →
-        # self.mkt.get_spy_current() → get_spy_snapshot() → self.underlying_code(=SPX) の
-        # 価格（5400系）を返し、atm_strike=5400 でSPYチェーンを検索してしまうバグ。
-        # 修正: underlying_code 固定を spy_price 取得より先に行う。
+        # [2026-04-18 修正] ORBはSPY専用戦術（内部ロジックがSPY hardcode）のため、
+        # 他銘柄がSymbolSelectorで選ばれた場合は**エントリー中止**する。
+        # 以前は「SPY強制切替」で他銘柄をSPYとして処理してたが、これは設計違反
+        # （TSLAが選ばれてSPYのORBエントリーが発生する）。
+        # ORB真マルチ銘柄対応は別リファクタで実施（SymbolSelector側でORB時はSPY限定）。
         _orb_orig_underlying = self.mkt.underlying_code
-        _orb_forced_spy = False
         if _orb_orig_underlying != UNDERLYING_CODE:
             log.warning(
-                f"[ORB] underlying_code={_orb_orig_underlying} → SPY固定適用 "
-                f"(spy_price取得前に切替: ORBは内部SPY価格基準のため)"
+                f"[ORB] underlying_code={_orb_orig_underlying} != SPY → "
+                f"ORBマルチ銘柄未対応のためエントリー中止"
             )
-            self.mkt.underlying_code = UNDERLYING_CODE
-            _orb_forced_spy = True
+            return None
 
         spy_price = self._get_spy_price()
         if not spy_price or spy_price <= 0:
@@ -10856,6 +10854,14 @@ class SPYCreditSpreadBot:
 
                 if tactic == "orb_buy" and self.orb_engine is not None:
                     # ── ORB戦術 ────────────────────────────────────────────
+                    # [2026-04-18] ORB は SPY 専用（内部ロジックSPY hardcode）のため
+                    # 他銘柄選定時は即スキップ。WARNING 出さない。
+                    if symbol != UNDERLYING_CODE:
+                        log.debug(
+                            f"[MassVerify] {symbol.replace('US.','')}×orb_buy "
+                            f"スキップ(ORBはSPY専用)"
+                        )
+                        return
                     _orb_dir = self.orb_engine.check_breakout()
                     if _orb_dir is None:
                         # dry-testでは方向をシミュレート
@@ -11200,10 +11206,20 @@ class SPYCreditSpreadBot:
             if tactic == "orb_buy" and self.orb_engine:
                 _pos = pos_info.get("position")
                 if _pos:
-                    _fc_price = (
-                        self.orb_engine._get_option_price(_pos)
-                        or _pos.entry_price * 0.3
-                    )
+                    # [2026-04-18 防衛] entry_price/exit_priceの型エラー防止
+                    try:
+                        _entry_price = float(getattr(_pos, "entry_price", 0) or 0)
+                    except (TypeError, ValueError):
+                        log.warning(f"[MassVerify/ORB] entry_price 型不正: {getattr(_pos, 'entry_price', None)!r}")
+                        return 0.0
+                    _raw_price = self.orb_engine._get_option_price(_pos)
+                    try:
+                        _fc_price = float(_raw_price) if _raw_price else _entry_price * 0.3
+                    except (TypeError, ValueError):
+                        log.warning(f"[MassVerify/ORB] get_option_price str返却: {_raw_price!r}")
+                        _fc_price = _entry_price * 0.3
+                    # ORBPosition entry_price を強制的に float化してから渡す
+                    _pos.entry_price = _entry_price
                     _result = self.orb_engine._close_position(
                         _pos, _fc_price, reason
                     )
