@@ -245,7 +245,8 @@ PAPER_MASS_VERIFY_SYMBOLS = [   # 大量検証対象の全10銘柄 (US..SPXはSP
     "US.TSLA", "US.NVDA", "US.AAPL",             # 個別株 (月水金0DTE)
     "US.MSFT", "US.AMZN", "US.META", "US.GOOGL", # 個別株
 ]
-PAPER_MASS_VERIFY_TACTICS = ["cs_sell", "orb_buy", "straddle_buy"]  # 全戦術
+PAPER_MASS_VERIFY_TACTICS = ["cs_sell", "orb_buy", "straddle_buy",
+                             "calendar_sell", "strangle_sell"]  # 全戦術
 # active_symbols キーフォーマット: "{symbol}_{tactic}" で銘柄×戦術をユニーク管理
 PAPER_MASS_VERIFY_ENTRY_INTERVAL_MIN = 90  # 同一symbol+tacticで再エントリーまでの間隔(分)
 
@@ -6778,26 +6779,37 @@ class ORBEngine:
 
     # ── Phase 2: ORB記録（9:35 ETに呼び出す）──────────────────────────────
     def record_opening_range(self) -> bool:
-        """9:30-9:35の5分間高値/安値を記録する。"""
+        """9:30-9:35の5分間高値/安値を記録する（マルチ銘柄対応）。"""
+        _underlying = self.mkt.underlying_code if self.mkt else "US.SPY"
+        _ticker = _underlying.replace("US.", "").replace(".", "")
+        _fallback_prices = {
+            "SPY": 560.0, "QQQ": 480.0, "IWM": 200.0,
+            "TSLA": 250.0, "NVDA": 900.0, "AAPL": 200.0,
+            "MSFT": 420.0, "AMZN": 200.0, "META": 600.0,
+            "GOOGL": 170.0,
+        }
         if self.dry_test:
             try:
                 resp = requests.get(
                     "https://finnhub.io/api/v1/quote",
-                    params={"symbol": "SPY", "token": FINNHUB_API_KEY},
+                    params={"symbol": _ticker, "token": FINNHUB_API_KEY},
                     timeout=5,
                 )
-                spy_price = float(resp.json().get("c") or 0) or 560.0
+                underlying_price = float(resp.json().get("c") or 0) or _fallback_prices.get(_ticker, 300.0)
             except Exception:
-                spy_price = 560.0
-            self.orb_high  = spy_price + 0.5
-            self.orb_low   = spy_price - 0.5
+                underlying_price = _fallback_prices.get(_ticker, 300.0)
+            self.orb_high  = underlying_price + 0.5
+            self.orb_low   = underlying_price - 0.5
             self.orb_range = 1.0
             self.orb_checked = True
-            log.info(f"[ORB][DRY-TEST] ORB: H={self.orb_high:.2f} L={self.orb_low:.2f}")
+            log.info(
+                f"[ORB][DRY-TEST] {_ticker} ORB: H={self.orb_high:.2f}"
+                f" L={self.orb_low:.2f}"
+            )
             return True
 
-        # futu or Yahoo/Finnhub から1分足取得
-        bars = self._get_spy_1min_bars(minutes=10)
+        # futu or Yahoo/Finnhub から1分足取得（銘柄別）
+        bars = self._get_underlying_1min_bars(minutes=10)
         if not bars:
             log.warning("[ORB] 1分足データ取得失敗")
             return False
@@ -6824,15 +6836,23 @@ class ORBEngine:
                  f"Range={self.orb_range:.2f}")
         return True
 
-    def _get_spy_1min_bars(self, minutes: int = 10) -> list:
-        """SPY 1分足データを取得する。futu → Yahoo → Finnhub の順で試みる。"""
+    def _get_underlying_1min_bars(self, minutes: int = 10) -> list:
+        """underlying_code の1分足データを取得する（マルチ銘柄対応）。
+
+        [マルチ銘柄対応 2026-04-18] futu → Yahoo → Finnhub の順で銘柄別に取得。
+        """
+        _underlying = self.mkt.underlying_code if self.mkt else "US.SPY"
+        _ticker = _underlying.replace("US.", "").replace(".", "")
+        # Yahoo Finance用ティッカー（インデックスは^プレフィックス）
+        _yahoo_ticker = _ticker if not _underlying.startswith("US..") else "^" + _underlying[4:]
+
         if FUTU_AVAILABLE and self.mkt.quote_ctx and not self.dry_test:
             try:
                 import futu as ft
                 end_dt   = datetime.datetime.now(ET)
                 start_dt = end_dt - datetime.timedelta(minutes=minutes + 5)
                 ret, kline, _ = self.mkt.quote_ctx.request_history_kline(
-                    self.mkt.underlying_code,
+                    _underlying,
                     start=start_dt.strftime("%Y-%m-%d %H:%M:%S"),
                     end=end_dt.strftime("%Y-%m-%d %H:%M:%S"),
                     ktype=ft.KLType.K_1M,
@@ -6850,14 +6870,14 @@ class ORBEngine:
                         })
                     return bars[-minutes:] if len(bars) > minutes else bars
             except Exception as e:
-                log.debug(f"[ORB] 1min futu: {e}")
+                log.debug(f"[ORB] 1min futu {_ticker}: {e}")
 
-        # Yahoo Finance
+        # Yahoo Finance（銘柄別）
         try:
             end_ts   = int(time.time())
             start_ts = end_ts - 3600
             resp = requests.get(
-                "https://query1.finance.yahoo.com/v8/finance/chart/SPY",
+                f"https://query1.finance.yahoo.com/v8/finance/chart/{_yahoo_ticker}",
                 params={"period1": start_ts, "period2": end_ts, "interval": "1m"},
                 headers={"User-Agent": "Mozilla/5.0"},
                 timeout=10,
@@ -6876,18 +6896,18 @@ class ORBEngine:
                              "open": float(o), "high": float(h),
                              "low": float(lo), "close": float(c)})
             if bars:
-                log.info(f"[ORB] 1min bars via Yahoo: {len(bars)}")
+                log.info(f"[ORB] 1min bars via Yahoo {_ticker}: {len(bars)}")
                 return bars[-minutes:] if len(bars) > minutes else bars
         except Exception as e:
-            log.debug(f"[ORB] 1min Yahoo: {e}")
+            log.debug(f"[ORB] 1min Yahoo {_ticker}: {e}")
 
-        # Finnhub
+        # Finnhub（銘柄別）
         try:
             end_ts   = int(time.time())
             start_ts = end_ts - 3600
             resp = requests.get(
                 "https://finnhub.io/api/v1/stock/candle",
-                params={"symbol": "SPY", "resolution": "1",
+                params={"symbol": _ticker, "resolution": "1",
                         "from": start_ts, "to": end_ts,
                         "token": FINNHUB_API_KEY},
                 timeout=10,
@@ -6901,11 +6921,15 @@ class ORBEngine:
                              "open": float(data["o"][i]), "high": float(data["h"][i]),
                              "low":  float(data["l"][i]), "close": float(data["c"][i])})
             if bars:
-                log.info(f"[ORB] 1min bars via Finnhub: {len(bars)}")
+                log.info(f"[ORB] 1min bars via Finnhub {_ticker}: {len(bars)}")
             return bars[-minutes:] if len(bars) > minutes else bars
         except Exception as e:
-            log.debug(f"[ORB] 1min Finnhub: {e}")
+            log.debug(f"[ORB] 1min Finnhub {_ticker}: {e}")
         return []
+
+    def _get_spy_1min_bars(self, minutes: int = 10) -> list:
+        """後方互換ラッパー。_get_underlying_1min_bars() に委譲する。"""
+        return self._get_underlying_1min_bars(minutes=minutes)
 
     # ── Phase 3: ブレイクアウトチェック（毎tick呼び出す）──────────────────
     def check_breakout(self) -> Optional[str]:
@@ -7087,23 +7111,32 @@ class ORBEngine:
 
         today_str = datetime.datetime.now(ET).strftime("%Y-%m-%d")
 
-        # dry-testモード: 仮想ポジション
+        # dry-testモード: 仮想ポジション（マルチ銘柄対応）
         if self.dry_test:
             virtual_price = 1.50
-            virtual_code  = (f"US.SPY{datetime.datetime.now(ET).strftime('%y%m%d')}"
-                             f"{'C' if direction == 'CALL' else 'P'}{int(atm_strike * 1000)}")
+            # [マルチ銘柄] 銘柄別のオプションコードを生成
+            virtual_code  = (
+                f"US.{_orb_ticker}{datetime.datetime.now(ET).strftime('%y%m%d')}"
+                f"{'C' if direction == 'CALL' else 'P'}{int(atm_strike * 1000)}"
+            )
             cash = 10000.0
             qty  = self._calc_qty(cash, virtual_price)
-            log.info(f"[ORB][DRY-TEST] Entry: {direction} {virtual_code} x{qty} "
-                     f"@ ${virtual_price:.2f}")
-            pushover("[ORB][DRY-TEST]", f"エントリー: {direction} ATM={atm_strike} "
-                     f"x{qty} @ ${virtual_price:.2f}")
+            log.info(
+                f"[ORB][DRY-TEST] {_orb_ticker} Entry: {direction} {virtual_code}"
+                f" x{qty} @ ${virtual_price:.2f}"
+            )
+            pushover(
+                "[Atlas][ORB][DRY-TEST]",
+                f"{_orb_ticker} エントリー: {direction} ATM={atm_strike}"
+                f" x{qty} @ ${virtual_price:.2f}",
+            )
             pos = ORBPosition(virtual_code, qty, virtual_price,
                               direction, self.orb_high, self.orb_low)
             _orb_append_pnl({"event": "entry", "direction": direction,
                              "code": virtual_code, "strike": atm_strike,
                              "qty": qty, "entry_price": virtual_price,
                              "orb_high": self.orb_high, "orb_low": self.orb_low,
+                             "symbol": _orb_ticker,
                              "vix": self.today_vix})
             return pos
 
@@ -7238,9 +7271,13 @@ class ORBEngine:
             except Exception:
                 pass
 
-        pushover("[ORB]", f"エントリー: {direction} Strike={option_strike} x{qty} "
-                 f"@ ${option_price:.2f}\nORB H={self.orb_high:.2f} L={self.orb_low:.2f} "
-                 f"TP=${pos.tp_price:.2f} SL=${pos.sl_price:.2f}")
+        _orb_sym_short = self.mkt.underlying_code.replace("US.", "") if self.mkt else "SPY"
+        pushover(
+            "[Atlas][ORB]",
+            f"{_orb_sym_short} エントリー: {direction} Strike={option_strike} x{qty}"
+            f" @ ${option_price:.2f}\nORB H={self.orb_high:.2f} L={self.orb_low:.2f}"
+            f" TP=${pos.tp_price:.2f} SL=${pos.sl_price:.2f}",
+        )
         return pos
 
     def _calc_qty(self, cash: float, option_price: float) -> int:
@@ -9809,6 +9846,1759 @@ class IVCrushEngine:
         """ポジション保有中かどうか。"""
         return self.position is not None
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Strangle Sell (Atlas戦術) — OTM Call売り + OTM Put売り (credit受取)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@_dc.dataclass
+class StrangleSellPosition:
+    """ストラングル売りポジション情報。
+
+    call/put を同時に売り、credit を受け取る。
+    profit_target: net_credit × STRANGLE_SELL_PROFIT_TARGET で利確。
+    stop_loss:     net_credit × STRANGLE_SELL_STOP_LOSS_MULT でストップ。
+    """
+    symbol: str
+    call_code: str
+    put_code: str
+    call_strike: float
+    put_strike: float
+    qty: int
+    call_entry_price: float    # sellプレミアム（per share）
+    put_entry_price: float     # sellプレミアム（per share）
+    net_credit: float          # (call + put) per share × 100 × qty
+    entry_time: str
+    expiry: str
+    call_delta: float = 0.0    # エントリー時のcall delta（記録用）
+    put_delta: float  = 0.0    # エントリー時のput |delta|（記録用）
+
+
+class StrangleSellEngine:
+    """OTM Call売り + OTM Put売りのストラングル戦術エンジン。
+
+    設計根拠（Step 1-4）:
+    Step 1 分解:
+      - エントリー: IVR > STRANGLE_SELL_IVR_MIN (デフォルトP70相当 = IVR 60)
+                   かつ VIX が STRANGLE_SELL_VIX_MIN〜STRANGLE_SELL_VIX_MAX の範囲
+      - Call売り: delta ≈ +0.15 (OTM)
+      - Put売り:  delta ≈ -0.15 (OTM)
+      - 満期: 0DTE（当日満期）
+      - credit受取: (call_mid + put_mid) × qty × 100
+
+    Step 2 データ:
+      - IVR: MarketData.calc_ivr() で動的閾値算出（fallback: STRANGLE_SELL_IVR_MIN=60）
+      - VIX: MarketData.get_vix()
+      - オプションチェーン: get_option_chain_with_greeks() でdelta指定検索
+
+    Step 3 ルール化:
+      - エントリー: IVR > ivr_high_threshold AND VIX in [15, 50]
+      - 利確: buybackコスト ≤ net_credit × (1 - PROFIT_TARGET)
+      - 損切り: buybackコスト ≥ net_credit × STOP_LOSS_MULT
+      - フォースクローズ: 15:45 ET
+
+    Step 4 課題:
+      - naked short扱いで証拠金高 → ペーパー確認後に本番移行
+      - マルチ銘柄: US..SPX除外 (EXCLUDED_SYMBOLS)
+      - delta=0.15が取れない場合: DELTA_TOL(±0.05)内で最近傍を採用
+
+    マルチ銘柄対応:
+      - symbol引数で任意の銘柄を指定可能（US.SPY/US.QQQ/US.TSLA 等）
+      - US..SPX（CBOEインデックス）は除外
+    """
+
+    EXCLUDED_SYMBOLS = {"US..SPX"}
+
+    def __init__(self, mkt: "MarketData", eng: "TradeEngine",
+                 paper: bool = False, dry_test: bool = False,
+                 symbol: Optional[str] = None):
+        self.mkt      = mkt
+        self.eng      = eng
+        self.paper    = paper
+        self.dry_test = dry_test
+        self.symbol   = symbol or getattr(mkt, "underlying_code", "US.SPY")
+
+        # 日次状態
+        self.position:         Optional[StrangleSellPosition] = None
+        self.entry_done:       bool = False
+        self.trade_done:       bool = False
+        self._entry_attempted: bool = False
+        self._dry_test_start:  datetime.datetime = datetime.datetime.now(ET)
+
+    def reset_daily(self):
+        """日次リセット。ポジション残存時は警告ログを出す。"""
+        if self.position is not None:
+            log.warning(
+                f"[StrangleSell] reset_daily: ポジション残存 "
+                f"call={self.position.call_code} put={self.position.put_code}"
+            )
+        self.position          = None
+        self.entry_done        = False
+        self.trade_done        = False
+        self._entry_attempted  = False
+        self._dry_test_start   = datetime.datetime.now(ET)
+
+    @staticmethod
+    def should_trade_today(
+        symbol: str,
+        vix: Optional[float],
+        ivr: Optional[float],
+        ivr_high_threshold: float,
+        paper: bool = False,
+    ) -> bool:
+        """ストラングル売りを当日実施すべきか判定する。
+
+        条件:
+        1. ENABLE_STRANGLE_SELL が True
+        2. symbol が EXCLUDED_SYMBOLS に含まれない（US..SPX 除外）
+        3. VIX が [STRANGLE_SELL_VIX_MIN, STRANGLE_SELL_VIX_MAX] 内
+        4. IVR が ivr_high_threshold（動的P70相当）以上
+        ペーパーモードでは 3〜4 をバイパス（全環境データ収集）。
+
+        Returns:
+            True: ストラングル売りを当日実施
+        """
+        if not ENABLE_STRANGLE_SELL:
+            return False
+        if symbol in StrangleSellEngine.EXCLUDED_SYMBOLS:
+            log.info(f"[StrangleSell] {symbol} は除外シンボル → スキップ")
+            return False
+        if vix is None:
+            return False
+        if paper:
+            log.info(
+                f"[StrangleSell][PAPER] {symbol} VIX={vix:.2f} IVR={ivr} "
+                f"→ 条件バイパス（ペーパー検証モード）"
+            )
+            return True
+        if not (STRANGLE_SELL_VIX_MIN <= vix <= STRANGLE_SELL_VIX_MAX):
+            log.info(
+                f"[StrangleSell] VIX={vix:.2f} 範囲外 "
+                f"[{STRANGLE_SELL_VIX_MIN}, {STRANGLE_SELL_VIX_MAX}] → スキップ"
+            )
+            return False
+        if ivr is None or ivr < ivr_high_threshold:
+            log.info(
+                f"[StrangleSell] IVR={ivr} < threshold={ivr_high_threshold:.1f} → スキップ"
+            )
+            return False
+        log.info(
+            f"[StrangleSell] {symbol} VIX={vix:.2f} IVR={ivr:.1f} "
+            f"→ エントリー条件充足"
+        )
+        return True
+
+    def _find_otm_option(self, expiry: str, opt_type: str,
+                         underlying_price: float,
+                         target_delta: float) -> Optional[dict]:
+        """指定delta付近のOTMオプションを探す。
+
+        target_delta: CALL=+0.15 / PUT=0.15（絶対値）
+        STRANGLE_SELL_DELTA_TOL（±0.05）内で最も近いdeltaのstrike候補を返す。
+        dry_testモードでは概算strikeを返す（実チェーン不使用）。
+        """
+        if self.dry_test:
+            import math as _math
+            vix = 20.0
+            try:
+                v = self.mkt.get_vix()
+                if v is not None:
+                    vix = float(v)
+            except Exception:
+                pass
+            # delta=0.15 ≒ 1.2σ OTM
+            sigma_daily = underlying_price * (vix / 100.0) / _math.sqrt(252.0)
+            offset      = 1.2 * sigma_daily
+            if opt_type == "CALL":
+                strike = round(underlying_price + offset)
+            else:
+                strike = round(underlying_price - offset)
+            date_str = expiry.replace("-", "")[2:]  # YYMMDD
+            ticker   = self.symbol.replace("US.", "").replace(".", "")
+            code     = f"DRY_{ticker}_{date_str}{opt_type[0]}{int(strike * 1000)}"
+            return {
+                "code":         code,
+                "strike_price": float(strike),
+                "delta":        target_delta if opt_type == "CALL" else -target_delta,
+                "bid_price":    0.25,
+                "ask_price":    0.35,
+            }
+
+        # futu API経由でチェーンを取得してdelta最近傍を選ぶ
+        chain = self.mkt.get_option_chain_with_greeks(
+            expiry, opt_type, center_strike=float(underlying_price))
+        if not chain:
+            return None
+
+        best: Optional[dict] = None
+        best_diff: float = 999.0
+        for opt in chain:
+            raw_delta = opt.get("delta")
+            if raw_delta is None:
+                continue
+            d    = abs(float(raw_delta))
+            diff = abs(d - target_delta)
+            if diff < best_diff and diff <= STRANGLE_SELL_DELTA_TOL:
+                best_diff = diff
+                best = opt
+
+        if best is None:
+            log.warning(
+                f"[StrangleSell] {opt_type} delta≈{target_delta} 候補なし "
+                f"(TOL={STRANGLE_SELL_DELTA_TOL}) symbol={self.symbol}"
+            )
+        return best
+
+    def execute_entry(self, underlying_price: float,
+                      vix: float) -> Optional[StrangleSellPosition]:
+        """ストラングル売りを発注する。
+
+        (1) OTM CALL を売る（delta≈0.15）
+        (2) OTM PUT を売る（delta≈0.15）
+        (3) StrangleSellPosition を返す
+        dry_testモードでは仮想発注。
+        pre_trade_check（全4層）とTMR qty検証を通過すること。
+        """
+        # US.SPX除外ガード
+        if self.symbol in self.EXCLUDED_SYMBOLS:
+            log.info(f"[StrangleSell] {self.symbol} は対象外 → スキップ")
+            return None
+        if self._entry_attempted:
+            return None
+
+        self._entry_attempted = True
+        now_et  = datetime.datetime.now(ET)
+        expiry  = now_et.strftime("%Y-%m-%d")
+
+        call_opt = self._find_otm_option(expiry, "CALL", underlying_price,
+                                          STRANGLE_SELL_CALL_DELTA)
+        put_opt  = self._find_otm_option(expiry, "PUT",  underlying_price,
+                                          STRANGLE_SELL_PUT_DELTA)
+        if call_opt is None or put_opt is None:
+            log.warning(
+                f"[StrangleSell] OTMオプション取得失敗: "
+                f"call={call_opt} put={put_opt} symbol={self.symbol}"
+            )
+            return None
+
+        call_code   = call_opt["code"]
+        put_code    = put_opt["code"]
+        call_strike = float(call_opt.get("strike_price", 0))
+        put_strike  = float(put_opt.get("strike_price", 0))
+        call_bid    = float(call_opt.get("bid_price", 0))
+        call_ask    = float(call_opt.get("ask_price", 0))
+        put_bid     = float(put_opt.get("bid_price", 0))
+        put_ask     = float(put_opt.get("ask_price", 0))
+        call_delta  = float(call_opt.get("delta", STRANGLE_SELL_CALL_DELTA))
+        put_delta   = abs(float(put_opt.get("delta", -STRANGLE_SELL_PUT_DELTA)))
+
+        call_mid = (call_bid + call_ask) / 2 if (call_bid + call_ask) > 0 else call_ask
+        put_mid  = (put_bid + put_ask)   / 2 if (put_bid + put_ask)   > 0 else put_ask
+
+        if call_mid <= 0 or put_mid <= 0:
+            log.warning(
+                f"[StrangleSell] midプライス不正: call_mid={call_mid:.2f} "
+                f"put_mid={put_mid:.2f} → スキップ"
+            )
+            return None
+
+        # サイズ計算（口座資金の STRANGLE_SELL_MAX_RISK_PCT 以内）
+        try:
+            cash = self.eng.get_account_cash()
+        except Exception:
+            cash = 10000.0
+        max_risk_usd      = cash * STRANGLE_SELL_MAX_RISK_PCT
+        net_per_share     = call_mid + put_mid
+        risk_per_contract = net_per_share * STRANGLE_SELL_STOP_LOSS_MULT * 100
+        qty = max(1, min(STRANGLE_SELL_MAX_QTY,
+                         int(max_risk_usd / risk_per_contract) if risk_per_contract > 0 else 1))
+        net_credit_total  = net_per_share * qty * 100
+
+        log.info(
+            f"[StrangleSell] ENTRY plan: {self.symbol} "
+            f"CALL strike={call_strike} delta={call_delta:.3f} mid={call_mid:.2f} | "
+            f"PUT strike={put_strike} delta={put_delta:.3f} mid={put_mid:.2f} | "
+            f"qty={qty} net_credit=${net_credit_total:.2f}"
+        )
+
+        # pre_trade_check (全4層)
+        if FUTU_AVAILABLE and not self.dry_test:
+            import futu as ft
+            for _code, _price in [(call_code, call_mid), (put_code, put_mid)]:
+                allow, reason_str = _pre_trade_gate(
+                    _code, qty, _price, ft.TrdSide.SELL, paper=self.paper
+                )
+                if not allow:
+                    log.warning(f"[StrangleSell] pre_trade_gate ブロック: {reason_str}")
+                    return None
+
+        # TMR qty検証
+        if _QTY_CALCULATOR_AVAILABLE and not self.dry_test:
+            try:
+                _tmr_verify_spread_qty(
+                    cash=cash,
+                    spread_width=0,
+                    capital_pct=STRANGLE_SELL_MAX_RISK_PCT,
+                    qty_from_calc_qty=qty,
+                )
+            except QtyMismatchError as qe:
+                log.error(f"[StrangleSell] TMR qty mismatch: {qe}")
+                pushover_alert("[Atlas/STRANGLE]", f"TMR qty検証失敗: {qe}", priority=1)
+                return None
+            except Exception as te:
+                log.warning(f"[StrangleSell] TMR検証スキップ: {te}")
+
+        pos = StrangleSellPosition(
+            symbol=self.symbol,
+            call_code=call_code, put_code=put_code,
+            call_strike=call_strike, put_strike=put_strike,
+            qty=qty,
+            call_entry_price=call_mid,
+            put_entry_price=put_mid,
+            net_credit=net_credit_total,
+            entry_time=now_et.isoformat(),
+            expiry=expiry,
+            call_delta=call_delta,
+            put_delta=put_delta,
+        )
+
+        if self.dry_test:
+            self.eng._virtual_pos.add_position(call_code, qty, call_mid, "SHORT")
+            self.eng._virtual_pos.add_position(put_code,  qty, put_mid,  "SHORT")
+            self.position   = pos
+            self.entry_done = True
+            log.info(
+                f"[StrangleSell][DRY-TEST] entered: CALL={call_code} PUT={put_code} "
+                f"qty={qty} credit=${net_credit_total:.2f}"
+            )
+            pushover(
+                "[Atlas] ストラングル売り エントリー(dry-test)",
+                f"{self.symbol} CALL {call_strike} / PUT {put_strike} "
+                f"qty={qty} credit=${net_credit_total:.2f}",
+            )
+            self._record_pnl("entry", 0.0, pos)
+            return pos
+
+        # 実発注: CALL売り → PUT売り
+        try:
+            import futu as ft
+            self.eng._place_single_leg(call_code, ft.TrdSide.SELL, qty, "strangle_call_entry")
+            self.eng._place_single_leg(put_code,  ft.TrdSide.SELL, qty, "strangle_put_entry")
+        except Exception as e:
+            log.warning(f"[StrangleSell] 発注エラー: {e}")
+            return None
+
+        self.position   = pos
+        self.entry_done = True
+        log.info(
+            f"[StrangleSell] ENTRY: CALL={call_code} PUT={put_code} "
+            f"qty={qty} credit=${net_credit_total:.2f}"
+        )
+        pushover(
+            "[Atlas] ストラングル売り エントリー",
+            f"{self.symbol} CALL {call_strike} / PUT {put_strike} "
+            f"qty={qty} credit=${net_credit_total:.2f}",
+        )
+        self._record_pnl("entry", 0.0, pos)
+        return pos
+
+    def check_exit(self) -> Optional[dict]:
+        """保有ポジションの決済条件をチェックする。
+
+        Returns: {"reason": str, "pnl_usd": float} or None
+        """
+        if self.position is None:
+            return None
+        pos    = self.position
+        now_et = datetime.datetime.now(ET)
+        h, m   = now_et.hour, now_et.minute
+
+        # フォースクローズ
+        if not self.dry_test:
+            if (h > STRANGLE_SELL_FORCE_CLOSE_H or
+                    (h == STRANGLE_SELL_FORCE_CLOSE_H and m >= STRANGLE_SELL_FORCE_CLOSE_M)):
+                return self._close_position("force_close_time")
+
+        # dry_test: 8分後にシミュレート利確
+        if self.dry_test:
+            elapsed = (now_et - self._dry_test_start).total_seconds() / 60.0
+            if elapsed >= 8.0:
+                return self._close_position("profit_target_drytest")
+            return None
+
+        # 現在のbuybackコストでP&L判定
+        try:
+            call_snap = self.mkt.get_option_greeks(pos.call_code)
+            put_snap  = self.mkt.get_option_greeks(pos.put_code)
+            call_last = call_snap.get("last", pos.call_entry_price)
+            put_last  = put_snap.get("last", pos.put_entry_price)
+            current_net_cost = (call_last + put_last) * pos.qty * 100
+            profit_threshold = pos.net_credit * (1.0 - STRANGLE_SELL_PROFIT_TARGET)
+            stop_threshold   = pos.net_credit * STRANGLE_SELL_STOP_LOSS_MULT
+            if current_net_cost <= profit_threshold:
+                log.info(
+                    f"[StrangleSell] 利確条件: cost={current_net_cost:.2f} "
+                    f"<= threshold={profit_threshold:.2f}"
+                )
+                return self._close_position("profit_target")
+            if current_net_cost >= stop_threshold:
+                log.info(
+                    f"[StrangleSell] 損切り条件: cost={current_net_cost:.2f} "
+                    f">= threshold={stop_threshold:.2f}"
+                )
+                return self._close_position("stop_loss")
+        except Exception as e:
+            log.debug(f"[StrangleSell] check_exit: {e}")
+
+        return None
+
+    def _close_position(self, reason: str) -> dict:
+        """CALLとPUTの両レッグをbuyback（クローズ）する。"""
+        pos     = self.position
+        pnl_usd = 0.0
+
+        if self.dry_test:
+            if "profit" in reason:
+                pnl_usd = pos.net_credit * STRANGLE_SELL_PROFIT_TARGET
+            elif "stop" in reason:
+                pnl_usd = -pos.net_credit * (STRANGLE_SELL_STOP_LOSS_MULT - 1.0)
+            else:
+                pnl_usd = pos.net_credit * 0.30
+            log.info(f"[StrangleSell][DRY-TEST] CLOSE: reason={reason} pnl=${pnl_usd:.2f}")
+            pushover(
+                "[Atlas] ストラングル売り クローズ(dry-test)",
+                f"{self.symbol} reason={reason} pnl=${pnl_usd:.2f}",
+            )
+            self._record_pnl("exit", pnl_usd, pos, reason)
+            self.position   = None
+            self.trade_done = True
+            return {"reason": reason, "pnl_usd": pnl_usd}
+
+        try:
+            import futu as ft
+            self.eng._place_single_leg(pos.call_code, ft.TrdSide.BUY, pos.qty,
+                                       "strangle_call_close")
+            self.eng._place_single_leg(pos.put_code,  ft.TrdSide.BUY, pos.qty,
+                                       "strangle_put_close")
+        except Exception as e:
+            log.warning(f"[StrangleSell] _close_position: {e}")
+
+        # PnL概算（受取クレジットベース）
+        if reason == "profit_target":
+            pnl_usd = pos.net_credit * STRANGLE_SELL_PROFIT_TARGET
+        elif reason == "stop_loss":
+            pnl_usd = -pos.net_credit * (STRANGLE_SELL_STOP_LOSS_MULT - 1.0)
+        else:
+            pnl_usd = 0.0
+
+        log.info(f"[StrangleSell] CLOSE: reason={reason} pnl_est=${pnl_usd:.2f}")
+        pushover(
+            "[Atlas] ストラングル売り クローズ",
+            f"{self.symbol} reason={reason} pnl_est=${pnl_usd:.2f}",
+        )
+        self._record_pnl("exit", pnl_usd, pos, reason)
+        self.position   = None
+        self.trade_done = True
+        return {"reason": reason, "pnl_usd": pnl_usd}
+
+    def _record_pnl(self, event: str, pnl: float,
+                    pos: "StrangleSellPosition", reason: str = "") -> None:
+        """PnLレコードをJSONに追記する。"""
+        try:
+            record = {
+                "event":       event,
+                "symbol":      str(pos.symbol).replace("US.", ""),
+                "call_strike": pos.call_strike,
+                "put_strike":  pos.put_strike,
+                "qty":         pos.qty,
+                "net_credit":  pos.net_credit,
+                "pnl_usd":     round(pnl, 2),
+                "reason":      reason,
+                "timestamp":   datetime.datetime.now(ET).isoformat(),
+            }
+            existing: list = []
+            if STRANGLE_SELL_PNL_FILE.exists():
+                try:
+                    existing = json.loads(STRANGLE_SELL_PNL_FILE.read_text())
+                except Exception:
+                    existing = []
+            existing.append(record)
+            STRANGLE_SELL_PNL_FILE.parent.mkdir(parents=True, exist_ok=True)
+            STRANGLE_SELL_PNL_FILE.write_text(json.dumps(existing, indent=2))
+        except Exception as e:
+            log.debug(f"[StrangleSell] _record_pnl: {e}")
+
+    def is_active(self) -> bool:
+        """ポジション保有中かどうか。"""
+        return self.position is not None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# IronCondorSellEngine -- IC売り戦術エンジン
+# Call CS (OTM CALL売り + 上ストライクCALL買い) +
+# Put CS  (OTM PUT売り  + 下ストライクPUT買い) を同時発注。
+# credit受取・max_loss限定・マルチ銘柄対応（US..SPX除外）
+# ══════════════════════════════════════════════════════════════════════════════
+
+class IronCondorSellPosition:
+    """Iron Condor 売りポジション。"""
+
+    def __init__(self, symbol, expiry, qty,
+                 call_sell_code, call_buy_code,
+                 put_sell_code, put_buy_code,
+                 call_sell_strike, call_buy_strike,
+                 put_sell_strike, put_buy_strike,
+                 call_net_credit, put_net_credit,
+                 spread_width, vix):
+        self.symbol           = symbol
+        self.expiry           = expiry
+        self.qty              = qty
+        self.call_sell_code   = call_sell_code
+        self.call_buy_code    = call_buy_code
+        self.put_sell_code    = put_sell_code
+        self.put_buy_code     = put_buy_code
+        self.call_sell_strike = call_sell_strike
+        self.call_buy_strike  = call_buy_strike
+        self.put_sell_strike  = put_sell_strike
+        self.put_buy_strike   = put_buy_strike
+        self.call_net_credit  = call_net_credit
+        self.put_net_credit   = put_net_credit
+        self.net_credit       = round(call_net_credit + put_net_credit, 4)
+        self.spread_width     = spread_width
+        self.vix              = vix
+        self.max_loss_per_contract = max(0.0, (spread_width - self.net_credit) * 100)
+        self.entry_time       = datetime.datetime.now(ET).isoformat()
+
+
+class IronCondorSellEngine:
+    """SPY/QQQ/META/AMZN/GOOGL 等の0DTE Iron Condor 売りエンジン。
+
+    4フェーズ構造:
+      Phase 1: premarket_check()  -- VIX/IVR/連続損失チェック
+      Phase 2: execute_entry()    -- Call CS + Put CS 同時売り発注
+      Phase 3: check_exit()       -- TP/SL/タイムストップ監視（毎tick）
+      Phase 4: _close_position()  -- クローズ実行
+
+    デルタ目標（動的算出）:
+      base = IC_SELL_CALL/PUT_DELTA_BASE (0.20)
+      高VIX (>28): -0.03 縮小
+      高IVR (>70th pct): +0.03 拡大
+
+    スプレッド幅（動的算出）:
+      spread_width = ATR_14 * IC_SELL_WIDTH_ATR_MULT
+      ATR不可時: IC_SELL_WIDTH_DEFAULT (5)
+
+    資本配分（動的算出）:
+      VIX < 28: IC_SELL_CAPITAL_PCT_BASE (0.40)
+      VIX >= 28: IC_SELL_CAPITAL_PCT_HIGH (0.30)
+
+    US..SPX除外。pre_trade_check全4層通過必須。TMR qty検証有効。
+    """
+
+    def __init__(self, mkt, eng, paper=False, dry_test=False):
+        self.mkt      = mkt
+        self.eng      = eng
+        self.paper    = paper
+        self.dry_test = dry_test
+        self.today_vix   = None
+        self.position    = None
+        self.trade_done  = False
+        self.entry_done  = False
+        self._assessment = None
+
+    def reset_daily(self):
+        self.today_vix  = None
+        self.position   = None
+        self.trade_done = False
+        self.entry_done = False
+        self._assessment = None
+
+    def _calc_dynamic_deltas(self, vix, ivr_pct):
+        """VIX と IVR パーセンタイルからデルタ目標を動的算出する。"""
+        call_delta = IC_SELL_CALL_DELTA_BASE
+        put_delta  = IC_SELL_PUT_DELTA_BASE
+        if vix >= IC_SELL_VIX_HIGH_THRESHOLD:
+            call_delta = max(0.10, call_delta - 0.03)
+            put_delta  = max(0.10, put_delta  - 0.03)
+            log.info(f"[IC_SELL] 高VIX({vix:.1f})補正: delta -> {call_delta:.2f}")
+        if ivr_pct >= 70.0:
+            call_delta = min(0.35, call_delta + 0.03)
+            put_delta  = min(0.35, put_delta  + 0.03)
+            log.info(f"[IC_SELL] 高IVR({ivr_pct:.0f}%ile)補正: delta -> {call_delta:.2f}")
+        return round(call_delta, 4), round(put_delta, 4)
+
+    def _calc_dynamic_width(self, symbol):
+        """ATR(14) から動的スプレッド幅を算出する。"""
+        try:
+            atr = self.mkt.get_symbol_atr(symbol, period=14) if self.mkt else None
+        except Exception:
+            atr = None
+        if atr is None:
+            return IC_SELL_WIDTH_DEFAULT
+        mult     = IC_SELL_WIDTH_ATR_MULT
+        interval = get_symbol_meta(symbol).get("strike_interval") or 1.0
+        raw      = atr * mult
+        rounded  = round(raw / interval) * interval if interval > 0 else round(raw)
+        width    = max(IC_SELL_WIDTH_MIN, max(1, int(rounded)))
+        log.info(f"[IC_SELL] {symbol}: ATR={atr:.2f} x mult={mult} -> width={width}")
+        return width
+
+    def _calc_capital_pct(self, vix):
+        if vix >= IC_SELL_VIX_HIGH_THRESHOLD:
+            return IC_SELL_CAPITAL_PCT_HIGH
+        return IC_SELL_CAPITAL_PCT_BASE
+
+    def _calc_qty(self, cash, spread_width, capital_pct):
+        """発注枚数を算出し TMR で検証する。"""
+        if cash <= 0 or spread_width <= 0:
+            return 1
+        raw_qty = int(cash * capital_pct / (spread_width * 100))
+        qty     = max(1, raw_qty)
+        if _QTY_CALCULATOR_AVAILABLE:
+            try:
+                _tmr_verify_spread_qty(cash, spread_width, capital_pct, qty)
+            except QtyMismatchError as e:
+                log.error(f"[IC_SELL][TMR] qty mismatch: {e}")
+                return 1
+        max_qty = IC_SELL_MAX_QTY_PAPER if self.paper else IC_SELL_MAX_QTY
+        if cash <= IC_SELL_SMALL_ACCOUNT_USD:
+            max_qty = 1
+        qty = min(qty, max_qty)
+        log.info(f"[IC_SELL] qty={qty} (cash={cash:.0f} width={spread_width} pct={capital_pct:.2f})")
+        return qty
+
+    def _get_ivr_percentile(self):
+        """現在のVIXが過去60日中の何%ileか返す。取得失敗時は50.0。"""
+        try:
+            vix = self.today_vix or self.mkt.get_vix() or 20.0
+            hist = self.mkt.get_vix_history(days=60)
+            if len(hist) >= 20:
+                below = sum(1 for v in hist if v <= vix)
+                return round(below / len(hist) * 100, 1)
+        except Exception:
+            pass
+        return 50.0
+
+    # -- Phase 1: プレマーケット環境チェック -----------------------------------
+
+    def premarket_check(self):
+        """VIX/IVR/連続損失 を確認してエントリー可否を判断する。"""
+        if not ENABLE_IC_SELL:
+            return False
+        underlying = self.mkt.underlying_code if self.mkt else "US.SPY"
+        if underlying in IC_SELL_EXCLUDED_SYMBOLS:
+            log.info(f"[IC_SELL] {underlying} は除外銘柄")
+            return False
+        if self.dry_test:
+            self.today_vix = 22.0
+            log.info("[IC_SELL][DRY-TEST] premarket_check OK: vix=22.0")
+            return True
+        vix = self.mkt.get_vix() if self.mkt else None
+        if vix is None:
+            log.warning("[IC_SELL] premarket_check: VIX取得失敗")
+            return False
+        self.today_vix = vix
+        if vix < IC_SELL_VIX_MIN:
+            log.info(f"[IC_SELL] Skip: VIX={vix:.1f} < {IC_SELL_VIX_MIN} (プレミアム不足)")
+            return False
+        if vix >= IC_SELL_VIX_MAX:
+            log.info(f"[IC_SELL] Skip: VIX={vix:.1f} >= {IC_SELL_VIX_MAX} (方向性リスク大)")
+            return False
+        ivr_pct = self._get_ivr_percentile()
+        if ivr_pct < IC_SELL_IVR_MIN_PCT:
+            log.info(f"[IC_SELL] Skip: IVR {ivr_pct:.0f}%ile < {IC_SELL_IVR_MIN_PCT}%ile")
+            return False
+        if _ic_sell_check_consecutive_losses():
+            log.info(f"[IC_SELL] Skip: {IC_SELL_MAX_CONSECUTIVE_LOSSES}連敗 -> 当日停止")
+            return False
+        if _PORTFOLIO_RISK_AVAILABLE and self.eng:
+            try:
+                _cash = self.eng.get_account_cash()
+                if _cash and _cash > 0:
+                    if check_weekly_dd(_cash) or check_monthly_dd(_cash):
+                        log.info("[IC_SELL] premarket: DD上限 -> スキップ")
+                        return False
+            except Exception:
+                pass
+        log.info(f"[IC_SELL] premarket_check OK: VIX={vix:.1f} IVR={ivr_pct:.0f}%ile")
+        return True
+
+    # -- Phase 2: エントリー実行 -----------------------------------------------
+
+    def execute_entry(self, bot=None, signal_id=None, key_levels=None):
+        """Call CS + Put CS を同時売り発注する。マルチ銘柄対応。
+
+        Returns:
+            IronCondorSellPosition or None
+        """
+        if self.entry_done:
+            return None
+        underlying = self.mkt.underlying_code if self.mkt else "US.SPY"
+        if underlying in IC_SELL_EXCLUDED_SYMBOLS:
+            return None
+
+        sym_ticker  = underlying.replace("US.", "").replace(".", "")
+        today_str   = datetime.datetime.now(ET).strftime("%Y-%m-%d")
+        vix         = self.today_vix or 20.0
+        ivr_pct     = self._get_ivr_percentile()
+        call_delta, put_delta = self._calc_dynamic_deltas(vix, ivr_pct)
+        spread_width = self._calc_dynamic_width(underlying)
+        capital_pct  = self._calc_capital_pct(vix)
+        cash         = self.eng.get_account_cash() if self.eng else 10000.0
+        if not cash or cash <= 0:
+            cash = 10000.0
+        qty = self._calc_qty(cash, spread_width, capital_pct)
+
+        log.info(
+            f"[IC_SELL] Entry: {sym_ticker} VIX={vix:.1f} IVR={ivr_pct:.0f}%ile "
+            f"cD={call_delta:.2f} pD={put_delta:.2f} w={spread_width} qty={qty}"
+        )
+
+        if self.dry_test:
+            spy_price  = 560.0
+            _interval  = get_symbol_meta(underlying).get("strike_interval") or 1.0
+            atm        = round(spy_price / _interval) * _interval
+            cs_strike  = atm + int(spread_width * 2)
+            cb_strike  = cs_strike + spread_width
+            ps_strike  = atm - int(spread_width * 2)
+            pb_strike  = ps_strike - spread_width
+            _dt        = datetime.datetime.now(ET).strftime("%y%m%d")
+            cs_code    = f"US.{sym_ticker}{_dt}C{int(cs_strike * 1000)}"
+            cb_code    = f"US.{sym_ticker}{_dt}C{int(cb_strike * 1000)}"
+            ps_code    = f"US.{sym_ticker}{_dt}P{int(ps_strike * 1000)}"
+            pb_code    = f"US.{sym_ticker}{_dt}P{int(pb_strike * 1000)}"
+            call_credit = 0.40
+            put_credit  = 0.40
+            pos = IronCondorSellPosition(
+                symbol=underlying, expiry=today_str, qty=qty,
+                call_sell_code=cs_code, call_buy_code=cb_code,
+                put_sell_code=ps_code, put_buy_code=pb_code,
+                call_sell_strike=cs_strike, call_buy_strike=cb_strike,
+                put_sell_strike=ps_strike, put_buy_strike=pb_strike,
+                call_net_credit=call_credit, put_net_credit=put_credit,
+                spread_width=spread_width, vix=vix,
+            )
+            trade_id = str(uuid.uuid4())
+            if bot is not None:
+                bot._current_trade_id  = trade_id
+                bot._current_signal_id = signal_id
+            _ic_sell_append_pnl({
+                "event": "entry", "strategy": "IC", "tactic": "ic_sell",
+                "symbol": underlying, "expiry": today_str, "qty": qty,
+                "call_sell_strike": cs_strike, "call_buy_strike": cb_strike,
+                "put_sell_strike": ps_strike, "put_buy_strike": pb_strike,
+                "call_net_credit": call_credit, "put_net_credit": put_credit,
+                "net_credit": pos.net_credit,
+                "spread_width": spread_width, "vix": vix,
+                "call_delta": call_delta, "put_delta": put_delta,
+                "trade_id": trade_id, "signal_id": signal_id,
+            })
+            pushover("[Atlas][IC_SELL][DRY-TEST]",
+                     f"IC entry: {sym_ticker} CALL {cs_strike}/{cb_strike} "
+                     f"PUT {ps_strike}/{pb_strike} x{qty} credit=${pos.net_credit:.2f}")
+            self.entry_done = True
+            self.trade_done = True
+            self.position   = pos
+            return pos
+
+        # -- 実市場エントリー --------------------------------------------------
+        _center    = self.mkt.get_spy_current() if self.mkt else None
+        call_chain = self.mkt.get_option_chain_with_greeks(
+            today_str, "CALL", center_strike=float(_center) if _center else None)
+        put_chain  = self.mkt.get_option_chain_with_greeks(
+            today_str, "PUT", center_strike=float(_center) if _center else None)
+        if not call_chain or not put_chain:
+            log.error("[IC_SELL] チェーン取得失敗")
+            pushover("[Atlas][IC_SELL]", "チェーン取得失敗 -> エントリー中止")
+            return None
+
+        call_sell_opt = self.mkt.find_by_delta(call_chain, call_delta)
+        if not call_sell_opt:
+            log.error(f"[IC_SELL] CALL SELL脚見つからず (delta={call_delta:.2f})")
+            return None
+        call_sell_strike = call_sell_opt["strike_price"]
+
+        call_buy_opt = self.mkt.find_by_strike(call_chain, call_sell_strike + spread_width)
+        if not call_buy_opt:
+            log.error(f"[IC_SELL] CALL BUY脚見つからず (target={call_sell_strike + spread_width})")
+            return None
+
+        put_sell_opt = self.mkt.find_by_delta(put_chain, put_delta)
+        if not put_sell_opt:
+            log.error(f"[IC_SELL] PUT SELL脚見つからず (delta={put_delta:.2f})")
+            return None
+        put_sell_strike = put_sell_opt["strike_price"]
+
+        put_buy_opt = self.mkt.find_by_strike(put_chain, put_sell_strike - spread_width)
+        if not put_buy_opt:
+            log.error(f"[IC_SELL] PUT BUY脚見つからず (target={put_sell_strike - spread_width})")
+            return None
+
+        # -- pre_trade_check (全4層) -------------------------------------------
+        est_margin = spread_width * 100 * qty * 2
+        open_pos   = len(self.eng.get_open_positions()) if self.eng else 0
+        for _opt, _side_str in [(call_sell_opt, "SELL"), (put_sell_opt, "SELL")]:
+            _allow, _reason = _pre_trade_gate(
+                code=_opt["code"], qty=qty,
+                price=_opt.get("ask_price", 0),
+                side=_side_str,
+                est_margin=est_margin / 2,
+                capital_usd=cash,
+                open_positions=open_pos,
+                paper=self.paper,
+                bid=_opt.get("bid_price", 0),
+                ask=_opt.get("ask_price", 0),
+            )
+            if not _allow:
+                log.warning(f"[IC_SELL] pre_trade_check NG ({_opt['strike_price']}): {_reason}")
+                return None
+
+        call_credit = round(call_sell_opt.get("bid_price", 0) - call_buy_opt.get("ask_price", 0), 4)
+        put_credit  = round(put_sell_opt.get("bid_price", 0)  - put_buy_opt.get("ask_price", 0), 4)
+        if call_credit <= 0 or put_credit <= 0:
+            log.warning(f"[IC_SELL] net_credit NG: CALL={call_credit:.4f} PUT={put_credit:.4f}")
+            return None
+
+        # Key Level 近接チェック
+        if ENABLE_KEY_LEVELS and key_levels is not None:
+            all_kl = key_levels.get("all_levels", [])
+            for _s in [call_sell_strike, put_sell_strike]:
+                close_kl = [kl for kl in all_kl if abs(_s - kl) < KEY_LEVEL_PROXIMITY]
+                if close_kl:
+                    log.warning(f"[IC_SELL] Key Level近接スキップ: {_s:.1f}")
+                    pushover("[Atlas][IC_SELL] エントリー中止", f"Key Level近接: {_s:.1f}")
+                    return None
+
+        # -- 発注 (PUT CS -> CALL CS) ------------------------------------------
+        def _mid(opt):
+            return round((opt.get("bid_price", 0) + opt.get("ask_price", 0)) / 2, 2)
+
+        put_ok = self.eng.place_credit_spread(
+            sell_code=put_sell_opt["code"], buy_code=put_buy_opt["code"],
+            qty=qty, direction="PUT",
+            sell_init_price=_mid(put_sell_opt), buy_init_price=_mid(put_buy_opt),
+            vix=vix,
+        )
+        if not put_ok:
+            log.error("[IC_SELL] PUT CS 発注失敗 -> IC キャンセル")
+            pushover("[Atlas][IC_SELL]", "PUT CS 発注失敗", priority=1)
+            return None
+
+        call_ok = self.eng.place_credit_spread(
+            sell_code=call_sell_opt["code"], buy_code=call_buy_opt["code"],
+            qty=qty, direction="CALL",
+            sell_init_price=_mid(call_sell_opt), buy_init_price=_mid(call_buy_opt),
+            vix=vix,
+        )
+        if not call_ok:
+            log.error("[IC_SELL] CALL CS 発注失敗 -- PUT脚は発注済み -> 片脚状態で監視継続")
+            pushover("[Atlas][IC_SELL] 警告", "CALL CS発注失敗 -> 片側CSで監視継続", priority=1)
+            return None
+
+        pos = IronCondorSellPosition(
+            symbol=underlying, expiry=today_str, qty=qty,
+            call_sell_code=call_sell_opt["code"], call_buy_code=call_buy_opt["code"],
+            put_sell_code=put_sell_opt["code"],   put_buy_code=put_buy_opt["code"],
+            call_sell_strike=call_sell_strike,
+            call_buy_strike=call_buy_opt["strike_price"],
+            put_sell_strike=put_sell_strike,
+            put_buy_strike=put_buy_opt["strike_price"],
+            call_net_credit=call_credit, put_net_credit=put_credit,
+            spread_width=spread_width, vix=vix,
+        )
+
+        now_et   = datetime.datetime.now(ET)
+        time_key = f"{now_et.hour}:{now_et.minute:02d}"
+        trade_id = str(uuid.uuid4())
+        if bot is not None:
+            bot._current_trade_id  = trade_id
+            bot._current_signal_id = signal_id
+            bot._last_entry_ts     = now_et
+
+        pushover(
+            "[Atlas][IC_SELL]",
+            f"Iron Condor entry {time_key}ET\n"
+            f"{sym_ticker} CALL {call_sell_strike:.0f}/{call_buy_opt['strike_price']:.0f} "
+            f"PUT {put_sell_strike:.0f}/{put_buy_opt['strike_price']:.0f}\n"
+            f"cD={call_delta:.2f} pD={put_delta:.2f} w={spread_width} x{qty}\n"
+            f"credit=${pos.net_credit:.2f}"
+        )
+        log.info(
+            f"[IC_SELL] Entry完了: {sym_ticker} "
+            f"CALL {call_sell_strike:.0f}/{call_buy_opt['strike_price']:.0f} "
+            f"PUT {put_sell_strike:.0f}/{put_buy_opt['strike_price']:.0f} "
+            f"credit=${pos.net_credit:.4f} x{qty}"
+        )
+        _ic_sell_append_pnl({
+            "event": "entry", "strategy": "IC", "tactic": "ic_sell",
+            "symbol": underlying, "expiry": today_str, "qty": qty,
+            "call_sell_strike": call_sell_strike,
+            "call_buy_strike":  call_buy_opt["strike_price"],
+            "put_sell_strike":  put_sell_strike,
+            "put_buy_strike":   put_buy_opt["strike_price"],
+            "call_net_credit": call_credit, "put_net_credit": put_credit,
+            "net_credit": pos.net_credit,
+            "spread_width": spread_width, "vix": vix,
+            "call_delta_actual": round(call_sell_opt.get("delta", 0), 4),
+            "put_delta_actual":  round(put_sell_opt.get("delta", 0), 4),
+            "capital_pct": capital_pct,
+            "trade_id": trade_id, "signal_id": signal_id,
+        })
+        self.entry_done = True
+        self.trade_done = True
+        self.position   = pos
+        return pos
+
+    # -- Phase 3: エグジット監視 -----------------------------------------------
+
+    def check_exit(self):
+        """毎tick呼ぶ。TP/SL/タイムストップを確認しクローズ。
+
+        Returns:
+            True: クローズした / False: まだ保有中
+        """
+        if self.position is None:
+            return False
+        pos    = self.position
+        now_et = datetime.datetime.now(ET)
+
+        if (now_et.hour, now_et.minute) >= (IC_SELL_FORCE_CLOSE_H, IC_SELL_FORCE_CLOSE_M):
+            log.info("[IC_SELL] タイムストップ: 15:45 ET -> 強制決済")
+            return self._close_position(pos, reason="force_close_eod")
+
+        try:
+            current_value = self._estimate_current_value(pos)
+        except Exception as _e:
+            log.debug(f"[IC_SELL] estimate error: {_e}")
+            return False
+        if current_value is None:
+            return False
+
+        current_pnl = round(pos.net_credit - current_value, 4)
+        target      = round(pos.net_credit * IC_SELL_PROFIT_TARGET_PCT, 4)
+        if current_pnl >= target:
+            log.info(f"[IC_SELL] TP: pnl=${current_pnl:.4f} >= ${target:.4f}")
+            return self._close_position(pos, reason="profit_target")
+
+        sl_threshold = round(pos.net_credit * IC_SELL_STOP_LOSS_MULT, 4)
+        if current_pnl <= -sl_threshold:
+            log.info(f"[IC_SELL] SL: pnl=${current_pnl:.4f} <= -${sl_threshold:.4f}")
+            return self._close_position(pos, reason="stop_loss")
+
+        return False
+
+    def _estimate_current_value(self, pos):
+        """IC 全体の現在の買い戻しコストを推計する。"""
+        if self.dry_test:
+            now_et = datetime.datetime.now(ET)
+            start  = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+            end    = now_et.replace(hour=15, minute=50, second=0, microsecond=0)
+            total  = max((end - start).total_seconds(), 1.0)
+            elp    = max(0.0, (now_et - start).total_seconds())
+            decay  = min(elp / total, 1.0)
+            return pos.net_credit * (1.0 - decay * 0.8)
+
+        try:
+            def _mid_by_strike(chain_type, strike):
+                today_str = datetime.datetime.now(ET).strftime("%Y-%m-%d")
+                chain = self.mkt.get_option_chain_with_greeks(today_str, chain_type)
+                if not chain:
+                    return None
+                opt = self.mkt.find_by_strike(chain, strike)
+                if not opt:
+                    return None
+                bid = opt.get("bid_price", 0)
+                ask = opt.get("ask_price", 0)
+                return round((bid + ask) / 2, 4) if ask > 0 else None
+
+            cs = _mid_by_strike("CALL", pos.call_sell_strike)
+            cb = _mid_by_strike("CALL", pos.call_buy_strike)
+            ps = _mid_by_strike("PUT",  pos.put_sell_strike)
+            pb = _mid_by_strike("PUT",  pos.put_buy_strike)
+            if any(v is None for v in [cs, cb, ps, pb]):
+                return None
+            return round((cs - cb) + (ps - pb), 4)
+        except Exception as _e:
+            log.debug(f"[IC_SELL] _estimate_current_value: {_e}")
+            return None
+
+    def _close_position(self, pos, reason):
+        """IC ポジションを全4脚クローズする。"""
+        now_et     = datetime.datetime.now(ET)
+        time_key   = f"{now_et.hour}:{now_et.minute:02d}"
+        sym_ticker = pos.symbol.replace("US.", "").replace(".", "")
+
+        if self.dry_test:
+            log.info(f"[IC_SELL][DRY-TEST] {reason}: クローズ {sym_ticker}")
+            pnl_usd = round(pos.net_credit * pos.qty * 100 * 0.5, 2)
+            _ic_sell_append_pnl({
+                "event": "exit", "strategy": "IC", "tactic": "ic_sell",
+                "reason": reason, "symbol": pos.symbol, "qty": pos.qty,
+                "net_credit": pos.net_credit, "pnl_usd": pnl_usd,
+                "call_sell_strike": pos.call_sell_strike,
+                "put_sell_strike":  pos.put_sell_strike,
+                "time_key": time_key,
+            })
+            self.position   = None
+            self.trade_done = True
+            return True
+
+        if not FUTU_AVAILABLE or not self.eng or not self.eng.trade_ctx:
+            log.info(f"[IC_SELL][DRY-RUN] {reason}: クローズ (futu未接続)")
+            self.position = None
+            return True
+
+        legs = [
+            (pos.put_buy_code,   "SELL", "PUT buy  cover"),
+            (pos.put_sell_code,  "BUY",  "PUT sell cover"),
+            (pos.call_buy_code,  "SELL", "CALL buy  cover"),
+            (pos.call_sell_code, "BUY",  "CALL sell cover"),
+        ]
+        close_ok = True
+        for _code, _side_str, _label in legs:
+            try:
+                _side = ft.TrdSide.BUY if _side_str == "BUY" else ft.TrdSide.SELL
+                ret, data = self.eng.trade_ctx.place_order(
+                    price=0, qty=pos.qty, code=_code, trd_side=_side,
+                    order_type=ft.OrderType.MARKET,
+                    trd_env=self.eng.trade_env,
+                    acc_id=int(self.eng.account_id or 0),
+                )
+                if ret != 0:
+                    log.error(f"[IC_SELL] close {_label} NG: {data}")
+                    close_ok = False
+                else:
+                    log.info(f"[IC_SELL] close {_label} OK")
+                time.sleep(0.3)
+            except Exception as _e:
+                log.error(f"[IC_SELL] close {_label} 例外: {_e}")
+                close_ok = False
+
+        cv      = self._estimate_current_value(pos)
+        pnl_usd = round((pos.net_credit - (cv or 0.0)) * pos.qty * 100, 2)
+        pushover(
+            "[Atlas][IC_SELL]",
+            f"IC close ({reason}) {time_key}ET\n"
+            f"{sym_ticker} CALL {pos.call_sell_strike:.0f}/{pos.call_buy_strike:.0f} "
+            f"PUT {pos.put_sell_strike:.0f}/{pos.put_buy_strike:.0f}\n"
+            f"P&L: ${pnl_usd:+.2f}",
+        )
+        _ic_sell_append_pnl({
+            "event": "exit", "strategy": "IC", "tactic": "ic_sell",
+            "reason": reason, "symbol": pos.symbol, "qty": pos.qty,
+            "net_credit": pos.net_credit, "pnl_usd": pnl_usd,
+            "call_sell_strike": pos.call_sell_strike,
+            "call_buy_strike":  pos.call_buy_strike,
+            "put_sell_strike":  pos.put_sell_strike,
+            "put_buy_strike":   pos.put_buy_strike,
+            "time_key": time_key, "close_ok": close_ok,
+        })
+        self.position   = None
+        self.trade_done = True
+        return close_ok
+
+    def is_active(self):
+        """ポジション保有中かどうか。"""
+        return self.position is not None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Butterfly戦術 — ATM Long Butterfly (Call/Put)
+# 設計根拠（7ステップ準拠）:
+#
+# Step 1 分解:
+#   - エントリー: IVR < P30（低IV環境）でペイオフ非対称性を最大化
+#   - 1 buy lower-wing + 2 sell ATM + 1 buy upper-wing
+#   - Call系: 上昇期待 / Put系: 下落期待 / dynamic: SMAトレンド自動選択
+#   - ネットデビット: lower_buy + upper_buy - 2×atm_sell（クレジット化不可）
+#
+# Step 2 データ特定:
+#   - IVR: MarketData.calc_ivr() / P30動的算出 (get_ivr_percentiles())
+#   - ATR(14): calc_butterfly_wing_width() で wing幅を算出（atr_wing_mult適用）
+#   - SMAトレンド: SMA_CACHE_FILE -> Call/Put選択
+#   - オプションコード: _build_option_code() で3ストライク分を構築
+#
+# Step 3 ルール化:
+#   - wing_width = max(min_wing, round(ATR14 * atr_wing_mult))
+#   - lower_strike = atm - wing_width / upper_strike = atm + wing_width
+#   - net_debit = lower_buy_mid + upper_buy_mid - 2 * atm_sell_mid
+#   - qty = calc_butterfly_qty(cash, net_debit, paper)  [TMR検証付き]
+#   - TP: current_value >= net_debit * (1 + BUTTERFLY_PROFIT_TARGET_PCT)
+#   - SL: current_value <= net_debit * (1 - BUTTERFLY_STOP_LOSS_PCT)
+#
+# Step 4 課題:
+#   - 発注順: lower_buy -> upper_buy -> 2xatm_sell（買い脚先行でリスク管理）
+#   - US.SPX は証拠金・単位が桁違いのため EXCLUDED_SYMBOLS で除外
+#   - スリッページ: 3本足合計スプレッドがネットデビットに対して支配的になるリスク
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Butterfly定数 ─────────────────────────────────────────────────────────────
+BUTTERFLY_IVR_MAX_FALLBACK  = 30.0   # IVR < この値でエントリー (フォールバック)
+BUTTERFLY_ATR_WING_MULT     = 0.40   # wing幅 = ATR14 × この倍率
+BUTTERFLY_MIN_WING_STRIKES  = 1      # 最小ウィング幅
+BUTTERFLY_MAX_WING_STRIKES  = 10     # 最大ウィング幅
+BUTTERFLY_CAPITAL_PCT       = 0.02   # 口座の2%をネットデビットとして使用
+BUTTERFLY_MAX_QTY           = 3      # 本番: 最大3枚
+BUTTERFLY_MAX_QTY_PAPER     = 10     # ペーパー: 最大10枚
+BUTTERFLY_PROFIT_TARGET_PCT = 0.50   # 50%利確
+BUTTERFLY_STOP_LOSS_PCT     = 1.50   # 150%損切り
+BUTTERFLY_ENTRY_START_H     = 10
+BUTTERFLY_ENTRY_START_M     = 30
+BUTTERFLY_ENTRY_END_H       = 14
+BUTTERFLY_ENTRY_END_M       = 0
+BUTTERFLY_FORCE_CLOSE_H     = 15
+BUTTERFLY_FORCE_CLOSE_M     = 50
+BUTTERFLY_PNL_FILE          = _BASE_DIR / "butterfly_pnl.json"
+ENABLE_BUTTERFLY            = True   # グローバルON/OFF
+
+
+def _butterfly_load_pnl() -> list:
+    try:
+        if BUTTERFLY_PNL_FILE.exists():
+            return json.loads(BUTTERFLY_PNL_FILE.read_text()).get("trades", [])
+    except Exception:
+        pass
+    return []
+
+
+def _butterfly_append_pnl(record: dict):
+    try:
+        BUTTERFLY_PNL_FILE.parent.mkdir(parents=True, exist_ok=True)
+        trades = _butterfly_load_pnl()
+        record.setdefault("date", datetime.datetime.now(ET).strftime("%Y-%m-%d"))
+        record.setdefault("ts",   datetime.datetime.now(ET).isoformat())
+        record.setdefault("bot",  "butterfly_atlas")
+        trades.append(record)
+        BUTTERFLY_PNL_FILE.write_text(json.dumps({"trades": trades}, indent=2))
+    except Exception as e:
+        log.warning(f"[Butterfly] _butterfly_append_pnl: {e}")
+
+
+def calc_butterfly_wing_width(symbol: str, atr_14) -> int:
+    """ATR(14) からButterfly wing幅を動的算出する。
+
+    wing_width = max(BUTTERFLY_MIN_WING_STRIKES,
+                     min(BUTTERFLY_MAX_WING_STRIKES,
+                         round(ATR_14 * atr_wing_mult)))
+    ストライク刻みに合わせて丸める。
+
+    Args:
+        symbol:  "US.SPY" 等の futu 銘柄コード
+        atr_14:  ATR(14日)の値。None の場合は最小幅を返す。
+
+    Returns:
+        wing幅 (strikes単位, int)
+    """
+    if atr_14 is None or atr_14 <= 0:
+        return BUTTERFLY_MIN_WING_STRIKES
+
+    mult     = get_param(symbol, "butterfly", "atr_wing_mult") or BUTTERFLY_ATR_WING_MULT
+    interval = get_symbol_meta(symbol).get("strike_interval") or 1.0
+
+    raw = atr_14 * mult
+    if interval > 0:
+        rounded = round(raw / interval) * interval
+    else:
+        rounded = round(raw)
+
+    width = int(max(BUTTERFLY_MIN_WING_STRIKES, min(BUTTERFLY_MAX_WING_STRIKES, max(1, rounded))))
+    log.info(
+        f"[Butterfly] wing width: {symbol} ATR={atr_14:.2f} x mult={mult:.2f} "
+        f"= {raw:.2f} -> interval={interval} -> width={width}"
+    )
+    return width
+
+
+def calc_butterfly_qty(cash: float, net_debit: float, paper: bool = False) -> int:
+    """Butterfly の発注枚数を TMR 検証付きで算出する。
+
+    qty = int(cash * capital_pct / (net_debit * 100))
+
+    Args:
+        cash:       口座残高 (USD)
+        net_debit:  1株あたりのネットデビット (USD) > 0
+        paper:      True なら QTY 上限を BUTTERFLY_MAX_QTY_PAPER にする
+
+    Returns:
+        発注枚数 (int, 最低1)
+    """
+    if net_debit <= 0 or cash <= 0:
+        return 1
+
+    max_q       = BUTTERFLY_MAX_QTY_PAPER if paper else BUTTERFLY_MAX_QTY
+    capital_pct = BUTTERFLY_CAPITAL_PCT
+
+    try:
+        from common.qty_calculator import calc_qty_verified
+        qty = calc_qty_verified(cash, net_debit, capital_pct, min_qty=1, max_qty=max_q)
+        log.info(
+            f"[Butterfly][TMR] qty={qty} cash={cash:.0f} "
+            f"net_debit={net_debit:.4f} capital_pct={capital_pct:.3f}"
+        )
+        return qty
+    except Exception as e:
+        log.warning(f"[Butterfly][TMR] 検証エラー ({e}) -> フォールバック計算")
+        raw = int(cash * capital_pct / (net_debit * 100))
+        return max(1, min(raw, max_q))
+
+
+class ButterflyPosition:
+    """ATM Long Butterfly ポジション管理。
+
+    Call系: lower_call_buy (long) + 2xatm_call_sell (short) + upper_call_buy (long)
+    Put系:  lower_put_buy  (long) + 2xatm_put_sell  (short) + upper_put_buy  (long)
+    """
+
+    def __init__(
+        self,
+        symbol: str,
+        wing_type: str,
+        atm_strike: float,
+        wing_width: int,
+        lower_code: str,
+        atm_code: str,
+        upper_code: str,
+        qty: int,
+        net_debit: float,
+        lower_entry_price: float,
+        atm_entry_price: float,
+        upper_entry_price: float,
+        entry_time: str,
+        expiry: str,
+        trade_id: str,
+        paper: bool = False,
+    ):
+        self.symbol            = symbol
+        self.wing_type         = wing_type
+        self.atm_strike        = atm_strike
+        self.wing_width        = wing_width
+        self.lower_code        = lower_code
+        self.atm_code          = atm_code
+        self.upper_code        = upper_code
+        self.qty               = qty
+        self.net_debit         = net_debit
+        self.lower_entry_price = lower_entry_price
+        self.atm_entry_price   = atm_entry_price
+        self.upper_entry_price = upper_entry_price
+        self.entry_time        = entry_time
+        self.expiry            = expiry
+        self.trade_id          = trade_id
+        self.paper             = paper
+        self.lower_strike      = atm_strike - wing_width
+        self.upper_strike      = atm_strike + wing_width
+
+    def current_value(self, lower_price: float, atm_price: float, upper_price: float) -> float:
+        """現在ポジション価値 (per share) = lower + upper - 2 * atm"""
+        return lower_price + upper_price - 2.0 * atm_price
+
+    def pnl(self, lower_price: float, atm_price: float, upper_price: float) -> float:
+        """P&L (per share x qty x 100) を返す。"""
+        return (self.current_value(lower_price, atm_price, upper_price) - self.net_debit) * self.qty * 100.0
+
+    def __repr__(self):
+        return (
+            f"ButterflyPosition({self.symbol} {self.wing_type} "
+            f"K={self.atm_strike:.1f} w={self.wing_width} "
+            f"qty={self.qty} debit=${self.net_debit:.3f} expiry={self.expiry})"
+        )
+
+
+class ButterflyEngine:
+    """ATM Long Butterfly エンジン。
+
+    low IVR 環境（IVR < P30）向けの買い戦術。
+    3本足で最大損失をネットデビットに限定し、原資産がATM付近に収束した場合の利益を狙う。
+
+    対象銘柄: マルチ銘柄対応（SPY/QQQ/META/AMZN/GOOGL 等）。US.SPX は除外。
+    フェーズ: should_trade_today() -> check_entry() -> check_exit() -> reset_daily()
+    """
+
+    EXCLUDED_SYMBOLS = {"US.SPX", "US..SPX"}
+
+    def __init__(self, mkt, eng, paper: bool = False, dry_test: bool = False):
+        self.mkt      = mkt
+        self.eng      = eng
+        self.paper    = paper
+        self.dry_test = dry_test
+        self.position: Optional[ButterflyPosition] = None
+        self.entry_done: bool = False
+        self.trade_done: bool = False
+        self._dry_test_start  = datetime.datetime.now(ET)
+
+    def reset_daily(self):
+        self.position   = None
+        self.entry_done = False
+        self.trade_done = False
+        self._dry_test_start = datetime.datetime.now(ET)
+
+    @staticmethod
+    def should_trade_today(
+        symbol: str,
+        ivr,
+        ivr_low_threshold: float,
+        paper: bool = False,
+    ) -> bool:
+        """今日 Butterfly 戦術を実行すべきか判定する。
+
+        条件:
+          1. ENABLE_BUTTERFLY が True
+          2. symbol が EXCLUDED_SYMBOLS に含まれない
+          3. IVR < ivr_low_threshold (低 IV 環境)
+          ペーパーモードでは IVR 条件をバイパス。
+
+        Returns:
+            True: エントリー可 / False: スキップ
+        """
+        if not ENABLE_BUTTERFLY:
+            return False
+        if symbol in ButterflyEngine.EXCLUDED_SYMBOLS:
+            log.info(f"[Butterfly] {symbol} は除外対象 -> スキップ")
+            return False
+        if paper:
+            log.info(f"[Butterfly][PAPER] IVR={ivr} -> 条件バイパス（ペーパー検証モード）")
+            return True
+        if ivr is None:
+            log.info("[Butterfly] IVR 取得不可 -> スキップ")
+            return False
+        if ivr >= ivr_low_threshold:
+            log.info(f"[Butterfly] IVR={ivr:.1f} >= {ivr_low_threshold:.1f} -> スキップ")
+            return False
+        log.info(f"[Butterfly] IVR={ivr:.1f} < {ivr_low_threshold:.1f} -> エントリー候補")
+        return True
+
+    def _get_ivr_low_threshold(self) -> float:
+        """動的 IVR パーセンタイル (P30) を取得する。失敗時はフォールバック定数を返す。"""
+        try:
+            low_pct, _ = self.mkt.get_ivr_percentiles()
+            if low_pct is not None and low_pct > 0:
+                log.info(f"[Butterfly] 動的IVR P30 threshold={low_pct:.1f}")
+                return float(low_pct)
+        except Exception as e:
+            log.debug(f"[Butterfly] get_ivr_percentiles 失敗: {e}")
+        return BUTTERFLY_IVR_MAX_FALLBACK
+
+    def _choose_wing_type(self, symbol: str) -> str:
+        """SMAトレンドから CALL/PUT を選択する。
+
+        現値 >= SMA20 -> Call Butterfly / 現値 < SMA20 -> Put Butterfly
+        判定不能 -> Call (デフォルト)
+        """
+        try:
+            spy_price = self.mkt.get_spy_current()
+            if spy_price is None:
+                return "CALL"
+            sma_val = None
+            if SMA_CACHE_FILE.exists():
+                sma_data = json.loads(SMA_CACHE_FILE.read_text())
+                sym_key  = symbol.replace("US.", "")
+                sma_val  = sma_data.get(sym_key) or sma_data.get("SPY")
+            if sma_val is not None:
+                wt = "CALL" if spy_price >= sma_val else "PUT"
+                log.info(f"[Butterfly] SMA: price={spy_price:.2f} SMA={sma_val:.2f} -> {wt}")
+                return wt
+        except Exception as e:
+            log.debug(f"[Butterfly] SMA判定失敗: {e} -> CALL")
+        return "CALL"
+
+    def _get_expiry(self) -> str:
+        return datetime.datetime.now(ET).strftime("%Y-%m-%d")
+
+    def _get_atr14(self, symbol: str):
+        try:
+            closes = _fetch_spy_closes_for_atr(days=20)
+            if closes and len(closes) >= 14:
+                return _calc_spy_atr14(closes)
+        except Exception as e:
+            log.debug(f"[Butterfly] ATR取得失敗 ({symbol}): {e}")
+        return None
+
+    def _build_option_code(self, symbol: str, expiry: str, strike: float, opt_type: str) -> str:
+        """futu オプションコードを生成する。例: US.SPY260418C00562000"""
+        ticker   = symbol.replace("US.", "")
+        yy_mm_dd = expiry.replace("-", "")[2:]
+        cp       = "C" if opt_type == "CALL" else "P"
+        strike_i = int(round(strike * 1000))
+        return f"US.{ticker}{yy_mm_dd}{cp}{strike_i:08d}"
+
+    def _get_option_mid(self, code: str):
+        try:
+            greeks = self.mkt.get_option_greeks(code)
+            bid    = greeks.get("bid",  0.0)
+            ask    = greeks.get("ask",  0.0)
+            last   = greeks.get("last", 0.0)
+            if bid > 0 and ask > 0:
+                return (bid + ask) / 2.0
+            if last > 0:
+                return last
+        except Exception as e:
+            log.debug(f"[Butterfly] _get_option_mid({code}): {e}")
+        return None
+
+    def check_entry(self, symbol: str) -> bool:
+        """エントリーウィンドウ内でButterflyポジションを構築する。
+
+        Args:
+            symbol: "US.SPY" 等の銘柄コード
+
+        Returns:
+            True: エントリー成功 / False: スキップ
+        """
+        if not ENABLE_BUTTERFLY:
+            return False
+        if symbol in self.EXCLUDED_SYMBOLS:
+            return False
+        if self.entry_done or self.trade_done:
+            return False
+
+        now_et = datetime.datetime.now(ET)
+        h, m   = now_et.hour, now_et.minute
+
+        if self.dry_test:
+            elapsed = (now_et - self._dry_test_start).total_seconds() / 60.0
+            if elapsed < 5.0:
+                return False
+            return self._execute_entry(symbol, dry_test=True)
+
+        start_min = BUTTERFLY_ENTRY_START_H * 60 + BUTTERFLY_ENTRY_START_M
+        end_min   = BUTTERFLY_ENTRY_END_H   * 60 + BUTTERFLY_ENTRY_END_M
+        now_min   = h * 60 + m
+        if not (start_min <= now_min < end_min):
+            return False
+
+        ivr_threshold = self._get_ivr_low_threshold()
+        vix = None
+        try:
+            vix = self.mkt.get_vix()
+        except Exception:
+            pass
+        ivr = None
+        try:
+            ivr = self.mkt.calc_ivr(vix or 20.0)
+        except Exception:
+            pass
+
+        if not self.should_trade_today(symbol, ivr, ivr_threshold, paper=self.paper):
+            log.info(f"[Butterfly] {symbol} 環境条件不一致 -> スキップ")
+            return False
+
+        return self._execute_entry(symbol, dry_test=False)
+
+    def _execute_entry(self, symbol: str, dry_test: bool = False) -> bool:
+        """3本足 Butterfly の発注を執行する。
+
+        発注順（買い脚先行でリスク管理）:
+          1. lower_buy  (long lower wing)
+          2. upper_buy  (long upper wing)
+          3. atm_sell x 2 (short center)
+
+        Returns:
+            True: エントリー成功 / False: 失敗
+        """
+        from common.pre_trade_check import OrderContext, check_order
+
+        expiry     = self._get_expiry()
+        wing_type  = self._choose_wing_type(symbol)
+        atr_14     = self._get_atr14(symbol)
+        wing_width = calc_butterfly_wing_width(symbol, atr_14)
+
+        spy_price = self.mkt.get_spy_current()
+        if spy_price is None or spy_price <= 0:
+            log.warning(f"[Butterfly] {symbol} 価格取得失敗 -> スキップ")
+            return False
+
+        interval   = get_symbol_meta(symbol).get("strike_interval") or 1.0
+        atm_strike = round(spy_price / interval) * interval
+        lower_st   = atm_strike - wing_width
+        upper_st   = atm_strike + wing_width
+
+        lower_code = self._build_option_code(symbol, expiry, lower_st, wing_type)
+        atm_code   = self._build_option_code(symbol, expiry, atm_strike, wing_type)
+        upper_code = self._build_option_code(symbol, expiry, upper_st, wing_type)
+
+        log.info(
+            f"[Butterfly] エントリー準備: {symbol} {wing_type} "
+            f"lower={lower_st:.1f} ATM={atm_strike:.1f} upper={upper_st:.1f} "
+            f"width={wing_width} expiry={expiry}"
+        )
+
+        if dry_test:
+            lower_price = 1.50
+            atm_price   = 2.50
+            upper_price = 1.50
+            net_debit   = lower_price + upper_price - 2.0 * atm_price
+            if net_debit <= 0:
+                net_debit = 0.50
+            cash_usd  = 15000.0
+            qty       = calc_butterfly_qty(cash_usd, net_debit, self.paper)
+            trade_id  = str(uuid.uuid4())[:8]
+            self.position = ButterflyPosition(
+                symbol=symbol, wing_type=wing_type,
+                atm_strike=atm_strike, wing_width=wing_width,
+                lower_code=lower_code, atm_code=atm_code, upper_code=upper_code,
+                qty=qty, net_debit=net_debit,
+                lower_entry_price=lower_price,
+                atm_entry_price=atm_price,
+                upper_entry_price=upper_price,
+                entry_time=datetime.datetime.now(ET).isoformat(),
+                expiry=expiry, trade_id=trade_id, paper=self.paper,
+            )
+            self.entry_done = True
+            log.info(
+                f"[Butterfly][DRY-TEST] ENTRY: {symbol} {wing_type} "
+                f"K={atm_strike:.1f} w={wing_width} debit=${net_debit:.3f} qty={qty}"
+            )
+            _butterfly_append_pnl({
+                "event": "entry", "symbol": symbol, "wing_type": wing_type,
+                "atm_strike": atm_strike, "wing_width": wing_width,
+                "net_debit": net_debit, "qty": qty, "trade_id": trade_id,
+                "expiry": expiry, "mode": "dry_test",
+            })
+            pushover(
+                "[Atlas/Butterfly] DRY-TEST エントリー",
+                f"{symbol} {wing_type} K={atm_strike:.1f} w={wing_width}\n"
+                f"debit=${net_debit:.3f} qty={qty}",
+            )
+            return True
+
+        # ── 実/ペーパー発注 ──────────────────────────────────────────────────
+        lower_price = self._get_option_mid(lower_code)
+        atm_price   = self._get_option_mid(atm_code)
+        upper_price = self._get_option_mid(upper_code)
+
+        if lower_price is None or atm_price is None or upper_price is None:
+            log.warning(
+                f"[Butterfly] 価格取得失敗: lower={lower_price} atm={atm_price} "
+                f"upper={upper_price} -> スキップ"
+            )
+            return False
+
+        net_debit = lower_price + upper_price - 2.0 * atm_price
+        if net_debit <= 0:
+            log.warning(f"[Butterfly] ネットデビット={net_debit:.4f} <= 0 (除外) -> スキップ")
+            return False
+
+        cash_usd = self.eng.get_account_cash()
+        qty      = calc_butterfly_qty(cash_usd, net_debit, self.paper)
+
+        # pre_trade_check 全4層
+        est_margin = net_debit * qty * 100.0
+        ctx = OrderContext(
+            symbol=symbol,
+            strike=atm_strike,
+            side="BUY",
+            qty=qty,
+            option_price=net_debit,
+            bid=lower_price,
+            ask=upper_price,
+            est_margin=est_margin,
+            capital_usd=cash_usd,
+            open_positions=0,
+            open_margin_total=0.0,
+            symbol_margin=0.0,
+            paper=self.paper,
+        )
+        result = check_order(ctx)
+        if not result.allow:
+            log.warning(f"[Butterfly] pre_trade_check 拒否 [{result.layer}]: {result.reason}")
+            return False
+
+        # TMR qty検証
+        try:
+            from common.qty_calculator import tmr_verify_spread_qty
+            tmr_verify_spread_qty(cash_usd, net_debit, BUTTERFLY_CAPITAL_PCT, qty)
+        except Exception as tmr_err:
+            log.error(f"[Butterfly][TMR] 検証失敗: {tmr_err} -> スキップ")
+            return False
+
+        trade_id = str(uuid.uuid4())[:8]
+        log.info(
+            f"[Butterfly] 発注: {symbol} {wing_type} "
+            f"lower={lower_st:.1f}x{qty} ATM={atm_strike:.1f}x{qty*2}(short) "
+            f"upper={upper_st:.1f}x{qty} debit=${net_debit:.4f}"
+        )
+
+        if FUTU_AVAILABLE:
+            import futu as ft
+            trd_buy  = ft.TrdSide.BUY
+            trd_sell = ft.TrdSide.SELL
+        else:
+            trd_buy  = None
+            trd_sell = None
+
+        order_ok = True
+        for code, side, qty_n, label in [
+            (lower_code, trd_buy,  qty,     "lower_buy"),
+            (upper_code, trd_buy,  qty,     "upper_buy"),
+            (atm_code,   trd_sell, qty * 2, "atm_sell_x2"),
+        ]:
+            oid, fill_method = self.eng._place_single_leg(
+                code, side, qty_n, label, init_price=None, use_limit=False
+            )
+            if oid is None:
+                log.error(f"[Butterfly] {label} 発注失敗: code={code}")
+                order_ok = False
+                break
+            log.info(f"[Butterfly] {label} 約定: oid={oid} fill={fill_method}")
+
+        if not order_ok:
+            log.error("[Butterfly] 発注失敗 -> ポジション管理外")
+            return False
+
+        self.position = ButterflyPosition(
+            symbol=symbol, wing_type=wing_type,
+            atm_strike=atm_strike, wing_width=wing_width,
+            lower_code=lower_code, atm_code=atm_code, upper_code=upper_code,
+            qty=qty, net_debit=net_debit,
+            lower_entry_price=lower_price,
+            atm_entry_price=atm_price,
+            upper_entry_price=upper_price,
+            entry_time=datetime.datetime.now(ET).isoformat(),
+            expiry=expiry, trade_id=trade_id, paper=self.paper,
+        )
+        self.entry_done = True
+        log.info(f"[Butterfly] ENTRY完了: {self.position}")
+        _butterfly_append_pnl({
+            "event": "entry", "symbol": symbol, "wing_type": wing_type,
+            "atm_strike": atm_strike, "wing_width": wing_width,
+            "net_debit": net_debit, "qty": qty,
+            "lower_entry_price": lower_price,
+            "atm_entry_price": atm_price,
+            "upper_entry_price": upper_price,
+            "trade_id": trade_id, "expiry": expiry,
+            "mode": "paper" if self.paper else "live",
+        })
+        pushover(
+            "[Atlas/Butterfly] エントリー",
+            f"{symbol} {wing_type}\n"
+            f"K={atm_strike:.1f} wing={wing_width}\n"
+            f"debit=${net_debit:.3f} qty={qty}\n"
+            f"expiry={expiry}",
+        )
+        return True
+
+    def check_exit(self) -> bool:
+        """TP/SL/強制クローズをチェックしてエグジットを実行する。
+
+        Returns:
+            True: エグジット実行 / False: 継続保有
+        """
+        if self.position is None or self.trade_done:
+            return False
+
+        pos    = self.position
+        now_et = datetime.datetime.now(ET)
+        h, m   = now_et.hour, now_et.minute
+        now_min   = h * 60 + m
+        force_min = BUTTERFLY_FORCE_CLOSE_H * 60 + BUTTERFLY_FORCE_CLOSE_M
+
+        lower_price = None
+        atm_price   = None
+        upper_price = None
+
+        if self.dry_test:
+            elapsed = (now_et - self._dry_test_start).total_seconds() / 60.0
+            if elapsed < 10.0:
+                return False
+            lower_price = pos.lower_entry_price * 1.8
+            atm_price   = pos.atm_entry_price   * 0.7
+            upper_price = pos.upper_entry_price  * 1.8
+        else:
+            lower_price = self._get_option_mid(pos.lower_code)
+            atm_price   = self._get_option_mid(pos.atm_code)
+            upper_price = self._get_option_mid(pos.upper_code)
+
+        if lower_price is None or atm_price is None or upper_price is None:
+            if now_min >= force_min:
+                log.warning("[Butterfly] 価格取得失敗 + 強制クローズ時刻 -> 強制クローズ")
+                return self._execute_exit(
+                    pos, "force_close_price_unavailable",
+                    lower_price or 0.0, atm_price or 0.0, upper_price or 0.0,
+                )
+            return False
+
+        current_val = pos.current_value(lower_price, atm_price, upper_price)
+        pnl_usd     = pos.pnl(lower_price, atm_price, upper_price)
+
+        if now_min >= force_min:
+            log.info(f"[Butterfly] 強制クローズ: pnl=${pnl_usd:.2f}")
+            return self._execute_exit(pos, "force_close", lower_price, atm_price, upper_price)
+
+        tp_threshold = pos.net_debit * (1.0 + BUTTERFLY_PROFIT_TARGET_PCT)
+        if current_val >= tp_threshold:
+            log.info(f"[Butterfly] TP到達: val={current_val:.4f} >= {tp_threshold:.4f} pnl=${pnl_usd:.2f}")
+            return self._execute_exit(pos, "take_profit", lower_price, atm_price, upper_price)
+
+        sl_threshold = pos.net_debit * (1.0 - BUTTERFLY_STOP_LOSS_PCT)
+        if current_val <= sl_threshold:
+            log.info(f"[Butterfly] SL到達: val={current_val:.4f} <= {sl_threshold:.4f} pnl=${pnl_usd:.2f}")
+            return self._execute_exit(pos, "stop_loss", lower_price, atm_price, upper_price)
+
+        log.debug(
+            f"[Butterfly] 保有中: val={current_val:.4f} debit={pos.net_debit:.4f} "
+            f"pnl=${pnl_usd:.2f} TP={tp_threshold:.4f} SL={sl_threshold:.4f}"
+        )
+        return False
+
+    def _execute_exit(self, pos: ButterflyPosition, reason: str,
+                      lower_price: float, atm_price: float, upper_price: float) -> bool:
+        """Butterfly ポジションを決済する。
+
+        決済順（ショート脚先にクローズ）:
+          1. 2xatm_buy  (short -> buy to close)
+          2. lower_sell (long -> sell to close)
+          3. upper_sell (long -> sell to close)
+
+        Returns:
+            True: 決済実行 / False: 失敗
+        """
+        current_val = pos.current_value(lower_price, atm_price, upper_price)
+        pnl_usd     = pos.pnl(lower_price, atm_price, upper_price)
+        log.info(
+            f"[Butterfly] EXIT ({reason}): {pos.symbol} {pos.wing_type} "
+            f"K={pos.atm_strike:.1f} val={current_val:.4f} pnl=${pnl_usd:.2f}"
+        )
+
+        if not self.dry_test and FUTU_AVAILABLE:
+            import futu as ft
+            trd_buy  = ft.TrdSide.BUY
+            trd_sell = ft.TrdSide.SELL
+            for code, side, qty_n, label in [
+                (pos.atm_code,   trd_buy,  pos.qty * 2, "atm_buy_close"),
+                (pos.lower_code, trd_sell, pos.qty,     "lower_sell_close"),
+                (pos.upper_code, trd_sell, pos.qty,     "upper_sell_close"),
+            ]:
+                oid, fill_method = self.eng._place_single_leg(
+                    code, side, qty_n, label, init_price=None, use_limit=False
+                )
+                if oid is None:
+                    log.error(f"[Butterfly] EXIT {label} 失敗: code={code}")
+                    continue
+                log.info(f"[Butterfly] EXIT {label} 約定: oid={oid} fill={fill_method}")
+
+        _butterfly_append_pnl({
+            "event": "exit", "symbol": pos.symbol, "wing_type": pos.wing_type,
+            "atm_strike": pos.atm_strike, "wing_width": pos.wing_width,
+            "net_debit": pos.net_debit, "qty": pos.qty,
+            "exit_value": current_val, "pnl_usd": pnl_usd,
+            "reason": reason, "trade_id": pos.trade_id,
+            "expiry": pos.expiry,
+            "mode": "paper" if pos.paper else "live",
+        })
+        pushover(
+            f"[Atlas/Butterfly] EXIT ({reason})",
+            f"{pos.symbol} {pos.wing_type} K={pos.atm_strike:.1f}\n"
+            f"P&L: ${pnl_usd:+.2f}\n"
+            f"debit=${pos.net_debit:.3f} -> val={current_val:.3f}",
+        )
+        self.position   = None
+        self.trade_done = True
+        return True
+
+    def is_active(self) -> bool:
+        """ポジション保有中かどうか。"""
+        return self.position is not None
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SPYCreditSpreadBot — main orchestrator
 # ══════════════════════════════════════════════════════════════════════════════
@@ -9938,6 +11728,17 @@ class SPYCreditSpreadBot:
         self._iv_crush_premarket_ok:    bool = False
         self._iv_crush_entry_attempted: bool = False
 
+        # ── StrangleSell (Atlas統合) ─────────────────────────────────────────
+        # StrangleSellEngine はconnect後に初期化（MarketData/TradeEngineを渡すため）
+        self.strangle_sell_engine: Optional[StrangleSellEngine] = None
+        self._strangle_sell_entry_attempted: bool = False
+
+        # ── IronCondorSell (Atlas統合) ─────────────────────────────────────────
+        # IronCondorSellEngine はconnect後に初期化（MarketData/TradeEngineを渡すため）
+        self.ic_sell_engine: Optional[IronCondorSellEngine] = None
+        self._ic_sell_premarket_ok:    bool = False
+        self._ic_sell_entry_attempted: bool = False
+
         self.consecutive_start_failures = load_failures()
 
     def _reset_daily_state(self):
@@ -9986,6 +11787,10 @@ class SPYCreditSpreadBot:
             self.iv_crush_engine.reset_daily()
         self._iv_crush_premarket_ok    = False
         self._iv_crush_entry_attempted = False
+        # StrangleSell日次リセット
+        if self.strangle_sell_engine is not None:
+            self.strangle_sell_engine.reset_daily()
+        self._strangle_sell_entry_attempted = False
         # ペーパー複数回エントリー: 日次リセット
         self._paper_last_standard_entry_et = None
         # マルチ銘柄日次リセット
@@ -11273,15 +13078,10 @@ class SPYCreditSpreadBot:
                 self.mkt.underlying_code = symbol
 
                 if tactic == "orb_buy" and self.orb_engine is not None:
-                    # ── ORB戦術 ────────────────────────────────────────────
-                    # [2026-04-18] ORB は SPY 専用（内部ロジックSPY hardcode）のため
-                    # 他銘柄選定時は即スキップ。WARNING 出さない。
-                    if symbol != UNDERLYING_CODE:
-                        log.debug(
-                            f"[MassVerify] {symbol.replace('US.','')}×orb_buy "
-                            f"スキップ(ORBはSPY専用)"
-                        )
-                        return
+                    # ── ORB戦術（マルチ銘柄対応 2026-04-18）────────────────
+                    # mkt.underlying_code は呼び出し元で既に symbol に切替済み。
+                    # ORBエンジンの _get_underlying_price() / _get_underlying_1min_bars()
+                    # が underlying_code を参照して銘柄別に動作する。
                     _orb_dir = self.orb_engine.check_breakout()
                     if _orb_dir is None:
                         # dry-testでは方向をシミュレート
@@ -12908,6 +14708,11 @@ class SPYCreditSpreadBot:
                 self.iv_crush_engine = IVCrushEngine(
                     self.mkt, self.eng, paper=self.paper, dry_test=True)
                 log.info("[DRY-TEST] IVCrushEngine initialized")
+            # StrangleSellEngine初期化 (dry_test)
+            if ENABLE_STRANGLE_SELL:
+                self.strangle_sell_engine = StrangleSellEngine(
+                    self.mkt, self.eng, paper=self.paper, dry_test=True)
+                log.info("[DRY-TEST] StrangleSellEngine initialized")
         else:
             if not self.mkt.connect():
                 log.error("Quote context connect failed")
@@ -12966,6 +14771,11 @@ class SPYCreditSpreadBot:
                 self.iv_crush_engine = IVCrushEngine(
                     self.mkt, self.eng, paper=self.paper, dry_test=False)
                 log.info("IVCrushEngine initialized")
+            # StrangleSellEngine初期化
+            if ENABLE_STRANGLE_SELL:
+                self.strangle_sell_engine = StrangleSellEngine(
+                    self.mkt, self.eng, paper=self.paper, dry_test=False)
+                log.info("StrangleSellEngine initialized")
             self.consecutive_start_failures = 0
             save_failures(0)
             log.info("OpenD connected")
@@ -13616,6 +15426,44 @@ class SPYCreditSpreadBot:
                         log.info(
                             f"[IVCrush] 決済完了: reason={_ic_exit['reason']} "
                             f"pnl=${_ic_exit['pnl_usd']:+.2f}"
+                        )
+
+            # ── StrangleSell エントリー・エグジット監視 ──────────────────────────
+            if self.strangle_sell_engine is not None:
+                # エントリー: 10:30〜12:00 ET（当日条件充足時）
+                if (not self.strangle_sell_engine.entry_done
+                        and not self._strangle_sell_entry_attempted
+                        and in_market):
+                    _ss_in_window = (
+                        DRY_TEST
+                        or (h > STRANGLE_SELL_ENTRY_H
+                            or (h == STRANGLE_SELL_ENTRY_H and m >= STRANGLE_SELL_ENTRY_M))
+                        and (h < STRANGLE_SELL_CUTOFF_H
+                             or (h == STRANGLE_SELL_CUTOFF_H and m < STRANGLE_SELL_CUTOFF_M))
+                    )
+                    if _ss_in_window:
+                        _vix_ss = self.mkt.get_vix() or 20.0
+                        _ivr_ss = self.mkt.calc_ivr() or 0.0
+                        _ivr_hi = (self.mkt.get_ivr_percentiles() or {}).get("p70", STRANGLE_SELL_IVR_MIN)
+                        _sym_ss = self.strangle_sell_engine.symbol
+                        if StrangleSellEngine.should_trade_today(
+                            _sym_ss, _vix_ss, _ivr_ss, _ivr_hi, paper=self.paper
+                        ):
+                            _spy_ss = self.mkt.get_spy_current() or 0.0
+                            if _spy_ss > 0:
+                                _ss_pos = self.strangle_sell_engine.execute_entry(
+                                    _spy_ss, _vix_ss
+                                )
+                                if _ss_pos is not None:
+                                    self._strangle_sell_entry_attempted = True
+
+                # エグジット監視: ポジション保有中
+                if self.strangle_sell_engine.is_active():
+                    _ss_exit = self.strangle_sell_engine.check_exit()
+                    if _ss_exit is not None:
+                        log.info(
+                            f"[StrangleSell] 決済完了: reason={_ss_exit['reason']} "
+                            f"pnl=${_ss_exit['pnl_usd']:+.2f}"
                         )
 
             # ── 10:00 ET: ORF check (window: 10:00~10:29) ──

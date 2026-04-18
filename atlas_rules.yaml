@@ -156,6 +156,61 @@ autofix:
   github_label_todo: todo
   github_label_hub: hub-command
 
+# ── 戦術パラメータ定義 ────────────────────────────────────────────────────────
+# spy_bot.pyの定数と1対1対応。Watchdogが異常検知時の参照に使用。
+
+tactics:
+  # ── Calendar Spread パラメータ ──────────────────────────────────────────────
+  # エントリー: IVR>P75 かつ VIX 20〜50 かつ VIX5日EMAが下降傾向
+  # front: 0DTE ATM売り / back: 7DTE ATM買い（同一strike・異expiry）
+  # 対象銘柄: US.SPY / US.QQQ / US.TSLA 等（US..SPX除外）
+  calendar_sell:
+    enabled: true
+    excluded_symbols:
+      - "US..SPX"
+    entry_window_et: "10:30-12:00"
+    force_close_et: "15:45"
+    vix_min: 20.0
+    vix_max: 50.0
+    ivr_threshold_percentile: 75    # P75相当のIVRで動的算出
+    back_dte: 7                     # backレッグのDTE
+    max_risk_pct: 0.02              # 口座の2%を最大リスク（CALENDAR_MAX_RISK_PCT）
+    max_qty: 2
+    profit_target_iv_crush_pct: 0.10  # front IVが10%以上低下→利確
+    stop_loss_pct: 0.30               # 初期debit比30%増で損切り
+    pnl_file: "data/calendar_pnl.json"
+    # 異常検知: チェーン取得失敗が連続
+    watchdog:
+      chain_fetch_fail_window_sec: 300
+      chain_fetch_fail_threshold: 10
+
+  # ── Strangle Sell パラメータ ─────────────────────────────────────────────────
+  # エントリー: IVR>P70(=IVR 60相当) かつ VIX 15〜50
+  # OTM Call売り(delta≈0.15) + OTM Put売り(delta≈0.15)
+  # 対象銘柄: US.SPY / US.QQQ / US.TSLA 等（US..SPX除外）
+  strangle_sell:
+    enabled: true
+    excluded_symbols:
+      - "US..SPX"
+    entry_window_et: "10:30-12:00"
+    force_close_et: "15:45"
+    vix_min: 15.0                   # STRANGLE_SELL_VIX_MIN
+    vix_max: 50.0                   # STRANGLE_SELL_VIX_MAX
+    ivr_min_fallback: 60.0          # STRANGLE_SELL_IVR_MIN（動的P70相当）
+    ivr_threshold_percentile: 70    # P70相当のIVRで動的算出
+    call_target_delta: 0.15         # STRANGLE_SELL_CALL_DELTA
+    put_target_delta: 0.15          # STRANGLE_SELL_PUT_DELTA
+    delta_tolerance: 0.05           # STRANGLE_SELL_DELTA_TOL
+    profit_target_pct: 0.50         # 受取クレジットの50%で利確
+    stop_loss_mult: 2.00            # 受取クレジットの200%でストップ
+    max_risk_pct: 0.03              # 口座の3%を最大リスク
+    max_qty: 2
+    pnl_file: "data/strangle_sell_pnl.json"
+    # 異常検知: delta該当なしが連続（チェーン品質問題）
+    watchdog:
+      delta_miss_window_sec: 180
+      delta_miss_threshold: 5
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Butterfly戦術パラメータ
 # ATM Long Butterfly: 1 buy lower-wing + 2 sell ATM + 1 buy upper-wing
@@ -330,3 +385,70 @@ ic_sell:
 
   # PnLファイル
   pnl_file: data/ic_sell_pnl.json
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Delta Hedge エンジンパラメータ (IntradayMonitor._try_delta_hedge)
+# マルチ銘柄対応: mkt.underlying_code に応じて銘柄別オプションコードを生成
+# ══════════════════════════════════════════════════════════════════════════════
+delta_hedge:
+  enable: true
+
+  # 通常時間帯（9:30-14:30 ET）のトリガー閾値
+  # |portfolio_delta| > trigger → ヘッジ発動
+  # 固定値は禁止。将来的に資金フェーズ・VIX連動で動的化する
+  trigger: 0.30
+  trigger_late: 0.40     # 14:30 ET以降（Gamma爆発帯）の閾値
+  unwind: 0.15           # |portfolio_delta| < unwind → ヘッジ解除
+
+  # 1日最大発動回数（過剰ヘッジ防止）
+  daily_max_count: 3
+
+  # PDT週次上限（FINRA PDTルール: 5営業日で3回まで当日往復取引）
+  weekly_pdt_budget: 3
+
+  # 緊急ヘッジ閾値: |Delta| > この値 = PDT枠消費してでもヘッジ（$25K未満時）
+  emergency_threshold: 0.50
+
+  # ヘッジオプション想定デルタ（ATM near: 0.50）
+  contract_delta: 0.50
+
+  # 対応銘柄リスト（フォールバック価格）
+  # 実価格はFutu/Finnhubからリアルタイム取得。ここはdry-test用フォールバック
+  underlying_fallback_prices:
+    SPY: 560.0
+    QQQ: 480.0
+    IWM: 200.0
+    TSLA: 250.0
+    NVDA: 900.0
+    AAPL: 200.0
+    MSFT: 420.0
+    AMZN: 200.0
+    META: 600.0
+    GOOGL: 170.0
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ORB エンジンパラメータ (ORBEngine) — マルチ銘柄対応
+# mkt.underlying_code に応じて銘柄別に価格取得・チェーン取得・発注コード生成
+# ══════════════════════════════════════════════════════════════════════════════
+orb_multi_symbol:
+  enable: true
+
+  # center_strike±max_strike_deviation_pct を超えるオプションは除外
+  # （SPXW混入・スケール不一致防止）
+  max_strike_deviation_pct: 0.15
+
+  # deep ITM 価格ガード: option_price >= deep_itm_threshold → 発注拒否
+  deep_itm_threshold: 50.0
+
+  # dry-test時フォールバック価格（銘柄別）
+  underlying_fallback_prices:
+    SPY: 560.0
+    QQQ: 480.0
+    IWM: 200.0
+    TSLA: 250.0
+    NVDA: 900.0
+    AAPL: 200.0
+    MSFT: 420.0
+    AMZN: 200.0
+    META: 600.0
+    GOOGL: 170.0
