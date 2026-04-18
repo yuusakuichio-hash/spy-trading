@@ -22,21 +22,22 @@ import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # ── Load .env ─────────────────────────────────────────────────────────────────
+# .envの値で環境変数を上書きする（setdefaultではなく明示的上書きで.envを優先, V2-H2対応）
 _ENV_FILE = pathlib.Path("/root/spxbot/.env")
 if _ENV_FILE.exists():
     for _line in _ENV_FILE.read_text().splitlines():
         _line = _line.strip()
         if _line and not _line.startswith("#") and "=" in _line:
             _k, _v = _line.split("=", 1)
-            os.environ.setdefault(_k.strip(), _v.strip())
+            os.environ[_k.strip()] = _v.strip()
 
 # ── Config ────────────────────────────────────────────────────────────────────
 PORT          = int(os.environ.get("WEBHOOK_PORT", "9999"))
 SECRET_TOKEN  = os.environ.get("WEBHOOK_TOKEN", "")
 CMD_TIMEOUT   = 300
 
-PUSHOVER_TOKEN = "a5rb9ipb3yrdanv3vk4n8x28qt7io9"
-PUSHOVER_USER  = "u2cevk8nktib3sr148rw2hs78ecvux"
+PUSHOVER_TOKEN = os.environ.get("PUSHOVER_TOKEN", "a5rb9ipb3yrdanv3vk4n8x28qt7io9")
+PUSHOVER_USER  = os.environ.get("PUSHOVER_USER",  "u2cevk8nktib3sr148rw2hs78ecvux")
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 pathlib.Path("/root/logs").mkdir(parents=True, exist_ok=True)
@@ -51,9 +52,10 @@ logging.basicConfig(
 log = logging.getLogger("webhook_server")
 
 
-def pushover(title, message):
+def pushover(title, message) -> bool:
+    """Pushover通知を送信する。成功時True、失敗時Falseを返す（V2-M3対応）。"""
     try:
-        requests.post(
+        resp = requests.post(
             "https://api.pushover.net/1/messages.json",
             data={
                 "token":   PUSHOVER_TOKEN,
@@ -63,8 +65,13 @@ def pushover(title, message):
             },
             timeout=10,
         )
+        if not resp.ok:
+            log.warning(f"Pushover HTTP {resp.status_code}: {resp.text[:200]}")
+            return False
+        return True
     except Exception as e:
         log.warning(f"Pushover failed: {e}")
+        return False
 
 
 class WebhookHandler(BaseHTTPRequestHandler):
@@ -83,17 +90,54 @@ class WebhookHandler(BaseHTTPRequestHandler):
         else:
             self._json(404, {"error": "not found"})
 
-    def do_POST(self):
-        if self.path != "/command":
-            self._json(404, {"error": "not found"})
-            return
-
-        # ── Auth ──────────────────────────────────────────────────────────────
+    def _auth(self) -> bool:
+        """Bearer token認証。成功時True、失敗時401を返してFalse。"""
         auth = self.headers.get("Authorization", "")
         expected = f"Bearer {SECRET_TOKEN}"
         if not SECRET_TOKEN or auth != expected:
             log.warning(f"Auth failed from {self.address_string()}")
             self._json(401, {"error": "unauthorized"})
+            return False
+        return True
+
+    def do_POST(self):
+        # ── Kill Switch endpoints ─────────────────────────────────────────────
+        if self.path in ("/kill_switch/activate", "/kill_switch/deactivate"):
+            if not self._auth():
+                return
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                raw    = self.rfile.read(length)
+                data   = json.loads(raw) if raw else {}
+            except Exception:
+                data = {}
+
+            import sys as _sys
+            _sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+            try:
+                from common.kill_switch import activate as _ks_activate, deactivate as _ks_deactivate
+                if self.path == "/kill_switch/activate":
+                    _reason    = (data.get("reason") or "webhook_trigger").strip()
+                    _activator = self.address_string()
+                    _ks_activate(reason=_reason, activator=_activator)
+                    log.warning(f"[KillSwitch] ACTIVATED via webhook: reason={_reason}")
+                    self._json(200, {"ok": True, "status": "activated", "reason": _reason})
+                else:
+                    _activator = self.address_string()
+                    _ks_deactivate(activator=_activator)
+                    log.info(f"[KillSwitch] DEACTIVATED via webhook by {_activator}")
+                    self._json(200, {"ok": True, "status": "deactivated"})
+            except Exception as e:
+                log.error(f"[KillSwitch] endpoint error: {e}")
+                self._json(500, {"error": str(e)})
+            return
+
+        if self.path != "/command":
+            self._json(404, {"error": "not found"})
+            return
+
+        # ── Auth ──────────────────────────────────────────────────────────────
+        if not self._auth():
             return
 
         # ── Parse body ────────────────────────────────────────────────────────

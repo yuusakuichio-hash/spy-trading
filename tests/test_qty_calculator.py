@@ -15,7 +15,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from common.qty_calculator import (
     calc_qty_pure_python,
     calc_qty_numpy,
+    calc_qty_decimal,
     calc_qty_verified,
+    tmr_verify_spread_qty,
+    tmr_verify_naked_qty,
     QtyMismatchError,
 )
 
@@ -215,3 +218,102 @@ class TestValidation:
     def test_max_qty_less_than_min_raises(self):
         with pytest.raises(ValueError, match="max_qty"):
             calc_qty_verified(100_000, 1.0, 0.05, min_qty=5, max_qty=3)
+
+
+# ── CRITICAL-3修正テスト: Decimal独立経路 ────────────────────────────────────
+
+class TestDecimalPath:
+    """calc_qty_decimal が pure_python/numpy と独立した経路であることを確認"""
+
+    def test_decimal_basic_calculation(self):
+        """Decimal経路でも同じ結果を返す"""
+        assert calc_qty_decimal(100_000, 1.0, 0.05) == 50
+
+    def test_decimal_small_account(self):
+        """Decimal経路でも min_qty=1 保証"""
+        assert calc_qty_decimal(500, 2.0, 0.10) == 1
+
+    def test_three_paths_agree_typical(self):
+        """3経路が全て一致する"""
+        cash, premium, risk = 150_000.0, 0.75, 0.04
+        qty_py  = calc_qty_pure_python(cash, premium, risk)
+        qty_np  = calc_qty_numpy(cash, premium, risk)
+        qty_dec = calc_qty_decimal(cash, premium, risk)
+        assert qty_py == qty_np == qty_dec, (
+            f"3-path mismatch: py={qty_py} np={qty_np} dec={qty_dec}"
+        )
+
+    def test_calc_qty_verified_uses_majority_vote(self):
+        """calc_qty_verified が正常時に int を返す（3経路過半数一致）"""
+        result = calc_qty_verified(100_000, 1.0, 0.05)
+        assert isinstance(result, int)
+        assert result == 50
+
+    def test_decimal_invalid_premium_raises(self):
+        with pytest.raises(ValueError, match="premium must be > 0"):
+            calc_qty_decimal(100_000, 0.0, 0.05)
+
+    def test_decimal_negative_cash_raises(self):
+        with pytest.raises(ValueError, match="cash must be >= 0"):
+            calc_qty_decimal(-1.0, 1.0, 0.05)
+
+
+# ── CRITICAL-3修正テスト: tmr_verify_naked_qty ──────────────────────────────
+
+class TestTmrVerifyNakedQty:
+    """tmr_verify_naked_qty: spread_width=0バイパスを防ぐネイキッド専用経路"""
+
+    def test_normal_case_passes(self):
+        """正常ケース: notional が cash の合理的範囲内"""
+        # premium=0.50, qty=5, notional=250 / cash=10000 = 2.5% → pass
+        tmr_verify_naked_qty(cash=10_000.0, premium_per_share=0.50, qty=5)
+
+    def test_zero_premium_raises(self):
+        """spread_width=0 でtmr_verify_spread_qty を誤用した場合の防止"""
+        with pytest.raises(ValueError, match="premium_per_share=0.0 <= 0"):
+            tmr_verify_naked_qty(cash=10_000.0, premium_per_share=0.0, qty=5)
+
+    def test_negative_premium_raises(self):
+        with pytest.raises(ValueError, match="premium_per_share"):
+            tmr_verify_naked_qty(cash=10_000.0, premium_per_share=-1.0, qty=5)
+
+    def test_zero_cash_raises(self):
+        with pytest.raises(ValueError, match="cash"):
+            tmr_verify_naked_qty(cash=0.0, premium_per_share=1.0, qty=5)
+
+    def test_zero_qty_raises(self):
+        with pytest.raises(ValueError, match="qty"):
+            tmr_verify_naked_qty(cash=10_000.0, premium_per_share=1.0, qty=0)
+
+    def test_excessive_notional_blocked(self):
+        """notional が cash の5倍超でブロック"""
+        # premium=10.0, qty=100, notional=100_000 / cash=10_000 = 10x → BLOCKED
+        with pytest.raises(QtyMismatchError, match="notional過大"):
+            tmr_verify_naked_qty(cash=10_000.0, premium_per_share=10.0, qty=100)
+
+    def test_boundary_5x_passes(self):
+        """notional が cash の5.0倍ちょうどはpass (ratio <= 5.0)"""
+        # premium=1.0, qty=50, notional=5000 / cash=1000 = 5.0x → pass
+        tmr_verify_naked_qty(cash=1_000.0, premium_per_share=1.0, qty=50)
+
+    def test_real_strangle_scenario(self):
+        """実際のストラングル: call_mid=0.80, put_mid=0.60, qty=3, cash=50000"""
+        # net_per_share = 1.40, qty=3, notional=420 / cash=50000 = 0.84% → pass
+        tmr_verify_naked_qty(cash=50_000.0, premium_per_share=1.40, qty=3)
+
+
+# ── CRITICAL-1: tmr_verify_spread_qty の spread_width=0 fail-open 修正確認 ──
+
+class TestSpreadQtyFailOpen:
+    """tmr_verify_spread_qty は spread_width=0 でスキップ (既存動作)。
+    StrangleSell は tmr_verify_naked_qty を使うべきであることを確認。"""
+
+    def test_spread_width_zero_skips_silently(self):
+        """spread_width=0 は検証スキップ（既存仕様）— StrangleSellはこれを使ってはいけない"""
+        # spread_width=0 → return (no raise)
+        tmr_verify_spread_qty(cash=10_000.0, spread_width=0, capital_pct=0.05, qty_from_calc_qty=1)
+
+    def test_spread_width_positive_verifies(self):
+        """spread_width>0 は正常に検証する"""
+        # arithmetic_qty = int(10000 * 0.05 / (5 * 100)) = int(500/500) = 1
+        tmr_verify_spread_qty(cash=10_000.0, spread_width=5.0, capital_pct=0.05, qty_from_calc_qty=1)
