@@ -118,9 +118,15 @@ class TestGetEntryParams(unittest.TestCase):
         self.assertEqual(res.entry_before_min, ENTRY_BEFORE_EARNINGS_MIN)
 
     def test_size_factor_consistent_with_crush_rate(self):
-        """size_factor が crush_rate に対して正しく算出されること"""
+        """size_factor が crush_rate に対して正しく算出されること
+
+        H-7: _calc_size_factor(crush_rate, symbol=symbol) でペナルティが適用されるため、
+        symbol を省略した _calc_size_factor(crush_rate) とは値が異なる場合がある。
+        テストは symbol 込みで計算した値と比較する。
+        """
         res = self.eng.get_entry_params("NVDA")
-        expected_sf = self.eng._calc_size_factor(res.iv_crush_rate)
+        # H-7: symbol 引数付きで計算（ペナルティ考慮）
+        expected_sf = self.eng._calc_size_factor(res.iv_crush_rate, symbol="NVDA")
         self.assertAlmostEqual(res.size_factor, expected_sf)
 
 

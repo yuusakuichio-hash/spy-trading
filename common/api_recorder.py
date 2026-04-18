@@ -22,11 +22,15 @@ Record-Replay 設計思想:
     result = recorder.call("get_market_snapshot", real_fn, codes)
 
 記録ファイル形式 (JSONL, 1行=1コール):
-    {"ts": "...", "method": "...", "args_repr": "...", "ret": ..., "elapsed_ms": ...}
+    {"ts": "...", "method": "...", "args_hash": "...", "args_repr": "...", "ret": ..., "elapsed_ms": ...}
+
+H-3: args_hash を追加。REPLAY時に method 名 + args_hash が不一致の場合は raise
+H-4: enum/非シリアライズ型を {"__type__": "enum", "qualname": "...", "value": ...} で記録し型を保全
 """
 from __future__ import annotations
 
 import datetime
+import hashlib
 import json
 import logging
 import os
@@ -54,7 +58,7 @@ class ReplayExhaustedError(Exception):
 
 
 class ReplayMethodMismatchError(Exception):
-    """再生モードでメソッド名が一致しない場合に送出"""
+    """再生モードでメソッド名またはargs hashが一致しない場合に送出 (H-3)"""
     pass
 
 
@@ -179,7 +183,7 @@ class APIRecorder:
 
         Raises:
             ReplayExhaustedError: REPLAYで記録が尽きた場合
-            ReplayMethodMismatchError: REPLAYでメソッド名が不一致の場合
+            ReplayMethodMismatchError: REPLAYでメソッド名またはargsが不一致の場合 (H-3)
         """
         with self._lock:
             mode = self._mode
@@ -191,12 +195,13 @@ class APIRecorder:
             return self._record_call(method, real_fn, *args, **kwargs)
 
         elif mode == RecorderMode.REPLAY:
-            return self._replay_call(method)
+            return self._replay_call(method, args, kwargs)
 
         return real_fn(*args, **kwargs)
 
     def _record_call(self, method: str, real_fn: Callable, *args, **kwargs) -> Any:
         """実APIコールして結果を記録する"""
+        args_hash = _compute_args_hash(args, kwargs)
         t0 = time.monotonic()
         try:
             result = real_fn(*args, **kwargs)
@@ -205,6 +210,7 @@ class APIRecorder:
             entry = {
                 "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                 "method": method,
+                "args_hash": args_hash,
                 "args_repr": _safe_repr(args, kwargs),
                 "ret": None,
                 "exception": type(e).__name__,
@@ -218,6 +224,7 @@ class APIRecorder:
         entry = {
             "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "method": method,
+            "args_hash": args_hash,
             "args_repr": _safe_repr(args, kwargs),
             "ret": _make_serializable(result),
             "elapsed_ms": round(elapsed_ms, 2),
@@ -225,8 +232,8 @@ class APIRecorder:
         self._write_entry(entry)
         return result
 
-    def _replay_call(self, method: str) -> Any:
-        """記録からエントリーを取り出して再生する"""
+    def _replay_call(self, method: str, args: tuple, kwargs: dict) -> Any:
+        """記録からエントリーを取り出して再生する (H-3: args_hash 照合)"""
         with self._lock:
             if self._replay_index >= len(self._replay_queue):
                 raise ReplayExhaustedError(
@@ -237,13 +244,22 @@ class APIRecorder:
             self._replay_index += 1
             self._call_count += 1
 
-        # メソッド名照合（ゆるい照合: 不一致はWARNINGだけ）
+        # H-3: method名 + args_hash の両方を照合し、不一致は raise
         recorded_method = entry.get("method", "")
+        recorded_hash   = entry.get("args_hash", "")
+        current_hash    = _compute_args_hash(args, kwargs)
+
         if recorded_method != method:
-            log.warning(
+            raise ReplayMethodMismatchError(
                 f"[APIRecorder] REPLAY method mismatch: "
                 f"expected={method} recorded={recorded_method} "
-                f"(index={self._replay_index - 1}) — 記録値を使用"
+                f"(index={self._replay_index - 1})"
+            )
+        if recorded_hash and recorded_hash != current_hash:
+            raise ReplayMethodMismatchError(
+                f"[APIRecorder] REPLAY args hash mismatch for method={method}: "
+                f"expected_hash={current_hash[:8]} recorded_hash={recorded_hash[:8]} "
+                f"(index={self._replay_index - 1})"
             )
 
         # 例外が記録されていた場合は再送出
@@ -333,6 +349,18 @@ def set_recorder(recorder: APIRecorder) -> None:
 
 # ── ユーティリティ ────────────────────────────────────────────────
 
+def _compute_args_hash(args: tuple, kwargs: dict, max_repr_len: int = 1000) -> str:
+    """args/kwargs の内容から SHA-256 ハッシュを計算する (H-3)。
+    repr() が安定しない型は str() で代替。"""
+    try:
+        s = repr(args) + repr(sorted(kwargs.items()))
+        if len(s) > max_repr_len:
+            s = s[:max_repr_len]
+        return hashlib.sha256(s.encode("utf-8", errors="replace")).hexdigest()[:16]
+    except Exception:
+        return ""
+
+
 def _safe_repr(args: tuple, kwargs: dict, max_len: int = 200) -> str:
     """引数を安全に文字列化する（サイズ制限あり）"""
     try:
@@ -346,7 +374,9 @@ def _safe_repr(args: tuple, kwargs: dict, max_len: int = 200) -> str:
 
 def _make_serializable(obj: Any) -> Any:
     """JSONシリアライズ可能な型に変換する。
-    DataFrameはrecords形式のlistに変換。tupleはlistに変換。
+
+    H-4: enum/非シリアライズ型は {"__type__": "enum", "qualname": "...", "value": ...} 形式で
+    記録して型情報を保全する。str(obj) への fallback は型情報が失われるため使わない。
     """
     try:
         import pandas as pd
@@ -358,7 +388,7 @@ def _make_serializable(obj: Any) -> Any:
         pass
 
     if isinstance(obj, tuple):
-        return [_make_serializable(v) for v in obj]
+        return {"__type__": "tuple", "items": [_make_serializable(v) for v in obj]}
     if isinstance(obj, list):
         return [_make_serializable(v) for v in obj]
     if isinstance(obj, dict):
@@ -368,8 +398,28 @@ def _make_serializable(obj: Any) -> Any:
     if isinstance(obj, (int, float, bool, str, type(None))):
         return obj
 
-    # その他はstr変換
-    return str(obj)
+    # H-4: Enum は型・qualified name・値を保全して記録
+    if isinstance(obj, Enum):
+        return {
+            "__type__": "enum",
+            "qualname": f"{type(obj).__module__}.{type(obj).__qualname__}",
+            "name": obj.name,
+            "value": obj.value,
+        }
+
+    # datetime 型は ISO 文字列で保存（型タグ付き）
+    if isinstance(obj, datetime.datetime):
+        return {"__type__": "datetime", "iso": obj.isoformat()}
+    if isinstance(obj, datetime.date):
+        return {"__type__": "date", "iso": obj.isoformat()}
+
+    # bytes は base64 で保存
+    if isinstance(obj, bytes):
+        import base64
+        return {"__type__": "bytes", "b64": base64.b64encode(obj).decode()}
+
+    # H-4: str fallback は避け、型情報を残す
+    return {"__type__": "unknown", "repr": repr(obj)[:200]}
 
 
 def _lookup_exception(name: str) -> type:

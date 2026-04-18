@@ -119,16 +119,23 @@ class SymbolScore:
         )
 
 
+# H-6: IVR 取得不能銘柄に与えるスコア（0.0 = 末尾固定、fail-open 防止）
+# score_symbols() は ivr=None 銘柄に exclude_reason="ivr_unavailable" を付与する
+_IVR_NONE_SCORE: float = 0.0
+
 # ── ノーマライズ関数 ──────────────────────────────────────────────────────────
 
 def _normalize_ivr(ivr: Optional[float], universe_ivrs: list[float]) -> float:
     """IVRをユニバース内での相対位置 (0.0〜1.0) にノーマライズ。
 
     固定閾値ゼロ。ユニバース全体のIVR分布からsoftmax様に算出する。
-    データなし→0.5 (ニュートラル)
+
+    H-6: ivr=None は 0.5 (ニュートラル) ではなく _IVR_NONE_SCORE (0.0) を返す。
+    これにより IVR 取得失敗銘柄が「中程度の環境」と誤認されてエントリーされる
+    fail-open を防ぐ。score_symbols() 内でこの銘柄は末尾固定扱いになる。
     """
     if ivr is None:
-        return 0.5
+        return _IVR_NONE_SCORE  # H-6: 0.5 (fail-open) → 0.0 (末尾固定)
     valid = [v for v in universe_ivrs if v is not None]
     if len(valid) < 2:
         # ユニバースデータ不足→生のIVRを0〜100基準で正規化
@@ -300,6 +307,10 @@ def score_symbols(
     excluded_metrics = [m for m in metrics_list
                         if earnings_exclude and m.near_earnings]
 
+    # H-6: IVR=None 銘柄をアクティブリストから除外して末尾固定扱いにする
+    ivr_none_metrics = [m for m in active if m.ivr is None]
+    active = [m for m in active if m.ivr is not None]
+
     for m in active:
         raw = _compute_raw_scores(m, active)
         s = _weighted_score(raw, weights)
@@ -312,6 +323,20 @@ def score_symbols(
 
     # スコア降順
     results.sort(key=lambda x: x.score, reverse=True)
+
+    # H-6: IVR=None 銘柄を末尾に追加（スコア=0、除外扱い）
+    for m in ivr_none_metrics:
+        log.warning(
+            f"[SymbolSelector] {m.symbol}: ivr=None → 候補から除外(末尾固定) [H-6 fail-open防止]"
+        )
+        results.append(SymbolScore(
+            symbol=m.symbol,
+            score=0.0,
+            raw_scores={},
+            metrics=m,
+            excluded=True,
+            exclude_reason="ivr_unavailable",
+        ))
 
     # 除外銘柄を末尾に追加（スコア=0）
     for m in excluded_metrics:

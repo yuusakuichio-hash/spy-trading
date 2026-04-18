@@ -5,9 +5,13 @@
 """
 from __future__ import annotations
 import collections
+import copy
 import datetime
+import json
 import logging
+import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 log = logging.getLogger(__name__)
@@ -22,9 +26,68 @@ except ImportError:
     _QCM_AVAILABLE = False
 
 
-# 発注頻度トラッキング（プロセス内メモリ）
+# ── H-1: 発注頻度トラッキング — ファイル永続化 ──────────────────────────────────
+# data/recent_orders.json に expiry 付きで保存し Mac-VPS 間で共有可能にする。
+# プロセスメモリのみでは再起動や VPS 並走時に重複判定が機能しない。
+_RECENT_ORDERS_FILE = Path(
+    os.environ.get("SPY_DATA_DIR", Path(__file__).parents[1] / "data")
+) / "recent_orders.json"
+# 窓口: メモリキャッシュ（起動時にファイルから復元、write-through で更新）
 _recent_orders: collections.deque = collections.deque(maxlen=100)
 _recent_keys: collections.deque = collections.deque(maxlen=20)
+_RECENT_ORDER_TTL_SEC = 120  # 重複判定の有効期間（秒）
+
+
+def _load_recent_orders() -> None:
+    """起動時にファイルから _recent_orders/_recent_keys を復元する。
+    期限切れエントリーは除外する。"""
+    global _recent_orders, _recent_keys
+    if not _RECENT_ORDERS_FILE.exists():
+        return
+    try:
+        data = json.loads(_RECENT_ORDERS_FILE.read_text())
+        now_ts = datetime.datetime.now().timestamp()
+        cutoff_ts = now_ts - _RECENT_ORDER_TTL_SEC
+
+        orders = [
+            datetime.datetime.fromtimestamp(e["ts"])
+            for e in data.get("orders", [])
+            if e.get("ts", 0) >= cutoff_ts
+        ]
+        keys = [
+            tuple(k) for k in data.get("keys", [])
+            if data.get("orders", [])  # 単純に全key復元
+        ]
+        _recent_orders = collections.deque(orders, maxlen=100)
+        _recent_keys   = collections.deque(keys,   maxlen=20)
+    except Exception as e:
+        log.warning(f"[PreTrade] recent_orders.json 読み込みエラー: {e}")
+
+
+def _save_recent_orders() -> None:
+    """_recent_orders/_recent_keys をファイルに write-through で保存する。"""
+    try:
+        now_ts = datetime.datetime.now().timestamp()
+        cutoff_ts = now_ts - _RECENT_ORDER_TTL_SEC
+        data = {
+            "saved_at": datetime.datetime.now().isoformat(),
+            "orders": [
+                {"ts": t.timestamp(), "expiry": (t + datetime.timedelta(seconds=_RECENT_ORDER_TTL_SEC)).isoformat()}
+                for t in _recent_orders
+                if t.timestamp() >= cutoff_ts
+            ],
+            "keys": [list(k) for k in _recent_keys],
+        }
+        tmp = _RECENT_ORDERS_FILE.with_suffix(".json.tmp")
+        _RECENT_ORDERS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(data, ensure_ascii=False))
+        tmp.replace(_RECENT_ORDERS_FILE)
+    except Exception as e:
+        log.warning(f"[PreTrade] recent_orders.json 書き込みエラー: {e}")
+
+
+# 起動時に復元
+_load_recent_orders()
 
 
 @dataclass
@@ -62,6 +125,9 @@ def _bas_pct(bid: float, ask: float) -> float:
 
 def check_order(ctx: OrderContext, limits: Optional[RiskLimits] = None) -> CheckResult:
     """全4層check + Kill Switch + Loss Gate"""
+    # H-2: ctx を破壊的に変更しないよう deepcopy して作業コピーを使う
+    ctx = copy.deepcopy(ctx)
+
     if limits is None:
         limits = load_limits(capital_usd=ctx.capital_usd, paper=ctx.paper)
 
@@ -81,7 +147,7 @@ def check_order(ctx: OrderContext, limits: Optional[RiskLimits] = None) -> Check
         # level 1-2 は margin_scale で est_margin を事実上縮小判定
         scale = qcm.margin_scale()
         if scale < 1.0 and ctx.est_margin > 0:
-            # スケール適用: est_margin / scale で実効判定
+            # H-2: deepcopy済みのctxなので変更しても呼び出し元に影響しない
             ctx.est_margin = ctx.est_margin / max(scale, 0.01)
 
     # Layer 1: Pre-trade Sanity
@@ -159,7 +225,8 @@ def check_order(ctx: OrderContext, limits: Optional[RiskLimits] = None) -> Check
                            f"重複発注疑い: {key} 直近{duplicate_count}回",
                            "high", True)
 
-    # All passed — record
+    # All passed — record (H-1: ファイルにも永続化)
     _recent_orders.append(now)
     _recent_keys.append(key)
+    _save_recent_orders()
     return CheckResult(True, "PASS", "all checks passed", "low", False)

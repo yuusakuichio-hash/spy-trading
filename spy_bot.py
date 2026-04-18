@@ -624,8 +624,8 @@ def _atomic_json_write(path: Path, data, *, indent: int = 2, ensure_ascii: bool 
         log.error(f"[AtomicWrite] {path.name} 書き込みエラー: {e}")
         try:
             tmp.unlink(missing_ok=True)
-        except Exception:
-            pass
+        except Exception as _unlink_e:
+            log.warning(f"[AtomicWrite] .tmp削除失敗(無視): {_unlink_e}")
         raise
 
 
