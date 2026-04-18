@@ -279,6 +279,111 @@ def compute_gap(planned: dict, actual: dict) -> str:
 # Main AAR generation
 # ---------------------------------------------------------------------------
 
+def analyze_silent_handlings(target_date: date) -> dict:
+    """自己解決事案（通知を飛ばさなかった事案）と損失影響を集計。
+
+    対象:
+    - discipline_guard hook による違反ブロック
+    - pre_trade_check による発注拒否
+    - Quote Context Manager のlevel変化
+    - atlas_watchdog 自動修復
+    - MassVerify エラーハンドリング
+    """
+    date_str = target_date.strftime("%Y-%m-%d")
+    events = {
+        "discipline_blocks": [],
+        "pre_trade_rejects": [],
+        "qcm_level_changes": [],
+        "fallback_uses": [],
+        "auto_recoveries": [],
+    }
+
+    # discipline_violations.log
+    disc_log = LOG_DIR / "discipline_violations.log"
+    if disc_log.exists():
+        try:
+            with open(disc_log, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    if date_str in line and "VIOLATION" in line:
+                        events["discipline_blocks"].append(line.strip()[:150])
+        except Exception:
+            pass
+
+    # condor.log から自己解決パターン抽出
+    condor_log = LOG_DIR / "condor.log"
+    patterns = {
+        "pre_trade_rejects": re.compile(r"PreTradeCheck/(L\d|KILL|QCM).*?発注拒否"),
+        "qcm_level_changes": re.compile(r"\[QCM\].*?level"),
+        "fallback_uses": re.compile(r"フォールバック|finnhub|yahoo|cache.*?ソース"),
+        "auto_recoveries": re.compile(r"再接続成功|復旧|自動修復|recovered"),
+    }
+    if condor_log.exists():
+        try:
+            with open(condor_log, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    if not line.startswith(date_str):
+                        continue
+                    for key, pat in patterns.items():
+                        if pat.search(line):
+                            events[key].append(line.strip()[:150])
+                            break
+        except Exception:
+            pass
+
+    total = sum(len(v) for v in events.values())
+    return {"total": total, "events": events}
+
+
+def estimate_opportunity_loss(handlings: dict, avg_trade_pnl: float) -> str:
+    """自己解決による機会損失の粗い推定"""
+    events = handlings["events"]
+    est_lines = []
+    # pre_trade_check reject: エントリー機会失う → 戦術平均P&L × 件数
+    reject_n = len(events.get("pre_trade_rejects", []))
+    if reject_n > 0 and avg_trade_pnl > 0:
+        loss_est = reject_n * avg_trade_pnl
+        est_lines.append(
+            f"- pre_trade_check 拒否 {reject_n}件: 機会損失推定 "
+            f"${-loss_est:.2f}（平均trade P&L × 件数）※実際は正当な拒否を含む"
+        )
+    elif reject_n > 0:
+        est_lines.append(f"- pre_trade_check 拒否 {reject_n}件: 影響推定困難（平均P&L要調査）")
+
+    # QCM level change: margin縮小による取引サイズ減の推定
+    qcm_n = len(events.get("qcm_level_changes", []))
+    if qcm_n > 0:
+        est_lines.append(
+            f"- QCM level変化 {qcm_n}件: level 1-2中は発注margin縮小（20-50%）・"
+            f"該当時刻のエントリー件数に比例して機会損失"
+        )
+
+    # fallback使用: 価格精度低下の可能性
+    fb_n = len(events.get("fallback_uses", []))
+    if fb_n > 0:
+        est_lines.append(
+            f"- 代替source使用 {fb_n}件: primary quote精度低下 → "
+            f"strike選定・exit判定のズレ可能性"
+        )
+
+    # discipline_block: Claude側の行動制約で取引には影響なし
+    dsc_n = len(events.get("discipline_blocks", []))
+    if dsc_n > 0:
+        est_lines.append(
+            f"- discipline hook ブロック {dsc_n}件: Claude行動制約のみ・取引影響なし"
+        )
+
+    # auto recovery: 一時切断の自動復旧
+    ar_n = len(events.get("auto_recoveries", []))
+    if ar_n > 0:
+        est_lines.append(
+            f"- 自動復旧 {ar_n}件: 切断中の機会損失あり（復旧までの経過時間×平均エントリー頻度）"
+        )
+
+    if not est_lines:
+        return "_自己解決事案なし・機会損失なし_"
+    return "\n".join(est_lines)
+
+
 def run_aar(target_date: date | None = None) -> Path:
     if target_date is None:
         # 05:15 JST 実行 → 前営業日（ET当日）を対象
@@ -371,6 +476,32 @@ def run_aar(target_date: date | None = None) -> Path:
         f"## d) 次回改善提案",
         f"",
         suggestion,
+        f"",
+    ]
+
+    # --- e) 自己解決事案・損失影響調査 ---
+    silent = analyze_silent_handlings(target_date)
+    total_pnl = actual.get("total_pnl") or 0
+    exit_count = actual.get("exit_count") or 1
+    avg_pnl = total_pnl / max(exit_count, 1)
+    loss_est = estimate_opportunity_loss(silent, avg_pnl)
+
+    lines_out += [
+        f"## e) 自己解決事案・損失影響調査",
+        f"",
+        f"**通知せず自己解決した事案合計**: {silent['total']}件",
+        f"",
+        f"### 内訳",
+        f"- discipline_guard hook ブロック: {len(silent['events']['discipline_blocks'])}件",
+        f"- pre_trade_check 発注拒否: {len(silent['events']['pre_trade_rejects'])}件",
+        f"- Quote Context Manager level変化: {len(silent['events']['qcm_level_changes'])}件",
+        f"- 代替source使用（フォールバック）: {len(silent['events']['fallback_uses'])}件",
+        f"- 自動復旧: {len(silent['events']['auto_recoveries'])}件",
+        f"",
+        f"### 機会損失/実損失の推定",
+        loss_est,
+        f"",
+        f"**結論**: 通知しなかった事案でも上記の影響が累積している可能性あり。",
         f"",
         f"---",
         f"*Generated by scripts/daily_aar.py (Sora Lab)*",
