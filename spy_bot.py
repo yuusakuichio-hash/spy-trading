@@ -15187,6 +15187,24 @@ class SPYCreditSpreadBot:
             save_failures(0)
             log.info("OpenD connected")
 
+            # CRITICAL-8: 前回 _pending_close に残留した未決済 leg を再試行
+            if self.eng._pending_close:
+                log.warning(f"[SyncBarrier] startup: _pending_close 残留 {self.eng._pending_close} → 再決済試行")
+                _retry_positions = self.eng.get_open_positions()
+                _retry_targets = [
+                    p for p in _retry_positions
+                    if p.get("code", "") in self.eng._pending_close
+                ]
+                if _retry_targets:
+                    ok_retry = self.eng.close_all_positions(reason="pending_close_retry")
+                    if ok_retry:
+                        log.info("[SyncBarrier] _pending_close 再決済成功")
+                    else:
+                        log.error("[SyncBarrier] _pending_close 再決済も失敗 → 手動確認必要")
+                else:
+                    log.info("[SyncBarrier] _pending_close の対象ポジションなし（既に決済済み）")
+                    self.eng._pending_close = []
+
         # ── PDT動作モード確定 ────────────────────────────────────────────────
         # ペーパーモードは init で "full" セット済み。本番のみ cash を確認してモードを決定する。
         if not self.paper:
