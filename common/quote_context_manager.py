@@ -45,6 +45,9 @@ class QuoteContextState:
 class QuoteContextManager:
     """Quote context の段階的フェイルオーバー管理"""
 
+    # [M-6] cache鮮度チェック: この秒数より古いcacheはstaleと判定
+    CACHE_MAX_AGE_SEC: float = 300.0  # 5分
+
     def __init__(self,
                  reconnect_fn: Optional[Callable[[], bool]] = None,
                  health_check_fn: Optional[Callable[[], bool]] = None,
@@ -85,35 +88,63 @@ class QuoteContextManager:
                 log.info(f"[QCM] 再接続成功: level {prev_level}→0 通常復帰")
 
     def try_reconnect(self) -> bool:
-        """再接続試行（exponential backoff）"""
+        """再接続試行（exponential backoff）
+
+        [M-7修正] TOCTOU対策: lock外でstate参照していた問題を修正。
+        backoff wait中にlock解除するのは必要だが、state読み取り・更新は
+        全てlock内で完結させ、wait後に再度lockを取り直すatomic patternに変更。
+        """
         with self._lock:
             if self._reconnect_fn is None:
                 return False
             idx = min(self.state.reconnect_attempts, len(_BACKOFF_SEQUENCE) - 1)
             wait = _BACKOFF_SEQUENCE[idx]
-            self.state.reconnect_attempts += 1
-        # lock解除してwait
-        log.info(f"[QCM] 再接続試行 #{self.state.reconnect_attempts} (backoff {wait}s)")
+            attempt_num = self.state.reconnect_attempts + 1
+            self.state.reconnect_attempts = attempt_num
+        # lock解除してwait（reconnect_fn呼び出し前にlockを再取得して安全に実行）
+        log.info(f"[QCM] 再接続試行 #{attempt_num} (backoff {wait}s)")
         time.sleep(wait)
         try:
             ok = self._reconnect_fn()
         except Exception as e:
             log.warning(f"[QCM] 再接続関数例外: {e}")
             ok = False
-        if ok:
-            with self._lock:
+        with self._lock:
+            # 成功: state更新をlockで保護してTOCTOU排除
+            if ok:
                 self.state.reconnect_attempts = 0
+        if ok:
             self.on_reconnect_success()
         return ok
 
     def _pick_fallback_source(self) -> None:
-        """切断レベルに応じて代替sourceを選ぶ"""
+        """切断レベルに応じて代替sourceを選ぶ
+
+        [M-6修正] cache sourceを選択する際に鮮度チェックを行う。
+        last_disconnect_at から CACHE_MAX_AGE_SEC を超えている場合は
+        active_source を "stale_cache" とし allow_new_entry() がFalseになる。
+        """
         level = self.state.level
         if level >= len(self.state.source_chain):
-            self.state.active_source = "cache"
+            candidate = "cache"
         else:
             # level 1 → chain[1] (finnhub) 等
-            self.state.active_source = self.state.source_chain[level]
+            candidate = self.state.source_chain[level]
+
+        # [M-6] cacheが選ばれた場合、鮮度確認
+        if candidate == "cache" and self.state.last_disconnect_at is not None:
+            age_sec = (
+                datetime.datetime.now() - self.state.last_disconnect_at
+            ).total_seconds()
+            if age_sec > self.CACHE_MAX_AGE_SEC:
+                log.warning(
+                    f"[QCM] cache鮮度切れ: age={age_sec:.0f}s > {self.CACHE_MAX_AGE_SEC}s "
+                    f"→ active_source=stale_cache・新規エントリーブロック"
+                )
+                self.state.active_source = "stale_cache"
+                return
+
+        self.state.active_source = candidate
         log.info(f"[QCM] active_source={self.state.active_source} (level={level})")
 
     def get_level(self) -> int:
@@ -121,8 +152,14 @@ class QuoteContextManager:
             return self.state.level
 
     def allow_new_entry(self) -> bool:
-        """新規エントリー許可判定"""
-        return self.get_level() < 3
+        """新規エントリー許可判定
+
+        [M-6] level < 3 でも stale_cache 状態なら新規エントリーを拒否する。
+        """
+        with self._lock:
+            if self.state.active_source == "stale_cache":
+                return False
+            return self.state.level < 3
 
     def margin_scale(self) -> float:
         """段階別 margin スケール係数"""
