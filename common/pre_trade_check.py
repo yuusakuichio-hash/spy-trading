@@ -25,6 +25,12 @@ try:
 except ImportError:
     _QCM_AVAILABLE = False
 
+try:
+    from common.pdt_tracker import get_global_tracker as _pdt_get
+    _PDT_AVAILABLE = True
+except ImportError:
+    _PDT_AVAILABLE = False
+
 
 # ── H-1: 発注頻度トラッキング — ファイル永続化 ──────────────────────────────────
 # data/recent_orders.json に expiry 付きで保存し Mac-VPS 間で共有可能にする。
@@ -106,6 +112,9 @@ class OrderContext:
     open_margin_total: float = 0
     symbol_margin: float = 0   # 同銘柄の既存証拠金合計
     paper: bool = True
+    # Layer 3.5 PDT判定用フィールド（省略時はPDTチェックをスキップ）
+    strategy: str = ""              # 戦術名（例: "CS", "ORB", "0dte_cs"）
+    expiry_date: Optional[datetime.date] = None  # オプション満期日
 
 
 @dataclass
@@ -208,6 +217,39 @@ def check_order(ctx: OrderContext, limits: Optional[RiskLimits] = None) -> Check
     )
     if not cross_allow:
         return CheckResult(False, "L3B", cross_reason, "high", True)
+
+    # Layer 3.5: PDT（Pattern Day Trader）全戦術合算ガード
+    # FINRA: $25K未満口座で5営業日ローリング4回以上のday_trade → 90日禁止
+    if _PDT_AVAILABLE:
+        try:
+            _pdt = _pdt_get()
+            _pdt_status = _pdt.get_status(ctx.capital_usd)
+            if not _pdt_status["can_enter"]:
+                _pdt_count = _pdt_status["rolling5_count"]
+                return CheckResult(
+                    False, "L3.5",
+                    f"PDT上限到達: 直近5営業日{_pdt_count}/{_pdt_status['pdt_limit']}件消費済み"
+                    f" (capital=${ctx.capital_usd:.0f} < $25,000) — FINRA PDTルール遵守のためブロック",
+                    "critical", True,
+                )
+        except Exception as _pdt_e:
+            log.warning(f"[PreTrade] PDTチェック例外（fail-open）: {_pdt_e}")
+
+    # Layer 3.5: PDT 戦術別判定（0DTE day trade のみPDTチェック、1DTE以上はスキップ）
+    if ctx.strategy:
+        try:
+            from common.pdt_1dte_utils import check_pdt_layer
+            from common.pdt_tracker import get_global_tracker as _get_pdt
+            _pdt_allow, _pdt_reason, _is_day_trade = check_pdt_layer(
+                strategy_name=ctx.strategy,
+                expiry_date=ctx.expiry_date,
+                capital_usd=ctx.capital_usd,
+                pdt_tracker=_get_pdt(),
+            )
+            if not _pdt_allow:
+                return CheckResult(False, "L3.5", _pdt_reason, "high", False)
+        except Exception as _pdt_err:
+            log.warning(f"[L3.5] PDTチェック例外 → スキップ: {_pdt_err}")
 
     # Layer 4: Frequency & Duplicate
     now = datetime.datetime.now()

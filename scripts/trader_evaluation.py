@@ -585,6 +585,48 @@ def calc_m15_revenge_trade_rate(all_trades: list[dict]) -> float:
 
 
 # ---------------------------------------------------------------------------
+# M16: PDT使用率（FINRA PDT遵守確認）
+# ---------------------------------------------------------------------------
+
+def calc_m16_pdt_usage_rate(capital_usd: float = 0.0) -> Optional[dict]:
+    """M16: PDT使用率 = 消費件数 / 上限件数（$25K未満のみ有意）。
+
+    Returns:
+        {
+            "constrained": bool,       # $25K未満かどうか
+            "rolling5_count": int,     # 直近5営業日消費数
+            "pdt_limit": int | None,   # 上限（$25K以上はNone）
+            "usage_rate": float | None,  # 消費/上限（$25K以上はNone）
+            "pdt_remaining": int | str,  # 残数
+            "violation_detected": bool,  # 上限到達（=次回エントリーでFINRA違反）
+        }
+    """
+    try:
+        import sys
+        from pathlib import Path
+        _base = Path(__file__).resolve().parents[1]
+        sys.path.insert(0, str(_base))
+        from common.pdt_tracker import get_global_tracker as _get_pdt_tracker, PDT_LIMIT as _PDT_LIM
+        _pdt = _get_pdt_tracker()
+        _status = _pdt.get_status(capital_usd)
+        constrained = _status["pdt_constrained"]
+        rolling5    = _status["rolling5_count"]
+        remaining   = _status["pdt_remaining"]
+        usage_rate  = round(rolling5 / _PDT_LIM, 4) if constrained else None
+        violation   = constrained and isinstance(remaining, int) and remaining == 0
+        return {
+            "constrained":         constrained,
+            "rolling5_count":      rolling5,
+            "pdt_limit":           _PDT_LIM if constrained else None,
+            "usage_rate":          usage_rate,
+            "pdt_remaining":       remaining,
+            "violation_detected":  violation,
+        }
+    except Exception as _e:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # EV-1: 仮説-結果マッチング
 # ---------------------------------------------------------------------------
 
@@ -797,6 +839,7 @@ def run_evaluation(
     m13 = calc_m13_discipline_score(paired, trades_in_period)
     m14 = calc_m14_consistency_score(paired)
     m15 = calc_m15_revenge_trade_rate(trades_in_period)
+    m16 = calc_m16_pdt_usage_rate(capital_usd=margin_usd)
 
     ev1 = calc_ev1_hypothesis_match(trades_in_period)
     tactic_bd = calc_ev4_tactic_breakdown(paired)
@@ -830,6 +873,7 @@ def run_evaluation(
             "M13_discipline_score": m13,
             "M14_consistency_score": m14,
             "M15_revenge_trade_rate": m15,
+            "M16_pdt_usage": m16,
         },
         "ev_gaps": {
             "EV1_hypothesis_match": ev1,
@@ -931,6 +975,34 @@ def build_markdown_report(result: dict, target_date: date) -> str:
         f"| M14 Consistency Score | {_fmt(m.get('M14_consistency_score'), '%', 1, pct_scale=True)} | {_rating(m.get('M14_consistency_score'), 0.30, 0.50, higher_is_better=False)} | <30% |",
         f"| M15 リベンジトレード率 | {_fmt(m.get('M15_revenge_trade_rate'), '%', 1, pct_scale=True)} | {'GOOD' if (m.get('M15_revenge_trade_rate') or 0) == 0 else 'WARN'} | 0件 |",
         "",
+        "## 規制遵守指標 (M16)",
+        "",
+        "| 指標 | 値 | 判定 |",
+        "|------|-----|------|",
+    ]
+
+    _m16 = m.get("M16_pdt_usage")
+    if _m16:
+        _m16_constrained = _m16.get("constrained", True)
+        _m16_rolling5    = _m16.get("rolling5_count", 0)
+        _m16_limit       = _m16.get("pdt_limit", 3)
+        _m16_usage       = _m16.get("usage_rate")
+        _m16_remaining   = _m16.get("pdt_remaining", "N/A")
+        _m16_violation   = _m16.get("violation_detected", False)
+        _m16_usage_str   = f"{_m16_rolling5}/{_m16_limit}件 ({_fmt(_m16_usage, '%', 0, pct_scale=True)})" if _m16_constrained else "無制限"
+        _m16_rating      = "CRITICAL" if _m16_violation else ("WARN" if _m16_constrained and isinstance(_m16_remaining, int) and _m16_remaining <= 1 else "GOOD")
+        lines += [
+            f"| M16 PDT使用率 | {_m16_usage_str} | {_m16_rating} |",
+            f"| PDT残本数 | {_m16_remaining} | {'FINRA違反リスクあり' if _m16_violation else 'OK'} |",
+            "",
+        ]
+    else:
+        lines += [
+            f"| M16 PDT使用率 | N/A | N/A |",
+            "",
+        ]
+
+    lines += [
         "## EV-1 仮説-結果マッチング",
         "",
     ]

@@ -46,6 +46,15 @@ try:
     _DEV_SCANNER_OK = True
 except Exception:
     _DEV_SCANNER_OK = False
+
+# PDT Tracker 連携（全戦術合算FINRA PDTカウンタ）
+try:
+    from common.pdt_tracker import get_global_tracker as _pdt_get_tracker, PDT_LIMIT as _PDT_LIMIT
+    _pdt_tracker_agent = _pdt_get_tracker()
+    _PDT_TRACKER_AGENT_OK = True
+except Exception:
+    _pdt_tracker_agent = None
+    _PDT_TRACKER_AGENT_OK = False
 from collections import deque
 from pathlib import Path
 from typing import Any
@@ -795,6 +804,54 @@ def main():
                     _last_dev_scan = now
                 except Exception as _dse:
                     log(f"[DEV_SCAN_ERR] {_dse}")
+
+            # PDT残数をatlas_state.jsonに保存 + 毎分ログ出力 + 残1で通知
+            if _PDT_TRACKER_AGENT_OK and _pdt_tracker_agent is not None:
+                try:
+                    # 口座残高（state.jsonから取得、不明時は保守的に$0扱い）
+                    _pdt_capital = st.get("capital_usd", 0.0)
+                    _pdt_status = _pdt_tracker_agent.get_status(_pdt_capital)
+                    # atlas_state.json に pdt_remaining を更新
+                    st["pdt_remaining"]   = _pdt_status["pdt_remaining"]
+                    st["pdt_rolling5"]    = _pdt_status["rolling5_count"]
+                    st["pdt_constrained"] = _pdt_status["pdt_constrained"]
+                    save_state(st)
+                    log(f"[PDT] rolling5={_pdt_status['rolling5_count']} "
+                        f"remaining={_pdt_status['pdt_remaining']} "
+                        f"constrained={_pdt_status['pdt_constrained']}")
+                    # PDT残1 → priority=1 通知（重複抑制: 残数変化時のみ）
+                    _pdt_rem = _pdt_status["pdt_remaining"]
+                    if (
+                        _pdt_status["pdt_constrained"]
+                        and isinstance(_pdt_rem, int)
+                        and _pdt_rem == 1
+                        and st.get("_pdt_notified_remaining1_date") != datetime.datetime.now(ET).strftime("%Y-%m-%d")
+                    ):
+                        pushover(
+                            "[Atlas/PDT] PDT残1件警告",
+                            f"直近5営業日 {_pdt_status['rolling5_count']}/{_PDT_LIMIT}件消費\n"
+                            f"本日の新規day_tradeは残1件のみ。4件目で90日停止。",
+                            priority=1,
+                        )
+                        st["_pdt_notified_remaining1_date"] = datetime.datetime.now(ET).strftime("%Y-%m-%d")
+                        save_state(st)
+                    # PDT残0 → 通常通知（手動判断を促す）
+                    elif (
+                        _pdt_status["pdt_constrained"]
+                        and isinstance(_pdt_rem, int)
+                        and _pdt_rem == 0
+                        and st.get("_pdt_notified_remaining0_date") != datetime.datetime.now(ET).strftime("%Y-%m-%d")
+                    ):
+                        pushover(
+                            "[Atlas/PDT] PDT上限到達 — 新規エントリー停止",
+                            f"直近5営業日 {_pdt_status['rolling5_count']}/{_PDT_LIMIT}件消費済み\n"
+                            f"新規day_tradeはpre_trade_checkでブロックされます。",
+                            priority=1,
+                        )
+                        st["_pdt_notified_remaining0_date"] = datetime.datetime.now(ET).strftime("%Y-%m-%d")
+                        save_state(st)
+                except Exception as _pdt_agent_e:
+                    log(f"[PDT_AGENT_ERR] {_pdt_agent_e}")
 
             for f in fired_list:
                 if manual_halt:
