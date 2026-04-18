@@ -25,18 +25,8 @@ on:
         required: false
         default: "false"
         type: string
-  push:
-    branches: [main]
-    paths:
-      - "spy_bot.py"
-      - "atlas_agent.py"
-      - "atlas_rules.yaml"
-      - "atlas_watchdog.py"
-      - "requirements.txt"
-      - "constants.py"
-      - "strategy_selector.py"
-      - "mffu_strategy_selector.py"
-      - "common/**"
+  # push trigger 無効化中: Two-Man Rule の GitHub Environment "production" 未設定で失敗するため
+  # 本番投入時に Environment 作成後に復活させる
 
 jobs:
   syntax_check:
