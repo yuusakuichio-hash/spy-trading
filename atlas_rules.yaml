@@ -348,11 +348,11 @@ tactics:
   # ── Calendar Spread パラメータ ──────────────────────────────────────────────
   # エントリー: IVR>P75 かつ VIX 20〜50 かつ VIX5日EMAが下降傾向
   # front: 0DTE ATM売り / back: 7DTE ATM買い（同一strike・異expiry）
-  # 対象銘柄: US.SPY / US.QQQ / US.TSLA 等（US..SPX除外）
+  # 対象銘柄: US.SPY / US.QQQ / US.TSLA / US..SPX 等（WHITELIST方式・EXCLUDED_SYMBOLS廃止）
+  # [4/17事故対応] excluded_symbols廃止。混入防止はvalidate_code_for_symbol()で物理ブロック
   calendar_sell:
     enabled: true
-    excluded_symbols:
-      - "US..SPX"
+    excluded_symbols: []  # 空 = 除外なし (WHITELIST方式)
     entry_window_et: "10:30-12:00"
     force_close_et: "15:45"
     vix_min: 20.0
@@ -372,11 +372,11 @@ tactics:
   # ── Strangle Sell パラメータ ─────────────────────────────────────────────────
   # エントリー: IVR>P70(=IVR 60相当) かつ VIX 15〜50
   # OTM Call売り(delta≈0.15) + OTM Put売り(delta≈0.15)
-  # 対象銘柄: US.SPY / US.QQQ / US.TSLA 等（US..SPX除外）
+  # 対象銘柄: US.SPY / US.QQQ / US.TSLA / US..SPX 等（WHITELIST方式・EXCLUDED_SYMBOLS廃止）
+  # [4/17事故対応] excluded_symbols廃止。混入防止はvalidate_code_for_symbol()で物理ブロック
   strangle_sell:
     enabled: true
-    excluded_symbols:
-      - "US..SPX"
+    excluded_symbols: []  # 空 = 除外なし (WHITELIST方式)
     entry_window_et: "10:30-12:00"
     force_close_et: "15:45"
     vix_min: 15.0                   # STRANGLE_SELL_VIX_MIN
@@ -402,6 +402,49 @@ tactics:
 # 適用環境: low IVR (IVR < 30) — IV拡張の裨益を受けない低IV環境向け
 # 対象銘柄: SPY/QQQ/META/AMZN/GOOGL etc (US.SPX除外)
 # ══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
+# 銘柄メタ: 全戦術共通 (common/symbol_meta.py の定義と同期)
+# [4/17事故対応] strike_interval_map で銘柄別 strike 刻みを明示
+# ══════════════════════════════════════════════════════════════════════════════
+symbol_meta:
+  allowed_universe:
+    - "US.SPY"
+    - "US..SPX"   # Section 1256 税制優遇・証拠金効率最高 (4/17事故対応で復活)
+    - "US.QQQ"
+    - "US.IWM"
+    - "US.NVDA"
+    - "US.TSLA"
+    - "US.META"
+    - "US.AMZN"
+    - "US.GOOGL"
+    - "US.AAPL"
+    - "US.MSFT"
+
+  strike_interval_map:
+    "US.SPY":   1.0
+    "US..SPX":  5.0   # CBOEインデックス: $5刻み必須
+    "US.QQQ":   1.0
+    "US.IWM":   0.5
+    "US.NVDA":  2.5
+    "US.TSLA":  2.5
+    "US.META":  2.5
+    "US.AMZN":  2.5
+    "US.GOOGL": 2.5
+    "US.AAPL":  2.5
+    "US.MSFT":  2.5
+
+  # center_strike 混入検知 tolerance (小数)
+  center_strike_tolerance_map:
+    "US.SPY":   0.20
+    "US..SPX":  0.10   # SPX: ±10%で SPY strike ($710) 混入を即検知
+    "US.QQQ":   0.20
+    "US.IWM":   0.20
+    default:    0.25   # 個別株
+
+  # Section 1256 税制優遇対象 (60/40ルール適用)
+  section_1256:
+    - "US..SPX"
+
 butterfly:
   # グローバルON/OFF
   enable: true
@@ -637,3 +680,122 @@ orb_multi_symbol:
     AMZN: 200.0
     META: 600.0
     GOOGL: 170.0
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 市場動向調査 モジュールパラメータ (2026-04-18 追加)
+# sector_rotation / options_flow / news_sentiment / econ_events / cross_asset
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── セクターローテーション (common/sector_rotation.py) ────────────────────────
+sector_rotation:
+  enable: true
+  # 対象セクターETF (全11セクターSPDR)
+  symbols:
+    - XLK   # Technology
+    - XLF   # Financials
+    - XLE   # Energy
+    - XLV   # Health Care
+    - XLY   # Consumer Discretionary
+    - XLP   # Consumer Staples
+    - XLI   # Industrials
+    - XLU   # Utilities
+    - XLRE  # Real Estate
+    - XLB   # Materials
+    - XLC   # Communication Services
+  # 短期・長期リターンの重み (固定値ではなく起点として使用。ペーパー検証後に動的化)
+  weight_5d: 0.6
+  weight_20d: 0.4
+  # lagging セクター銘柄を credit_spread/ic_sell から除外する
+  exclude_lagging_from_tactics:
+    - credit_spread
+    - iron_condor
+  # データ取得失敗時のフォールバック動作
+  fallback_regime: neutral
+
+# ── 大口オプションフロー (common/options_flow.py) ──────────────────────────────
+options_flow:
+  enable: true
+  # ブロックトレード閾値 (枚)
+  # 参照: FINRAブロックトレード定義・TastyTrade/OptionsFlow系ツール標準値
+  block_trade_min_contracts: 500
+  # UOA (Unusual Options Activity) 動的閾値パーセンタイル
+  uoa_percentile: 90
+  # flow_bias がこの値を超えたら戦術の reason に付記
+  bias_annotation_threshold: 0.5
+  # スコアへの影響ウェイト (最大スコア加算量)
+  score_boost_max: 0.03
+  # データ取得失敗時のフォールバック
+  fallback_bias: 0.0
+
+# ── 個別銘柄ニュースセンチメント (common/news_sentiment.py) ──────────────────
+news_sentiment:
+  enable: true
+  # 過去N時間の記事を対象
+  lookback_hours: 24
+  # ネガティブ銘柄を除外する戦術
+  exclude_negative_from_tactics:
+    - credit_spread
+    - iron_condor
+    - calendar_sell
+  # straddle/ORBはネガティブ銘柄を除外しない（ボラ狙い）
+  include_negative_for_tactics:
+    - straddle_buy
+    - orb_buy
+  # センチメントスコアの判定閾値
+  positive_threshold:  0.2
+  negative_threshold: -0.2
+  # API失敗時フォールバック
+  fallback_label: neutral
+
+# ── 経済イベントカレンダー (common/econ_events.py) ─────────────────────────────
+econ_events:
+  enable: true
+  # ローカルカレンダーJSONパス
+  calendar_paths:
+    - data/econ_calendar.json
+    - data/economic_calendar_2026.json
+  # イベント別ブラックアウトウィンドウ (分)
+  # 固定値に見えるが「最小安全マージン」。Lucca & Moench 2015 準拠
+  blackout_windows:
+    FOMC:  {before: 30, after: 60}
+    CPI:   {before: 15, after: 30}
+    PPI:   {before: 15, after: 30}
+    NFP:   {before: 15, after: 30}
+    GDP:   {before: 15, after: 30}
+    PCE:   {before: 15, after: 30}
+    JOLTS: {before: 10, after: 20}
+    ISM:   {before: 10, after: 20}
+  # straddle_signal を有効にする高インパクトイベント
+  high_impact_events:
+    - FOMC
+    - CPI
+    - NFP
+    - PPI
+    - GDP
+  # Finnhub カレンダー自動更新 (weekly)
+  auto_update_days_ahead: 60
+
+# ── 先物・商品相関 (common/cross_asset.py) ─────────────────────────────────────
+cross_asset:
+  enable: true
+  # 相関係数算出の窓幅 (日数)
+  correlation_window: 30
+  # 異常相関判定の z スコア閾値
+  anomaly_zscore_threshold: 2.0
+  # リスクレジーム判定の regime_score 閾値
+  risk_on_threshold:  0.2
+  risk_off_threshold: -0.2
+  # risk_off 時のsell系戦術 confidence 調整
+  risk_off_confidence_penalty: 0.20   # 20% 削減
+  # データソース優先順位
+  data_sources:
+    - databento  # ES/NQ 先物 (要APIキー)
+    - yahoo      # 原油/金/BTC
+    - local_parquet  # フォールバック
+  # 分析対象アセット
+  assets:
+    - ES    # S&P500 E-mini
+    - NQ    # NASDAQ-100 E-mini
+    - CL    # WTI 原油
+    - GC    # 金
+    - BTC   # ビットコイン

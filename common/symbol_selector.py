@@ -368,3 +368,91 @@ def get_default_universe() -> list[str]:
 def get_tactic_names() -> list[str]:
     """サポートしている戦術名一覧を返す。"""
     return list(_TACTIC_WEIGHTS.keys())
+
+
+# ── 市場動向データを使ったフィルタリング統合 ─────────────────────────────────
+
+def apply_market_filters(
+    ranked: list[SymbolScore],
+    sector_scores: Optional[dict] = None,
+    flow_signals: Optional[dict] = None,
+    news_sentiments: Optional[dict] = None,
+    tactic: str = "credit_spread",
+    sector_map: Optional[dict] = None,
+) -> list[SymbolScore]:
+    """ランキング済みシンボルリストに市場動向フィルタを適用する。
+
+    Args:
+        ranked:          score_symbols() の戻り値
+        sector_scores:   {symbol: SectorScore} (sector_rotation モジュール出力)
+        flow_signals:    {symbol: FlowSignal} (options_flow モジュール出力)
+        news_sentiments: {symbol: NewsSentiment} (news_sentiment モジュール出力)
+        tactic:          戦術名
+        sector_map:      {銘柄: セクターETF} の対応表
+
+    Returns:
+        フィルタ適用済みの SymbolScore リスト
+        除外された銘柄は excluded=True になって末尾に移動する。
+    """
+    if not ranked:
+        return ranked
+
+    active:   list[SymbolScore] = []
+    excluded: list[SymbolScore] = []
+
+    for sym_score in ranked:
+        if sym_score.excluded:
+            excluded.append(sym_score)
+            continue
+
+        sym = sym_score.symbol
+        reasons: list[str] = []
+
+        # ── セクターフィルタ: lagging セクター銘柄を除外 ───────────────────
+        if sector_scores is not None and tactic in ("credit_spread", "iron_condor"):
+            _sector_map = sector_map or {}
+            from common.sector_rotation import sector_signal_for_symbol
+            regime = sector_signal_for_symbol(sym, sector_scores, sector_map=_sector_map)
+            if regime == "lagging":
+                reasons.append(f"sector=lagging")
+
+        # ── ニュースフィルタ: ネガティブニュース銘柄を除外 ──────────────────
+        if news_sentiments is not None:
+            from common.news_sentiment import filter_by_news
+            # 単一銘柄のフィルタ
+            allowed, _ = filter_by_news([sym], news_sentiments, tactic=tactic)
+            if sym not in allowed:
+                reasons.append("news=negative")
+
+        if reasons:
+            sym_score = SymbolScore(
+                symbol=sym_score.symbol,
+                score=sym_score.score,
+                raw_scores=sym_score.raw_scores,
+                metrics=sym_score.metrics,
+                excluded=True,
+                exclude_reason=" | ".join(reasons),
+            )
+            excluded.append(sym_score)
+        else:
+            active.append(sym_score)
+
+    # flow_bias を考慮してスコアを微調整（除外はしない）
+    if flow_signals is not None:
+        for sym_score in active:
+            flow = flow_signals.get(sym_score.symbol)
+            if flow is not None and flow.confidence >= 0.3:
+                # flow_bias が戦術と一致する方向ならスコアを小幅 UP
+                flow_boost = 0.0
+                if tactic in ("cs_sell", "ic_sell") and flow.flow_bias > 0:
+                    flow_boost = 0.03 * flow.confidence  # 最大 +3%
+                elif tactic == "straddle_buy" and abs(flow.flow_bias) > 0.3:
+                    flow_boost = 0.02 * flow.confidence  # 大口フロー = ボラ予感
+                sym_score.score = min(1.0, sym_score.score + flow_boost)
+
+    log.info(
+        f"[SymbolSelector] market_filter tactic={tactic}: "
+        f"active={[r.symbol for r in active][:5]} "
+        f"excluded={[r.symbol for r in excluded][:5]}"
+    )
+    return active + excluded
