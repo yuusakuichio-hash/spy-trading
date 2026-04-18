@@ -783,6 +783,90 @@ except ImportError as _e:
         pass
 
 
+# ── Pre-Trade Check (Defense-in-Depth 誤発注→全損阻止) ─────────────────────
+_PRE_TRADE_CHECK_AVAILABLE = False
+try:
+    from common.pre_trade_check import check_order as _pt_check_order, OrderContext as _PTOrderContext
+    from common import kill_switch as _kill_switch
+    _PRE_TRADE_CHECK_AVAILABLE = True
+    log.info("[Module] common.pre_trade_check ロード成功 (Defense-in-Depth有効)")
+except ImportError as _e:
+    log.warning(f"[Module] common.pre_trade_check ロード失敗 → 防護なし: {_e}")
+
+
+def _extract_symbol_from_code(code: str) -> str:
+    """'US.SPY260417C710000' -> 'US.SPY'"""
+    m = re.match(r"(US\.[A-Z]+)\d{6}", code or "")
+    return m.group(1) if m else (code or "")
+
+
+def _extract_strike_from_code(code: str) -> float:
+    """'US.SPY260417C710000' -> 710.0 / 'US.SPXW260417C5400000' -> 5400.0"""
+    m = re.search(r"\d{6}[CP](\d+)$", code or "")
+    if not m:
+        return 0.0
+    raw = m.group(1)
+    return int(raw) / 1000.0
+
+
+def _pre_trade_gate(code: str, qty: int, price: float, side,
+                    est_margin: float = 0, capital_usd: float = 0,
+                    open_positions: int = 0, open_margin_total: float = 0,
+                    symbol_margin: float = 0, paper: bool = True,
+                    bid: float = 0, ask: float = 0) -> tuple[bool, str]:
+    """全 place_order 呼び出し直前に呼ぶ防護gate。
+
+    Returns: (allow: bool, reason: str)
+    違反時: ログ出力 + 必要時のみPushover通知
+    """
+    if not _PRE_TRADE_CHECK_AVAILABLE:
+        return True, "pre_trade_check unavailable — passing through"
+
+    try:
+        side_str = "SELL"
+        try:
+            side_val = str(side).upper() if side else ""
+            if "BUY" in side_val:
+                side_str = "BUY"
+        except Exception:
+            pass
+
+        ctx = _PTOrderContext(
+            symbol=_extract_symbol_from_code(code),
+            strike=_extract_strike_from_code(code),
+            side=side_str,
+            qty=int(qty) if qty else 0,
+            option_price=float(price) if price else 0,
+            bid=bid, ask=ask,
+            est_margin=est_margin,
+            capital_usd=capital_usd,
+            open_positions=open_positions,
+            open_margin_total=open_margin_total,
+            symbol_margin=symbol_margin,
+            paper=paper,
+        )
+        result = _pt_check_order(ctx)
+        if not result.allow:
+            log.error(
+                f"[PreTradeCheck/{result.layer}] 発注拒否: {result.reason} "
+                f"(code={code} qty={qty} price={price} side={side_str})"
+            )
+            if result.notify_required:
+                try:
+                    pushover_alert(
+                        f"[Atlas/RISK/{result.layer}]",
+                        f"{result.reason}\ncode={code} qty={qty} price=${price}",
+                        priority=1,
+                    )
+                except Exception:
+                    pass
+            return False, result.reason
+        return True, "ok"
+    except Exception as _e:
+        log.warning(f"[PreTradeCheck] 例外: {_e} — fail-safe: 発注拒否")
+        return False, f"pre_trade_check exception: {_e}"
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # VirtualPositionManager — dry-testモード用の仮想ポジション管理
 # ══════════════════════════════════════════════════════════════════════════════
@@ -3845,6 +3929,14 @@ class TradeEngine:
             price = round(init_price, 2)
             order_id = None
 
+            # [Defense-in-Depth] Pre-Trade Check
+            _pt_ok, _pt_reason = _pre_trade_gate(
+                code=code, qty=qty, price=price, side=side, paper=self.paper
+            )
+            if not _pt_ok:
+                log.error(f"Leg {label} pre_trade_check reject: {_pt_reason}")
+                return None
+
             # 初回指値発注
             ret, data = self.trade_ctx.place_order(
                 price=price, qty=qty, code=code,
@@ -3905,6 +3997,13 @@ class TradeEngine:
 
         # ── 成行モード（指値無効 / init_price=None / 指値失敗フォールバック）─────
         fill_method = "market_fallback" if (use_limit and init_price is not None) else "market"
+        # [Defense-in-Depth] Pre-Trade Check (fallback/market entry)
+        _pt_ok, _pt_reason = _pre_trade_gate(
+            code=code, qty=qty, price=0, side=side, paper=self.paper
+        )
+        if not _pt_ok:
+            log.error(f"Leg {label} market pre_trade_check reject: {_pt_reason}")
+            return None
         for attempt in range(2):
             ret, data = self.trade_ctx.place_order(
                 price=0, qty=qty, code=code,
