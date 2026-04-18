@@ -7,13 +7,14 @@ strategy_selector.py — 環境適応型 戦術選択エンジン
   このエンジンもそうあるべき。固定閾値は最小限（パニック閾値のみ）。
   全VIX閾値は60日パーセンタイルから動的算出。
 
-戦術候補 (8戦術):
+戦術候補 (9戦術):
   - ic_sell       : Iron Condor 売り（低ボラ・方向感なし・IVR中〜高）
   - butterfly     : ATM Long Butterfly（低IVR・レンジ環境・IV拡張期待なし）
   - calendar_sell : Calendar Spread 売り（高IVR・VIX20〜50・front IV crush狙い）
   - strangle_sell : OTMストラングル売り（高IVR・方向感なし・中〜高ボラ）
   - cs_sell       : Credit Spread 売り（中低ボラ・方向性あり or やや高ボラ）
-  - orb_buy       : Opening Range Breakout 買い（方向性あり・値動き十分）
+  - orb_buy       : Opening Range Breakout 買い・0DTE（方向性あり・値動き十分）
+  - orb_1dte      : ORB 買い・翌日満期（delta 0.40 OTM・TP+30/SL-50・theta緩和）
   - straddle_buy  : ストラドル買い（高ボラ・方向不明）
   - no_trade      : ノートレード（パニック環境 or スコア低すぎ）
 
@@ -381,6 +382,52 @@ def calc_environment_score(
     return round(score, 1)
 
 
+# ── ORB 0DTE vs 1DTE バリアント選択ヘルパー ─────────────────────────────────
+
+def choose_orb_variant(env: dict) -> str:
+    """ORB を選ぶ局面で "orb_buy" (0DTE) と "orb_1dte" (翌日満期) を振り分ける。
+
+    1DTEを選ぶ動機 (Blinded Backtest 2026-04-18 の分析より):
+      - 0DTE ORB は theta decay + IV crush で方向が当たっても TP 到達前に負ける
+      - 1DTE は theta がマイルド（1日分残る）、delta 0.40 OTM でpremium cost低減
+      - バックテスト: 0DTE勝率22.5%/Sharpe-8.3 FAIL → 1DTE勝率60%/Sharpe2.29 PASS
+
+    判断ロジック:
+      1. PDT制限下 ($25K未満): 1DTE 優先（day trade count 減らす）
+      2. 残り取引時間が3時間以下: 1DTE（時間価値を翌日に繰越）
+      3. VIX が panic 域: 1DTE（theta decay の打撃を避ける）
+      4. デフォルト: 0DTE （short trip で現金化速い）
+
+    Args:
+      env: select_strategy() と同じ入力
+           - account_equity: float (本番口座残高、PDT判定用)
+           - et_hour: int (現在のET時刻、timing 判定用)
+           - vix, vix_panic: 既存キー
+
+    Returns:
+      "orb_buy" or "orb_1dte"
+    """
+    account_equity = env.get("account_equity", 25_001)   # PDT境界
+    et_hour = env.get("et_hour", 10)
+    vix = float(env.get("vix", 20.0))
+    vix_panic = float(env.get("vix_panic", 30.0))
+
+    # (1) PDT制限: $25K未満なら 1DTE (overnight hold で day trade回避)
+    if account_equity < 25_000:
+        return "orb_1dte"
+
+    # (2) 残り取引時間 <=3h (ET 13時以降): 1DTE (時間不足で0DTE TPが遠い)
+    if et_hour >= 13:
+        return "orb_1dte"
+
+    # (3) Panic 域: 1DTE (1日分の theta buffer を確保)
+    if vix >= vix_panic:
+        return "orb_1dte"
+
+    # (4) デフォルト: 0DTE
+    return "orb_buy"
+
+
 # ── メイン戦術選択ロジック ────────────────────────────────────────────────────
 
 def select_strategy(env: dict) -> dict:
@@ -404,7 +451,8 @@ def select_strategy(env: dict) -> dict:
         "calendar_sell" — Calendar Spread 売り（高IVR・VIX20〜50・front IV crush狙い）
         "strangle_sell" — OTMストラングル売り（高IVR・中〜高ボラ・方向感なし）
         "cs_sell"       — Credit Spread 売り（中低ボラ・方向性あり or やや高ボラ）
-        "orb_buy"       — Opening Range Breakout 買い（方向性あり・値動き十分）
+        "orb_buy"       — Opening Range Breakout 買い・0DTE（方向性あり・値動き十分）
+        "orb_1dte"      — ORB 買い・翌日満期（theta decay緩和・delta 0.40 OTM・TP+30/SL-50）
         "straddle_buy"  — ストラドル買い（高ボラ・方向不明）
         "no_trade"      — ノートレード（パニック環境 or スコア低すぎ）
       confidence: 0.0〜1.0 （戦術の根拠の強さ）
