@@ -38,6 +38,14 @@ import sys
 import time
 import datetime
 import zoneinfo
+
+# Deviation Scanner 連携（Challenger型急増検知・時間単位）
+try:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from scripts import deviation_scanner as _dev_scanner
+    _DEV_SCANNER_OK = True
+except Exception:
+    _DEV_SCANNER_OK = False
 from collections import deque
 from pathlib import Path
 from typing import Any
@@ -377,6 +385,46 @@ def action_halt_and_wait(cfg: dict, rule: dict, dry_run: bool) -> dict:
     return action
 
 
+def trigger_builder_workflow(cfg: dict, rule_id: str, hypothesis: str, matched_log: str) -> dict:
+    """
+    atlas_builder.yml を workflow_dispatch で自動起動。
+    Level2 発火時に builder への修正依頼を自動投入する。
+    """
+    if not GITHUB_TOKEN:
+        log("[trigger_builder] GITHUB_TOKEN なし → スキップ")
+        return {"status": "SKIP", "reason": "no GITHUB_TOKEN"}
+    repo = cfg.get("autofix", {}).get("github_repo", "")
+    if not repo:
+        return {"status": "SKIP", "reason": "no github_repo"}
+    try:
+        payload = {
+            "ref": "main",
+            "inputs": {
+                "rule_id":     rule_id[:100],
+                "hypothesis":  hypothesis[:500],
+                "matched_log": matched_log[:500],
+            },
+        }
+        r = requests.post(
+            f"https://api.github.com/repos/{repo}/actions/workflows/atlas_builder.yml/dispatches",
+            headers={
+                "Authorization": f"Bearer {GITHUB_TOKEN}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            json=payload,
+            timeout=15,
+        )
+        if r.status_code == 204:
+            log(f"[trigger_builder] workflow dispatched: {rule_id}")
+            return {"status": "OK", "rule_id": rule_id}
+        log(f"[trigger_builder] dispatch failed: status={r.status_code} body={r.text[:200]}")
+        return {"status": "ERR", "code": r.status_code, "body": r.text[:300]}
+    except Exception as e:
+        log(f"[trigger_builder] exception: {e}")
+        return {"status": "ERR", "error": str(e)}
+
+
 def create_github_issue(cfg: dict, title: str, body: str, label: str = "todo") -> dict:
     if not GITHUB_TOKEN:
         return {"status": "SKIP", "reason": "no GITHUB_TOKEN"}
@@ -403,8 +451,83 @@ def create_github_issue(cfg: dict, title: str, body: str, label: str = "todo") -
 
 # ── pre-checks ───────────────────────────────────────────────────────────────
 def check_no_open_orders() -> tuple[bool, str]:
-    # TODO: moomoo OpenAPI で未約定注文を取得する実装に差し替え
-    return True, "no_open_orders check permissive (TODO: moomoo API)"
+    """
+    moomoo OpenAPI で未約定注文（SUBMITTING / SUBMITTED / PART_FILLED）を照会。
+    - futu ライブラリが使えない場合は Permissive(True) でフォールバック
+    - OpenD が落ちている場合は Fail(False) → Bot再起動を保留する防衛設計
+    - 取得成功した場合のみ open_orders 件数で判定
+    """
+    try:
+        import importlib
+        futu = importlib.import_module("futu")
+    except ImportError:
+        log("[check_no_open_orders] futu import failed → permissive True")
+        return True, "futu_unavailable (permissive)"
+
+    OpenSecTradeContext = getattr(futu, "OpenSecTradeContext", None)
+    TrdMarket           = getattr(futu, "TrdMarket", None)
+    TrdEnv              = getattr(futu, "TrdEnv", None)
+    SecurityFirm        = getattr(futu, "SecurityFirm", None)
+    RET_OK              = getattr(futu, "RET_OK", 0)
+
+    if None in (OpenSecTradeContext, TrdMarket, TrdEnv, SecurityFirm):
+        log("[check_no_open_orders] futu attrs missing → permissive True")
+        return True, "futu_attrs_missing (permissive)"
+
+    # OpenD 疎通確認（ポートチェック済みの opend_connected より直接確認）
+    if not opend_connected():
+        log("[check_no_open_orders] OpenD unreachable → FAIL (bot restart blocked)")
+        return False, "opend_down"
+
+    trade_ctx = None
+    try:
+        trade_ctx = OpenSecTradeContext(
+            filter_trdmarket=TrdMarket.US,
+            host="127.0.0.1",
+            port=11111,
+            security_firm=SecurityFirm.FUTUJP,
+        )
+        # paper / live 両方照会（どちらに注文が残っていても検知）
+        open_count = 0
+        open_details: list[str] = []
+        for env_label, trd_env in [("SIMULATE", TrdEnv.SIMULATE), ("REAL", TrdEnv.REAL)]:
+            ret, data = trade_ctx.order_list_query(trd_env=trd_env)
+            if ret != RET_OK:
+                log(f"[check_no_open_orders] order_list_query failed env={env_label} ret={ret}")
+                # クエリ失敗は不明 → 防衛的に False（再起動を保留）
+                return False, f"order_query_failed env={env_label} ret={ret}"
+            if data is not None and not data.empty:
+                # SUBMITTING / SUBMITTED / PART_FILLED が残っているものだけカウント
+                OPEN_STATUSES = {"SUBMITTING", "SUBMITTED", "PART_FILLED"}
+                if "order_status" in data.columns:
+                    open_rows = data[data["order_status"].isin(OPEN_STATUSES)]
+                else:
+                    open_rows = data  # カラム名不明なら全件をオープン扱い
+                if not open_rows.empty:
+                    open_count += len(open_rows)
+                    for _, row in open_rows.iterrows():
+                        oid   = row.get("order_id", "?")
+                        code  = row.get("code", "?")
+                        stat  = row.get("order_status", "?")
+                        open_details.append(f"{env_label}:{code}#{oid}({stat})")
+
+        if open_count > 0:
+            detail_str = ", ".join(open_details[:5])
+            log(f"[check_no_open_orders] open_orders={open_count} [{detail_str}] → FAIL")
+            return False, f"open_orders={open_count} [{detail_str}]"
+
+        log(f"[check_no_open_orders] no open orders → OK")
+        return True, "no_open_orders"
+
+    except Exception as e:
+        log(f"[check_no_open_orders] exception: {e} → FAIL (defensive)")
+        return False, f"exception: {e}"
+    finally:
+        if trade_ctx is not None:
+            try:
+                trade_ctx.close()
+            except Exception:
+                pass
 
 
 def check_opend_connected() -> tuple[bool, str]:
@@ -481,6 +604,10 @@ def dispatch(fired: dict, cfg: dict) -> dict:
             pri = 1 if ar.get("status") in ("ERR",) else 0
             pushover(f"[Atlas/{tag}] {rid}", "\n".join(body), priority=pri)
             result["action"] = ar
+            # builder 自動起動: Level2 は必ず atlas_builder.yml を dispatch
+            bw = trigger_builder_workflow(cfg, rid, hypo, matched)
+            result["builder_workflow"] = bw
+            log(f"[dispatch] builder_workflow: {bw}")
 
     elif level == 3:
         atype = act_cfg.get("type", "stop_bot")
@@ -582,6 +709,11 @@ def main():
 
     main_log = Path(cfg["log_sources"]["condor"])
 
+    # Deviation scanner 前回実行時刻（5分おき）
+    _last_dev_scan = 0.0
+    _dev_scan_interval = 300  # 5分
+    _notified_surge_cats: set[str] = set()  # 既通知カテゴリ（重複抑制）
+
     while True:
         try:
             now = time.time()
@@ -606,6 +738,26 @@ def main():
                     )
                     if f:
                         fired_list.append(f)
+
+            # [Challenger教訓] Deviation scanner リアルタイム急増検知（5分おき）
+            if _DEV_SCANNER_OK and in_market and (now - _last_dev_scan >= _dev_scan_interval):
+                try:
+                    events = _dev_scanner.parse_log_lines(days=1)
+                    _, _, surging, _ = _dev_scanner.analyze(events, threshold=10)
+                    new_surges = set(surging) - _notified_surge_cats
+                    if new_surges:
+                        pushover(
+                            "[Atlas/DEVIATION/SURGE] 急増検知",
+                            "1時間で10件超の逸脱急増: " + ", ".join(sorted(new_surges))
+                            + "\n詳細: data/deviation_dashboard.md",
+                            priority=1,
+                        )
+                        _notified_surge_cats |= new_surges
+                    # 急増が止んだカテゴリは再通知可能にする
+                    _notified_surge_cats &= set(surging)
+                    _last_dev_scan = now
+                except Exception as _dse:
+                    log(f"[DEV_SCAN_ERR] {_dse}")
 
             for f in fired_list:
                 if manual_halt:
