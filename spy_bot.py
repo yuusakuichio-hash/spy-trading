@@ -94,8 +94,18 @@ logging.basicConfig(
 log = logging.getLogger("spx_condor")
 
 # ── Timezone ────────────────────────────────────────────────────────────────────
-ET  = zoneinfo.ZoneInfo("America/New_York")
-JST = zoneinfo.ZoneInfo("Asia/Tokyo")
+# CRITICAL-10: zoneinfo 利用可否を起動時に明示チェック。失敗時は exit 1
+try:
+    ET  = zoneinfo.ZoneInfo("America/New_York")
+    JST = zoneinfo.ZoneInfo("Asia/Tokyo")
+except (ImportError, zoneinfo.ZoneInfoNotFoundError) as _tz_err:
+    import sys as _sys
+    print(
+        "[FATAL] CRITICAL-10: ET timezone unavailable: " + str(_tz_err) + "\n"
+        "  pip install tzdata または apt-get install tzdata を実行してください",
+        file=_sys.stderr,
+    )
+    _sys.exit(1)
 
 # ── Credentials ────────────────────────────────────────────────────────────────
 FINNHUB_API_KEY      = os.environ.get("FINNHUB_API_KEY", "")
@@ -4059,6 +4069,7 @@ class TradeEngine:
         # place_credit_spread / close_all_positions が書き込み、呼び出し元が参照する
         self._last_entry_fills: dict = {}  # {"sell": float|None, "buy": float|None}
         self._last_exit_fills: dict  = {}  # {order_id: float}  (code→avg_price)
+        self._pending_close: list    = []  # CRITICAL-8: 決済失敗legコード（再起動時に再試行）
 
     def connect(self) -> bool:
         if not FUTU_AVAILABLE:
@@ -4635,6 +4646,13 @@ class TradeEngine:
         close_order_codes: dict = {}  # order_id -> {"code": str, "position_side": str}
         failed_legs: list = []
 
+        # CRITICAL-8: futu 未ロード時の NameError を防ぐため closure 変数として解決する
+        _TrdSide_BUY    = TrdSide.BUY      if FUTU_AVAILABLE else 1
+        _TrdSide_SELL   = TrdSide.SELL     if FUTU_AVAILABLE else 2
+        _OrderType_MKT  = OrderType.MARKET  if FUTU_AVAILABLE else "MARKET"
+        _TimeInForce_D  = TimeInForce.DAY   if FUTU_AVAILABLE else "DAY"
+        _RET_OK_        = RET_OK             if FUTU_AVAILABLE else 0
+
         def _send_close_leg(pos_item: dict):
             """1 leg の決済注文送信。成功時 order_id、失敗時 None。"""
             code_ = pos_item.get("code", "")
@@ -4642,14 +4660,14 @@ class TradeEngine:
             if qty_ == 0:
                 return None
             position_side_ = pos_item.get("position_side", "LONG")
-            side_ = TrdSide.BUY if position_side_ == "SHORT" else TrdSide.SELL
+            side_ = _TrdSide_BUY if position_side_ == "SHORT" else _TrdSide_SELL
             ret_, data_ = self.trade_ctx.place_order(
                 price=0, qty=qty_, code=code_,
-                trd_side=side_, order_type=OrderType.MARKET,
+                trd_side=side_, order_type=_OrderType_MKT,
                 trd_env=env, acc_id=acc,
-                time_in_force=TimeInForce.DAY,
+                time_in_force=_TimeInForce_D,
             )
-            if ret_ != RET_OK:
+            if ret_ != _RET_OK_:
                 log.error(f"[SyncBarrier] Close order FAILED for {code_} x{qty_}: {data_}")
                 return None
             oid_ = data_.iloc[0].get("order_id", "?") if not data_.empty else "?"
