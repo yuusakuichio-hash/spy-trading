@@ -138,10 +138,15 @@ class EarningsEngine:
         - iv_crush_rate < min_iv_crush_rate の銘柄は除外
         - クローズ90分前より遅い後場発表 (amc) は除外 (=翌日参戦に回す)
         - 返り値はiv_crush_rate降順にソート
+        - CRITICAL-10: ET=None 時は [] を返す + Pushover 通知
         """
         raw = self._fetch_earnings_calendar()
         now_et = self._now_et()
-        today = now_et.date() if now_et else datetime.date.today()
+        if now_et is None:
+            log.error("[Earnings] ET timezone unavailable - get_today_candidates disabled")
+            self._notify_et_unavailable()
+            return []
+        today = now_et.date()
 
         candidates: list[EarningsCandidate] = []
         for item in raw:
@@ -432,9 +437,42 @@ class EarningsEngine:
         return datetime.datetime(date.year, date.month, date.day, 16, 0, tzinfo=ET)
 
     def _now_et(self) -> Optional[datetime.datetime]:
+        """現在の ET 時刻を返す。zoneinfo が利用不可の場合は None を返す (CRITICAL-10)。
+        呼び出し側で None チェックすること。"""
         if ET is None:
-            return datetime.datetime.now()
+            return None  # CRITICAL-10: fallback削除 (JST localtime混入防止)
         return datetime.datetime.now(ET)
+
+    def _notify_et_unavailable(self) -> None:
+        """ET timezone が利用不可の場合に Pushover priority=1 で通知 (CRITICAL-10)。
+        spam 防止のため 1 時間に 1 回まで。"""
+        now_ts = time.time()
+        last_ts = getattr(self, "_et_unavailable_last_notify", 0)
+        if now_ts - last_ts < 3600:
+            return
+        self._et_unavailable_last_notify = now_ts
+        try:
+            import requests as _req
+            _pov_token = os.environ.get("PUSHOVER_ALERT_TOKEN", "")
+            _pov_user  = os.environ.get("PUSHOVER_USER", "")
+            if _pov_token and _pov_user:
+                _req.post(
+                    "https://api.pushover.net/1/messages.json",
+                    data={
+                        "token": _pov_token,
+                        "user": _pov_user,
+                        "title": "[Atlas/ALERT] ET timezone unavailable - earnings disabled",
+                        "message": (
+                            "zoneinfo.ZoneInfo('America/New_York') が利用不可。\n"
+                            "EarningsEngine は候補を返しません。\n"
+                            "pip install tzdata または OS tzdata を確認してください。"
+                        ),
+                        "priority": 1,
+                    },
+                    timeout=10,
+                )
+        except Exception as _e:
+            log.warning(f"[Earnings] _notify_et_unavailable Pushover failed: {_e}")
 
     @staticmethod
     def _parse_date(date_str: str) -> Optional[datetime.date]:
