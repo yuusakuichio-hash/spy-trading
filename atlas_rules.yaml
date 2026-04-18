@@ -39,6 +39,182 @@ rules:
     threshold: 20
     cooldown_sec: 1800
 
+  # ── 新戦術 Level 1: 正常エントリー通知 ──────────────────────────────────────
+
+  - id: ic_sell_entry_normal
+    description: IC売り (IronCondorSellEngine) エントリー成功（正常系）
+    level: 1
+    pattern: '\[IC_SELL\].*(entry|エントリー).*(success|ok)|IronCondor.*placed'
+    window_sec: 120
+    threshold: 1
+    cooldown_sec: 3600
+
+  - id: butterfly_entry_normal
+    description: Butterfly (ButterflyEngine) エントリー成功（正常系）
+    level: 1
+    pattern: '\[Butterfly\].*(entry|エントリー).*(success|ok)|ButterflyEngine.*placed'
+    window_sec: 120
+    threshold: 1
+    cooldown_sec: 3600
+
+  - id: calendar_entry_normal
+    description: Calendar Spread (CalendarEngine) エントリー成功（正常系）
+    level: 1
+    pattern: '\[CalendarEngine\].*(entry|エントリー).*(success|ok)|CalendarEngine.*placed'
+    window_sec: 120
+    threshold: 1
+    cooldown_sec: 3600
+
+  - id: strangle_entry_normal
+    description: Strangle売り (StrangleSellEngine) エントリー成功（正常系）
+    level: 1
+    pattern: '\[StrangleSell\].*(entry|エントリー).*(success|ok)|StrangleSell.*placed'
+    window_sec: 120
+    threshold: 1
+    cooldown_sec: 3600
+
+  - id: delta_hedge_triggered
+    description: Delta Hedge発動（正常系・過剰発動の基準ウォッチ）
+    level: 1
+    pattern: '\[DeltaHedge\].*(triggered|発動|placed|ヘッジ発動)'
+    window_sec: 60
+    threshold: 1
+    cooldown_sec: 600
+
+  - id: earnings_engine_entry_normal
+    description: 決算エンジン (EarningsEngine/IVCrush) エントリー成功（正常系）
+    level: 1
+    pattern: '\[EarningsEngine\|IVCrush\].*(entry|エントリー).*(success|ok)'
+    window_sec: 120
+    threshold: 1
+    cooldown_sec: 3600
+
+  # ── 新戦術 Level 2: 異常exit/ループ ──────────────────────────────────────────
+
+  - id: ic_sell_chain_fetch_loop
+    description: IC売り オプションチェーン取得失敗が連続（データ品質問題）
+    level: 2
+    pattern: '\[IC_SELL\].*(chain.*fail|チェーン取得失敗|option chain error)'
+    window_sec: 300
+    threshold: 5
+    cooldown_sec: 900
+    hypothesis: "moomoo API側のオプションチェーン取得制限または期限切れオプション"
+    action:
+      type: notify_only
+      post_verify_sec: 60
+
+  - id: butterfly_abnormal_exit
+    description: Butterfly 異常exitが連続（wing strike計算バグの兆候）
+    level: 2
+    pattern: '\[Butterfly\].*(abnormal|異常|HALT|stop_loss|損切り).*exit'
+    window_sec: 180
+    threshold: 3
+    cooldown_sec: 900
+    hypothesis: "wing_width計算またはATR取得バグ。strike選択がズレている可能性"
+    action:
+      type: restart_bot
+      pre_checks:
+        - no_open_orders
+      post_verify_sec: 120
+
+  - id: calendar_chain_miss_loop
+    description: Calendar Spread バックレッグのチェーン取得失敗が連続
+    level: 2
+    pattern: '\[CalendarEngine\].*(back.*chain|バックレッグ).*(fail|miss|なし|取得失敗)'
+    window_sec: 300
+    threshold: 8
+    cooldown_sec: 900
+    hypothesis: "7DTE expiry日が存在しないまたはmoomooで取引不可"
+    action:
+      type: notify_only
+      post_verify_sec: 60
+
+  - id: strangle_delta_miss_loop
+    description: Strangle売り delta該当ストライクなしが連続（チェーン品質問題）
+    level: 2
+    pattern: '\[StrangleSell\].*(delta.*miss|delta.*not found|デルタ.*なし|delta_tolerance)'
+    window_sec: 180
+    threshold: 5
+    cooldown_sec: 900
+    hypothesis: "オプションチェーンのdelta値が取得できていない。スナップショット取得確認"
+    action:
+      type: notify_only
+      post_verify_sec: 60
+
+  - id: delta_hedge_over_trigger
+    description: Delta Hedge が1時間に設計上限を超えて発動（PDT消費リスク）
+    level: 2
+    pattern: '\[DeltaHedge\].*(triggered|発動)'
+    window_sec: 3600
+    threshold: 4
+    cooldown_sec: 1800
+    hypothesis: "ポートフォリオデルタ計算にバグ。または市場が急変動でunwind閾値を跨ぎ続けている"
+    action:
+      type: notify_only
+      post_verify_sec: 120
+
+  - id: earnings_engine_data_miss
+    description: 決算エンジン IVクラッシュ率データ不足が連続（Finnhub API問題の可能性）
+    level: 2
+    pattern: '\[EarningsEngine\|IVCrush\].*(iv_crush.*miss|crush_rate.*none|データなし)'
+    window_sec: 300
+    threshold: 5
+    cooldown_sec: 1800
+    hypothesis: "Finnhub APIキー制限またはearnings_calendar.pyの日付計算バグ"
+    action:
+      type: notify_only
+      post_verify_sec: 60
+
+  # ── 新戦術 Level 3: 異常ループ検知 ──────────────────────────────────────────
+
+  - id: ic_sell_consecutive_loss_halt
+    description: IC売りが連続損失上限(3連敗)に達してBot内部でhalt（異常確認）
+    level: 3
+    pattern: '\[IC_SELL\].*(consecutive.*loss|連続損失|3回連続|max_consecutive)'
+    window_sec: 60
+    threshold: 1
+    cooldown_sec: 3600
+    hypothesis: "市場環境がIC売りの想定外のレンジを破った。strategy_selectorの環境判定確認"
+    action:
+      type: stop_bot
+      create_issue: true
+
+  - id: butterfly_wing_calc_error_loop
+    description: Butterfly wing幅計算エラーが連続（ATR取得バグ）
+    level: 3
+    pattern: '\[Butterfly\].*(wing.*calc.*error|calc_butterfly_wing_width.*exception)'
+    window_sec: 120
+    threshold: 5
+    cooldown_sec: 1800
+    hypothesis: "calc_butterfly_wing_width()でATR取得失敗またはNone参照エラー"
+    action:
+      type: stop_bot
+      create_issue: true
+
+  - id: delta_hedge_pdt_exhausted
+    description: Delta Hedge PDT枠を使い切った（週次上限超過・手動確認必要）
+    level: 3
+    pattern: '\[DeltaHedge\].*(PDT.*exhausted|PDT.*limit|weekly_pdt_budget|pdt.*枠.*使い切)'
+    window_sec: 60
+    threshold: 1
+    cooldown_sec: 7200
+    hypothesis: "weekly_pdt_budget=3を超えてDeltaHedgeが発動しようとした。$25K未満口座でのPDT上限"
+    action:
+      type: notify_only
+      create_issue: true
+
+  - id: earnings_abnormal_exit_loop
+    description: 決算エンジン 異常exitが連続（決算発表タイミングの予測バグ）
+    level: 3
+    pattern: '\[EarningsEngine\|IVCrush\].*(abnormal|abort|HALT|異常終了)'
+    window_sec: 120
+    threshold: 3
+    cooldown_sec: 3600
+    hypothesis: "決算発表タイミングの計算バグ。earnings_calendar.pyのhour判定確認"
+    action:
+      type: stop_bot
+      create_issue: true
+
   # ── Level 2: builder自動投入 ─────────────────────────────────
   - id: strike_mismatch_loop
     description: strike不整合が連続発生（注文ロジック破綻の兆候）
