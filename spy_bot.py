@@ -793,6 +793,17 @@ try:
 except ImportError as _e:
     log.warning(f"[Module] common.pre_trade_check ロード失敗 → 防護なし: {_e}")
 
+# ── API Recorder (Record-Replay / Shadow Mode) ────────────────────────────────
+_API_RECORDER_AVAILABLE = False
+try:
+    from common.api_recorder import get_recorder as _get_api_recorder, RecorderMode as _RecorderMode
+    _API_RECORDER_AVAILABLE = True
+    log.info("[Module] common.api_recorder ロード成功 (Record-Replay有効)")
+except ImportError as _e:
+    log.warning(f"[Module] common.api_recorder ロード失敗 → Record-Replay無効: {_e}")
+    def _get_api_recorder():
+        return None
+
 
 def _extract_symbol_from_code(code: str) -> str:
     """'US.SPY260417C710000' -> 'US.SPY'"""
@@ -2416,6 +2427,49 @@ class MarketData:
         self._atm_subscribed_codes: set = set()  # 現在ATM subscribeしているオプションコード
         self._last_atm_spy_price: Optional[float] = None  # 前回ATM subscribe時のSPY価格
         self._atm_resubscribe_threshold: float = 2.0  # SPYが$2以上動いたら再subscribe
+        # Record-Replay / Shadow Mode
+        # shadow_mode=True: 実APIコールを記録しながら実行（RECORDモード自動有効）
+        # replay_session=str: 指定記録ファイルを再生（実APIコールなし）
+        self._shadow_mode: bool = False
+        self._recorder = _get_api_recorder() if _API_RECORDER_AVAILABLE else None
+
+    def enable_shadow_mode(self, session_id: Optional[str] = None) -> Optional[str]:
+        """Shadow Modeを有効化する。
+
+        全APIコール（get_vix / get_spy_snapshot / get_option_chain等）を
+        JSONL形式で tests/recorded/ に記録する。
+
+        Args:
+            session_id: ファイル名に付与するID（Noneの場合は日時を自動生成）
+
+        Returns:
+            記録ファイルのパス文字列（recorder未利用時はNone）
+        """
+        if not _API_RECORDER_AVAILABLE or self._recorder is None:
+            log.warning("[Shadow] api_recorder未利用 → Shadow Mode無効")
+            return None
+        self._shadow_mode = True
+        path = self._recorder.start_record(session_id)
+        log.info(f"[Shadow] 記録開始: {path}")
+        return str(path)
+
+    def disable_shadow_mode(self) -> dict:
+        """Shadow Modeを停止して統計を返す"""
+        self._shadow_mode = False
+        if self._recorder:
+            stats = self._recorder.stop()
+            log.info(f"[Shadow] 記録停止: {stats}")
+            return stats
+        return {}
+
+    def _record_api(self, method: str, real_fn, *args, **kwargs):
+        """Shadow Modeが有効な場合にAPIコールを記録するヘルパー。
+
+        Shadow Mode無効時はreal_fn(*args, **kwargs)をそのまま呼ぶ。
+        """
+        if self._shadow_mode and self._recorder is not None:
+            return self._recorder.call(method, real_fn, *args, **kwargs)
+        return real_fn(*args, **kwargs)
 
     def connect(self) -> bool:
         if not FUTU_AVAILABLE:
@@ -2800,6 +2854,13 @@ class MarketData:
         return None
 
     def get_vix(self) -> Optional[float]:
+        # Shadow Mode: 実取得をwrapして記録する
+        if self._shadow_mode and self._recorder is not None:
+            return self._recorder.call("get_vix", self._get_vix_impl)
+        return self._get_vix_impl()
+
+    def _get_vix_impl(self) -> Optional[float]:
+        """get_vixの実装本体（Shadow Mode記録/再生から分離）"""
         if DRY_TEST:
             # dry-testモード: Yahoo Finance実データを使用（固定値禁止）
             v = self._get_vix_yahoo()
@@ -3151,6 +3212,13 @@ class MarketData:
 
     def get_spy_snapshot(self) -> Optional[dict]:
         """Returns dict with open_price and last_price for SPY."""
+        # Shadow Mode: 実取得をwrapして記録する
+        if self._shadow_mode and self._recorder is not None:
+            return self._recorder.call("get_spy_snapshot", self._get_spy_snapshot_impl)
+        return self._get_spy_snapshot_impl()
+
+    def _get_spy_snapshot_impl(self) -> Optional[dict]:
+        """get_spy_snapshotの実装本体（Shadow Mode記録/再生から分離）"""
         if DRY_TEST:
             # dry-testモード: Finnhub実データを使用（固定値禁止）
             snap = self._get_spy_price_finnhub()
@@ -3628,6 +3696,18 @@ class MarketData:
         SPXW等の大型チェーンではstrike数が200を超えるため、center_strikeを指定
         しないと現在価格周辺のstrikeがsnapshot範囲外になるバグがあった。
         """
+        # Shadow Mode: 実取得をwrapして記録する
+        if self._shadow_mode and self._recorder is not None:
+            return self._recorder.call(
+                "get_option_chain_with_greeks",
+                self._get_option_chain_impl,
+                expiry, opt_type, center_strike,
+            )
+        return self._get_option_chain_impl(expiry, opt_type, center_strike)
+
+    def _get_option_chain_impl(self, expiry: str, opt_type: str,
+                               center_strike: Optional[float] = None) -> list:
+        """get_option_chain_with_greeksの実装本体（Shadow Mode記録/再生から分離）"""
         if not FUTU_AVAILABLE or not self.quote_ctx:
             return []
         futu_opt_type = ft.OptionType.PUT if opt_type == "PUT" else ft.OptionType.CALL
@@ -5745,25 +5825,36 @@ class IntradayMonitor:
                     self._pdt_weekly_hedge_count += 1
                 return
 
-            # 実ヘッジ発注: ATMオプション買い
+            # 実ヘッジ発注: ATMオプション買い（マルチ銘柄対応）
             try:
                 expiry_today = datetime.datetime.now(ET).strftime("%Y-%m-%d")
-                spy_price = self.mkt.get_spy_current() if self.mkt else None
-                if spy_price is None:
-                    log.warning("[DeltaHedge] SPY価格取得失敗 → ヘッジスキップ")
+                # [マルチ銘柄] mkt.underlying_code から銘柄別に価格取得
+                _hedge_underlying = self.mkt.underlying_code if self.mkt else "US.SPY"
+                _hedge_ticker = _hedge_underlying.replace("US.", "").replace(".", "")
+                underlying_price = self.mkt.get_spy_current() if self.mkt else None
+                if underlying_price is None:
+                    log.warning(
+                        f"[DeltaHedge] {_hedge_ticker}価格取得失敗 → ヘッジスキップ"
+                    )
                     return
 
                 # ATMストライク算出（$1刻みに丸め）
-                atm_strike = round(spy_price)
+                atm_strike = round(underlying_price)
 
-                # futu オプションコード生成
-                # 形式: US.SPYYYMMDDCP STRIKE（8桁 ×1000 例: US.SPY260417P00553000）
+                # [マルチ銘柄] futu オプションコード生成（銘柄別）
+                # 形式: US.<TICKER>YYMMDD{C|P}<STRIKE×1000 8桁>
+                # SPY  例: US.SPY260417P00553000
+                # QQQ  例: US.QQQ260417C00480000
+                # TSLA 例: US.TSLA260417C00250000
                 _exp_compact = expiry_today.replace("-", "")[2:]  # YYMMDD
                 _type_char = "C" if hedge_direction == "CALL" else "P"
                 _strike_int = int(atm_strike * 1000)
-                hedge_code = f"US.SPY{_exp_compact}{_type_char}{_strike_int:08d}"
+                hedge_code = f"US.{_hedge_ticker}{_exp_compact}{_type_char}{_strike_int:08d}"
 
-                log.info(f"[DeltaHedge] ヘッジ発注: {hedge_code} x{hedge_qty} BUY")
+                log.info(
+                    f"[DeltaHedge] ヘッジ発注: {hedge_code} x{hedge_qty} BUY"
+                    f" underlying={_hedge_ticker} price={underlying_price:.2f}"
+                )
                 if self.eng:
                     import futu as _futu_dh
                     order_id, fill_method = self.eng._place_single_leg(
@@ -5779,7 +5870,8 @@ class IntradayMonitor:
                             self._pdt_weekly_hedge_count += 1
                         _new_remaining = max(0, DELTA_HEDGE_WEEKLY_BUDGET - self._pdt_weekly_hedge_count)
                         _pushover_body = (
-                            f"total_delta={total_delta:+.4f} (閾値±{trigger:.2f})\n"
+                            f"[Atlas] total_delta={total_delta:+.4f} (閾値±{trigger:.2f})\n"
+                            f"銘柄: {_hedge_ticker}\n"
                             f"{hedge_direction} 買い {hedge_qty}枚\n"
                             f"コード: {hedge_code}\n"
                             f"本日{self._delta_hedge_count}回目"
@@ -5790,9 +5882,12 @@ class IntradayMonitor:
                             )
                             if _is_pdt_emergency:
                                 _pushover_body += " (緊急発動・PDT枠消費)"
-                        pushover("DeltaHedge発動", _pushover_body)
+                        pushover("[Atlas] DeltaHedge発動", _pushover_body)
                     else:
-                        log.error(f"[DeltaHedge] 発注失敗: fill_method={fill_method} code={hedge_code}")
+                        log.error(
+                            f"[DeltaHedge] 発注失敗: fill_method={fill_method}"
+                            f" code={hedge_code} underlying={_hedge_ticker}"
+                        )
             except Exception as _he:
                 log.warning(f"[DeltaHedge] 発注処理エラー: {_he}")
 
@@ -6355,6 +6450,53 @@ def premarket_assessment(mkt: MarketData, vix: float,
 
     result["size_factor"] = round(min(result["size_factor"], _size_factor), 4)
 
+    # ── VIX Term Structure (EarningsEngine.get_term_structure_regime) ─────────
+    # VIX9D/VIX3M比率によるregime判定 → スコア調整 + tactic_bias 付加
+    result["term_structure"] = {
+        "regime": "neutral",
+        "tactic_bias": "neutral",
+        "size_factor": 1.0,
+        "term_ratio_9d_3m": None,
+        "term_ratio_spot": None,
+        "notes": "not computed",
+    }
+    try:
+        from common.earnings_engine import EarningsEngine as _EarningsEngine
+        _vix3m_val: Optional[float] = None
+        try:
+            _resp3m = requests.get(
+                "https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX3M",
+                headers={"User-Agent": "Mozilla/5.0"}, timeout=8,
+            )
+            _vix3m_val = float(
+                _resp3m.json()["chart"]["result"][0]["meta"]["regularMarketPrice"]
+            )
+        except Exception as _vix3m_e:
+            log.warning(f"[Premarket] VIX3M fetch error: {_vix3m_e}")
+
+        _ts_result = _EarningsEngine.get_term_structure_regime(
+            vix9d=result.get("vix9d"),
+            vix=vix,
+            vix3m=_vix3m_val,
+        )
+        result["term_structure"] = _ts_result
+
+        # スコア調整 (atlas_rules.yaml: +5 contango / -10 backwardation)
+        _ts_regime = _ts_result.get("regime", "neutral")
+        if _ts_regime == "contango":
+            score += 5
+            log.info("[Premarket] TermStructure=contango → score +5")
+        elif _ts_regime == "backwardation":
+            score -= 10
+            _size_factor = round(_size_factor * _ts_result.get("size_factor", 0.8), 4)
+            log.warning(
+                f"[Premarket] TermStructure=backwardation → score -10 "
+                f"size×{_ts_result.get('size_factor', 0.8)}"
+            )
+        result["size_factor"] = round(min(result["size_factor"], _size_factor), 4)
+    except Exception as _ts_e:
+        log.warning(f"[Premarket] TermStructure error: {_ts_e}")
+
     # 推奨判定
     if score < 50:
         result["recommendation"] = "skip"
@@ -6368,11 +6510,15 @@ def premarket_assessment(mkt: MarketData, vix: float,
 
     result["score"] = round(score, 1)
     gr_sig = result["global_risk"].get("global_risk_signal", "N/A")
+    _ts_regime_log = result["term_structure"].get("regime", "N/A")
+    _ts_bias_log   = result["term_structure"].get("tactic_bias", "N/A")
     log.info(f"[Premarket] Assessment: score={result['score']}, VRP={result['vrp']}, "
              f"econ={result['econ_event']}, rec={result['recommendation']}, "
              f"bias={result['bias']}, "
              f"VIX9D={result['vix9d']} VVIX={result['vvix']} "
              f"VIX9D/VIX={result['vix9d_vix_ratio']} size_factor={vix9d_vvix_factor} "
+             f"TermStructure={_ts_regime_log} tactic_bias={_ts_bias_log} "
+             f"term_ratio_9d_3m={result['term_structure'].get('term_ratio_9d_3m')} "
              f"pc_ratio={result['put_call_ratio']} skew={result['skew']} "
              f"news_risk={result['news_sentiment'].get('risk_level','N/A')} "
              f"global_risk={gr_sig}")
@@ -6780,56 +6926,87 @@ class ORBEngine:
                      and now_et.minute >= ORB_BREAKOUT_CUTOFF_M)):
                 return None
 
-        spy_price = self._get_spy_price()
-        if not spy_price or spy_price <= 0:
+        underlying_price = self._get_underlying_price()
+        if not underlying_price or underlying_price <= 0:
             return None
 
-        if spy_price > self.orb_high:
-            log.info(f"[ORB] CALL ブレイク: SPY={spy_price:.2f} > H={self.orb_high:.2f}")
+        _orb_ticker = self.mkt.underlying_code.replace("US.", "") if self.mkt else "SPY"
+        if underlying_price > self.orb_high:
+            log.info(
+                f"[ORB] CALL ブレイク: {_orb_ticker}={underlying_price:.2f}"
+                f" > H={self.orb_high:.2f}"
+            )
             return "CALL"
-        if spy_price < self.orb_low:
-            log.info(f"[ORB] PUT ブレイク: SPY={spy_price:.2f} < L={self.orb_low:.2f}")
+        if underlying_price < self.orb_low:
+            log.info(
+                f"[ORB] PUT ブレイク: {_orb_ticker}={underlying_price:.2f}"
+                f" < L={self.orb_low:.2f}"
+            )
             return "PUT"
         return None
 
-    def _get_spy_price(self) -> Optional[float]:
-        """SPY現在価格を取得する（underlying_code非依存・SPY固定）。
+    def _get_underlying_price(self) -> Optional[float]:
+        """mkt.underlying_code の現在価格を取得する（マルチ銘柄対応）。
 
-        [P0 BUG修正 2026/04/12]
-        self.mkt.get_spy_current() は内部で self.mkt.underlying_code を参照するため、
-        MassVerifyで underlying_code が SPX 等に切替わっている場合にSPX価格を返してしまう。
-        ORBエンジンはSPY固定設計のため、本メソッドは常にSPYのスナップショットを直接取得する。
+        [マルチ銘柄対応 2026-04-18]
+        旧 _get_spy_price() はSPY固定だった。本メソッドは mkt.underlying_code を参照し
+        銘柄別に価格を取得する。dry_testでは Finnhub から銘柄別に取得（フォールバックあり）。
         """
+        _underlying = self.mkt.underlying_code if self.mkt else "US.SPY"
+        _ticker = _underlying.replace("US.", "").replace(".", "")
+        _fallback_prices = {
+            "SPY": 560.0, "QQQ": 480.0, "IWM": 200.0,
+            "TSLA": 250.0, "NVDA": 900.0, "AAPL": 200.0,
+            "MSFT": 420.0, "AMZN": 200.0, "META": 600.0,
+            "GOOGL": 170.0,
+        }
         if self.dry_test:
             try:
                 resp = requests.get(
                     "https://finnhub.io/api/v1/quote",
-                    params={"symbol": "SPY", "token": FINNHUB_API_KEY},
+                    params={"symbol": _ticker, "token": FINNHUB_API_KEY},
                     timeout=5,
                 )
                 p = float(resp.json().get("c") or 0)
-                return p if p > 0 else 560.0
+                return p if p > 0 else _fallback_prices.get(_ticker, 300.0)
             except Exception:
-                return 560.0
-        # 本番: underlying_code に関わらず US.SPY を直接スナップショット取得
+                return _fallback_prices.get(_ticker, 300.0)
+        # 本番: mkt.underlying_code のスナップショットを直接取得
         if FUTU_AVAILABLE and self.mkt and self.mkt.quote_ctx:
-            _spy_cached = self.mkt._price_cache.get("US.SPY", max_age_sec=5.0)
-            if _spy_cached is not None and _spy_cached > 0:
-                return _spy_cached
+            _cached = self.mkt._price_cache.get(_underlying, max_age_sec=5.0)
+            if _cached is not None and _cached > 0:
+                return _cached
             try:
-                _ret, _snap = self.mkt.quote_ctx.get_market_snapshot(["US.SPY"])
+                _ret, _snap = self.mkt.quote_ctx.get_market_snapshot([_underlying])
                 if _ret == RET_OK and not _snap.empty:
                     _p = float(_snap.iloc[0].get("last_price", 0) or 0)
                     if _p > 0:
                         return _p
             except Exception as _e:
-                log.debug(f"[ORB] _get_spy_price snapshot: {_e}")
-        # Futu失敗 → Finnhub（underlying_code非依存）
+                log.debug(f"[ORB] _get_underlying_price snapshot: {_e}")
+        # Futu失敗 → Finnhub（SPY以外も対応）
         if self.mkt:
-            snap = self.mkt._get_spy_price_finnhub()
-            if snap:
-                return snap.get("last_price")
+            if _ticker == "SPY":
+                snap = self.mkt._get_spy_price_finnhub()
+                if snap:
+                    return snap.get("last_price")
+            else:
+                try:
+                    resp = requests.get(
+                        "https://finnhub.io/api/v1/quote",
+                        params={"symbol": _ticker, "token": FINNHUB_API_KEY},
+                        timeout=5,
+                    )
+                    p = float(resp.json().get("c") or 0)
+                    if p > 0:
+                        return p
+                except Exception as _fe:
+                    log.debug(f"[ORB] _get_underlying_price Finnhub {_ticker}: {_fe}")
         return None
+
+    def _get_spy_price(self) -> Optional[float]:
+        """後方互換ラッパー。_get_underlying_price() に委譲する。"""
+        return self._get_underlying_price()
 
     # ── Phase 4: エントリー実行 ────────────────────────────────────────────
     def execute_entry(self, direction: str) -> Optional[ORBPosition]:
@@ -6870,33 +7047,22 @@ class ORBEngine:
             self.trade_done = True
             return None
 
-        # [P0 BUG修正 2026/04/12] underlying_code を spy_price 取得前に SPY に固定する
-        # [2026-04-18 修正] ORBはSPY専用戦術（内部ロジックがSPY hardcode）のため、
-        # 他銘柄がSymbolSelectorで選ばれた場合は**エントリー中止**する。
-        # 以前は「SPY強制切替」で他銘柄をSPYとして処理してたが、これは設計違反
-        # （TSLAが選ばれてSPYのORBエントリーが発生する）。
-        # ORB真マルチ銘柄対応は別リファクタで実施（SymbolSelector側でORB時はSPY限定）。
-        _orb_orig_underlying = self.mkt.underlying_code
-        if _orb_orig_underlying != UNDERLYING_CODE:
-            log.warning(
-                f"[ORB] underlying_code={_orb_orig_underlying} != SPY → "
-                f"ORBマルチ銘柄未対応のためエントリー中止"
+        # [マルチ銘柄対応 2026-04-18]
+        # underlying_code に応じて価格・ORBレンジ・チェーンを銘柄別に取得する。
+        # 旧SPY固定ガード（if _orb_orig_underlying != UNDERLYING_CODE: return None）を削除。
+        # center_strike±20%フィルタは get_option_chain_with_greeks() 内で適用済み（SPXW混入防止）。
+        _orb_underlying = self.mkt.underlying_code
+        _orb_ticker = _orb_underlying.replace("US.", "").replace(".", "")
+
+        # underlying別の現在価格を取得
+        underlying_price = self._get_underlying_price()
+        if not underlying_price or underlying_price <= 0:
+            log.error(
+                f"[ORB] execute_entry: {_orb_ticker}価格取得失敗"
             )
             return None
 
-        spy_price = self._get_spy_price()
-        if not spy_price or spy_price <= 0:
-            log.error("[ORB] execute_entry: SPY価格取得失敗")
-            return None
-
-        atm_strike = round(spy_price)
-
-        # [P0 BUG修正 2026/04/17] Symbol mismatch防止 (underlying_code固定は上記に移動済み)
-        # ORBエンジンは内部的にSPY固定ロジック（Yahoo/Finnhub SPY hardcode・OR計算SPY価格・
-        # ブレイク判定SPY価格）のため、チェーン取得時もSPYに固定する。
-        # SymbolSelectorが.SPX等を選んだ場合、SPXW 0DTEチェーンの先頭200件にATM付近の
-        # strikeが含まれず、deep ITM/OTM strikeが誤選択されるバグがあった。
-        # ORBマルチ銘柄対応は別リファクタリングで実施する（Atlas Phase 2）。
+        atm_strike = round(underlying_price)
 
         # 時間帯係数
         entry_time = datetime.datetime.now(ET).time()
@@ -6905,9 +7071,10 @@ class ORBEngine:
             self._time_zone_factor = ORB_LATE_FACTOR
         else:
             self._time_zone_factor = 1.0
-        log.info(f"[ORB] Entry: SPY={spy_price:.2f} ATM={atm_strike} "
-                 f"direction={direction} time_factor={self._time_zone_factor:.2f} "
-                 f"underlying={self.mkt.underlying_code}")
+        log.info(
+            f"[ORB] Entry: {_orb_ticker}={underlying_price:.2f} ATM={atm_strike} "
+            f"direction={direction} time_factor={self._time_zone_factor:.2f}"
+        )
 
         # Gap方向一致チェック（サイズボーナス最終確認）
         if self._gap_pct is not None and abs(self._gap_pct) >= ORB_GAP_THRESHOLD_PCT:
@@ -7327,12 +7494,18 @@ class CalendarEngine:
       - 7DTEオプション存在確認: SPYはWeekly発行あり → 通常7DTE付近のexpiryが存在する
     """
 
+    # US.SPX（CBOEインデックス）はカレンダー戦術対象外
+    EXCLUDED_SYMBOLS = {"US..SPX"}
+
     def __init__(self, mkt: 'MarketData', eng: 'TradeEngine',
-                 paper: bool = False, dry_test: bool = False):
+                 paper: bool = False, dry_test: bool = False,
+                 symbol: Optional[str] = None):
         self.mkt      = mkt
         self.eng      = eng
         self.paper    = paper
         self.dry_test = dry_test
+        # マルチ銘柄対応: 銘柄コード（None時はmkt.underlying_codeを使用）
+        self.symbol   = symbol or getattr(mkt, "underlying_code", "US.SPY")
 
         # 日次状態
         self.position:      Optional[CalendarPosition] = None
@@ -7497,6 +7670,12 @@ class CalendarEngine:
 
         dry_testモードでは仮想発注（実際にfutu APIを叩かない）。
         """
+        # マルチ銘柄ガード: US.SPX（CBOEインデックス）は除外
+        effective_symbol = self.symbol or getattr(self.mkt, "underlying_code", "US.SPY")
+        if effective_symbol in self.EXCLUDED_SYMBOLS:
+            log.info(f"[Calendar] {effective_symbol} はカレンダー対象外（US.SPX除外）→ スキップ")
+            return None
+
         now_et = datetime.datetime.now(ET)
 
         # dry-testモード
@@ -8399,6 +8578,99 @@ IV_CRUSH_MAX_RISK_PCT      = 0.02  # 口座の2%を最大リスク
 IV_CRUSH_MAX_QTY           = 2     # 最大2契約
 IV_CRUSH_PNL_FILE          = _BASE_DIR / "iv_crush_pnl.json"
 ENABLE_IV_CRUSH            = True  # グローバルON/OFF
+
+# ── Strangle Sell 戦術定数 ─────────────────────────────────────────────────────
+# OTM Call売り + OTM Put売り（credit受取）。高IVR環境での収益戦術。
+# US..SPX（CBOEインデックス）は除外 — moomooでの個別オプション建玉が複雑なため
+STRANGLE_SELL_CALL_DELTA    = 0.15   # CALL脚の目標delta（OTM）
+STRANGLE_SELL_PUT_DELTA     = 0.15   # PUT脚の目標|delta|（OTM）
+STRANGLE_SELL_DELTA_TOL     = 0.05   # delta許容誤差（±0.05以内のstrikeを採用）
+STRANGLE_SELL_IVR_MIN       = 60.0   # fallback: IVR>60で優先エントリー（動的IVR P70相当）
+STRANGLE_SELL_VIX_MAX       = 50.0   # VIX上限（クライシス環境はスキップ）
+STRANGLE_SELL_VIX_MIN       = 15.0   # VIX下限（IV低すぎはスキップ）
+STRANGLE_SELL_PROFIT_TARGET = 0.50   # 受取クレジットの50%で利確
+STRANGLE_SELL_STOP_LOSS_MULT= 2.00   # 受取クレジットの200%（コスト=2×credit）でストップ
+STRANGLE_SELL_MAX_RISK_PCT  = 0.03   # 口座の3%を最大リスク
+STRANGLE_SELL_MAX_QTY       = 2      # 最大2契約
+STRANGLE_SELL_ENTRY_H       = 10     # エントリー開始時刻(ET)
+STRANGLE_SELL_ENTRY_M       = 30
+STRANGLE_SELL_CUTOFF_H      = 12     # エントリー締め切り(ET)
+STRANGLE_SELL_CUTOFF_M      = 0
+STRANGLE_SELL_FORCE_CLOSE_H = 15     # フォースクローズ(ET)
+STRANGLE_SELL_FORCE_CLOSE_M = 45
+STRANGLE_SELL_PNL_FILE      = _BASE_DIR / "strangle_sell_pnl.json"
+ENABLE_STRANGLE_SELL        = True   # グローバルON/OFF
+# US.SPX（CBOEインデックス）除外リスト — US..SPXはSPXW混入源のため
+STRANGLE_SELL_EXCLUDED_SYMBOLS = {"US..SPX"}
+
+# ── IC Sell 戦術定数 (IronCondorSellEngine) ──────────────────────────────────
+# Call CS + Put CS の同時売り。credit受取・max_loss限定。
+# 全値は atlas_rules.yaml ic_sell セクションにも記載（ランタイム動的算出のベース）。
+# US..SPX（CBOEインデックス）は除外 — moomooでの建玉管理が複雑なため
+IC_SELL_EXCLUDED_SYMBOLS       = {"US..SPX"}
+IC_SELL_CALL_DELTA_BASE        = 0.20   # CALL 売りデルタ目標（動的補正前ベース）
+IC_SELL_PUT_DELTA_BASE         = 0.20   # PUT 売りデルタ（絶対値）目標（動的補正前ベース）
+IC_SELL_WIDTH_ATR_MULT         = 0.50   # spread_width = ATR_14 * mult
+IC_SELL_WIDTH_MIN              = 1      # 最小スプレッド幅（strike刻み単位）
+IC_SELL_WIDTH_DEFAULT          = 5      # ATR 取得失敗時フォールバック幅
+IC_SELL_CAPITAL_PCT_BASE       = 0.40   # 基本資本配分率（Call+Put合算）
+IC_SELL_CAPITAL_PCT_HIGH       = 0.30   # 高VIX（>28）時の縮小配分
+IC_SELL_VIX_HIGH_THRESHOLD     = 28.0   # 配分縮小のVIX閾値
+IC_SELL_VIX_MIN                = 18.0   # エントリー最低VIX（低IV環境はプレミアム不足）
+IC_SELL_VIX_MAX                = 40.0   # エントリー上限VIX（方向性リスク大）
+IC_SELL_IVR_MIN_PCT            = 40.0   # IVR が60日履歴の40%ile 以上で有効
+IC_SELL_PROFIT_TARGET_PCT      = 0.50   # net_credit の 50% でテイクプロフィット
+IC_SELL_STOP_LOSS_MULT         = 2.0    # net_credit x 2.0 で損切り
+IC_SELL_ENTRY_H                = 10     # エントリー開始時刻(ET)
+IC_SELL_ENTRY_M                = 30
+IC_SELL_CUTOFF_H               = 14     # エントリー締め切り(ET)
+IC_SELL_CUTOFF_M               = 0
+IC_SELL_FORCE_CLOSE_H          = 15     # フォースクローズ(ET)
+IC_SELL_FORCE_CLOSE_M          = 45
+IC_SELL_MAX_QTY                = 3      # 本番最大枚数
+IC_SELL_MAX_QTY_PAPER          = 10     # ペーパー最大枚数
+IC_SELL_SMALL_ACCOUNT_USD      = 15000  # この金額以下は1契約まで
+IC_SELL_MAX_CONSECUTIVE_LOSSES = 3      # 3連敗で当日停止
+IC_SELL_ENV_SCORE_MIN          = 55.0   # 環境スコア下限
+IC_SELL_PNL_FILE               = _BASE_DIR / "ic_sell_pnl.json"
+ENABLE_IC_SELL                 = True   # グローバルON/OFF
+
+
+def _ic_sell_load_pnl() -> list:
+    try:
+        if IC_SELL_PNL_FILE.exists():
+            return json.loads(IC_SELL_PNL_FILE.read_text()).get("trades", [])
+    except Exception:
+        pass
+    return []
+
+
+def _ic_sell_append_pnl(record: dict):
+    try:
+        IC_SELL_PNL_FILE.parent.mkdir(parents=True, exist_ok=True)
+        trades = _ic_sell_load_pnl()
+        record.setdefault("date", datetime.datetime.now(ET).strftime("%Y-%m-%d"))
+        record.setdefault("ts",   datetime.datetime.now(ET).isoformat())
+        record.setdefault("bot",  "ic_sell_atlas")
+        trades.append(record)
+        IC_SELL_PNL_FILE.write_text(json.dumps({"trades": trades}, indent=2))
+    except Exception as e:
+        log.warning(f"[IC_SELL] _ic_sell_append_pnl: {e}")
+
+
+def _ic_sell_check_consecutive_losses() -> bool:
+    try:
+        trades = _ic_sell_load_pnl()
+    except Exception:
+        return False
+    if not trades:
+        return False
+    exits = [t for t in trades
+             if t.get("event") == "exit" and t.get("bot") == "ic_sell_atlas"]
+    recent = exits[-IC_SELL_MAX_CONSECUTIVE_LOSSES:]
+    if len(recent) < IC_SELL_MAX_CONSECUTIVE_LOSSES:
+        return False
+    return all((t.get("pnl_usd", 0) or 0) < 0 for t in recent)
 
 
 def _straddle_buy_load_pnl() -> list:
@@ -9543,11 +9815,12 @@ class IVCrushEngine:
 class SPYCreditSpreadBot:
     def __init__(self, paper: bool = False, test_connect: bool = False,
                  demo_compare: bool = False, dry_test: bool = False,
-                 no_multi: bool = False):
+                 no_multi: bool = False, shadow: bool = False):
         self.paper        = paper
         self.test_connect = test_connect
         self.demo_compare = demo_compare
         self.dry_test     = dry_test
+        self.shadow       = shadow  # Shadow Mode: APIコールを tests/recorded/ にJSONL記録
         self.underlying_code: str = UNDERLYING_CODE  # 動的銘柄選択: premarketフェーズでセット
 
         # ── マルチ銘柄モード ─────────────────────────────────────────────────
@@ -12590,6 +12863,8 @@ class SPYCreditSpreadBot:
             flags_str += "[DEMO]"
         if self.dry_test:
             flags_str += "[DRY-TEST]"
+        if self.shadow:
+            flags_str += "[SHADOW]"
         # V2-C2: 起動時にPushoverトークン有効性を確認する
         _check_pushover_token()
         pushover(f"SPY CS {flags_str}", f"起動{flags_str}")
@@ -12647,6 +12922,15 @@ class SPYCreditSpreadBot:
                 self.consecutive_start_failures += 1
                 save_failures(self.consecutive_start_failures)
                 return
+
+            # Shadow Mode: APIコール記録を開始（接続成功後）
+            if self.shadow:
+                shadow_path = self.mkt.enable_shadow_mode()
+                if shadow_path:
+                    log.info(f"[Shadow] APIコール記録開始: {shadow_path}")
+                    pushover("[Atlas/BUILDER] Shadow Mode", f"APIコール記録中: {shadow_path}", priority=0)
+                else:
+                    log.warning("[Shadow] enable_shadow_mode失敗 → Shadow Mode無効")
 
             self.builder = EntryBuilder(self.mkt, self.eng)
             if ENABLE_INTRADAY_MONITOR:
@@ -13852,6 +14136,9 @@ if __name__ == "__main__":
                         help="カレンダースプレッド戦略を無効化する")
     parser.add_argument("--no-multi",   action="store_true",
                         help="マルチ銘柄同時運用を無効化して従来の1銘柄モードで動作する")
+    parser.add_argument("--shadow",      action="store_true",
+                        help="Shadow Mode: 全APIコール（get_vix/get_spy_snapshot/get_option_chain等）を "
+                             "tests/recorded/ にJSONL記録する（実発注は変わらず実行）")
     args = parser.parse_args()
 
     # --dry-test フラグをグローバルに反映（MarketData/TradeEngineが参照）
@@ -13886,6 +14173,7 @@ if __name__ == "__main__":
             demo_compare=args.demo_compare,
             dry_test=args.dry_test,
             no_multi=getattr(args, "no_multi", False),
+            shadow=getattr(args, "shadow", False),
         )
         bot.run_forever()
     finally:

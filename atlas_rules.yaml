@@ -149,9 +149,184 @@ autofix:
   # Level2以上のaction実行を許可するか
   # 0=DRY_RUN (通知のみ・actionログに記録)
   # 1=ARMED (実際にrestart/stop実行)
-  dry_run_default: 1
+  dry_run_default: 0
 
   # GitHub Issue作成時のリポジトリ
   github_repo: yuusakuichio-hash/spy-trading
   github_label_todo: todo
   github_label_hub: hub-command
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Butterfly戦術パラメータ
+# ATM Long Butterfly: 1 buy lower-wing + 2 sell ATM + 1 buy upper-wing
+# 適用環境: low IVR (IVR < 30) — IV拡張の裨益を受けない低IV環境向け
+# 対象銘柄: SPY/QQQ/META/AMZN/GOOGL etc (US.SPX除外)
+# ══════════════════════════════════════════════════════════════════════════════
+butterfly:
+  # グローバルON/OFF
+  enable: true
+
+  # IVRフィルタ: IVR < ivr_max でのみエントリー (低IV環境向け)
+  # 動的パーセンタイルが利用可能な場合はP30相当を自動算出する
+  # フォールバック固定値
+  ivr_max_fallback: 30.0
+
+  # Wing幅算出: wing_width = ATR(14) * atr_wing_mult (ストライク刻みに丸め)
+  # 銘柄ごとのATRに対して動的に幅を設定する
+  atr_wing_mult: 0.40
+  min_wing_strikes: 1     # 最小ウィング幅 (strikes数)
+  max_wing_strikes: 10    # 最大ウィング幅 (strikes数)
+
+  # Call系/Put系の選択ロジック
+  # "call"=常にCall Butterfly / "put"=常にPut Butterfly
+  # "dynamic"=SMAトレンドで自動選択（上昇→Call / 下降→Put）
+  wing_type: dynamic
+
+  # エントリーウィンドウ (ET)
+  entry_start_h: 10
+  entry_start_m: 30
+  entry_end_h: 14
+  entry_end_m: 0
+
+  # エグジット条件
+  profit_target_pct: 0.50   # ネットデビットの50%以上の利益で利確
+  stop_loss_pct: 1.50        # ネットデビットの150%損失で損切り
+  force_close_h: 15          # 15:50 ET 強制決済
+  force_close_m: 50
+
+  # サイジング: ネットデビット(コスト)ベース
+  # ネットコスト = wing幅 × 100 - ショートプレミアム×200 + ロングプレミアム×200
+  # capital_pct: 口座資本のうち何%をネットデビット(リスク)として使うか
+  capital_pct: 0.02          # 口座の2%をButterflyコストとして使用
+  max_qty: 3                 # 最大3枚
+  max_qty_paper: 10          # ペーパーは10枚
+
+  # pre_trade_check用推定証拠金 (Long Butterfly = ネットデビット×100)
+  # moomooはLong Butterfly = ネットデビット×枚数×100 相当の証拠金
+  # est_margin_per_contract_fallback: 実IVが取れない場合のフォールバック (USD)
+  est_margin_per_contract_fallback: 200
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 決算日参戦エンジン (EarningsEngine) パラメータ
+# 戦術: IV Crush狙い Straddle売り
+# データ: Finnhub earnings calendar API (動的取得・固定銘柄リストなし)
+# ══════════════════════════════════════════════════════════════════════════════
+earnings_engine:
+  enable: true
+
+  # エントリー条件
+  entry_before_earnings_min: 60      # 決算発表X分前にエントリー
+  entry_cutoff_before_close_min: 90  # ET クローズ90分前より遅い後場決算はスキップ
+  min_iv_crush_rate: 0.25            # IVクラッシュ率この値未満はスキップ
+
+  # サイズ係数 (IV Crush率から動的算出)
+  size_factor_high: 1.2    # crush_rate >= 0.38
+  size_factor_mid:  1.0    # crush_rate >= 0.30
+  size_factor_low:  0.7    # crush_rate < 0.30
+
+  # デフォルトIVクラッシュ率 (実績データが3件未満の場合に使用)
+  # 実績が3件以上になると自動的に実績中央値に切り替わる
+  default_crush_rate: 0.28
+  symbol_defaults:
+    NVDA:  0.40
+    TSLA:  0.35
+    META:  0.38
+    GOOGL: 0.32
+    AAPL:  0.30
+    MSFT:  0.28
+    AMZN:  0.33
+    NFLX:  0.38
+    AMD:   0.36
+    CRM:   0.34
+
+  # Pushover通知 (pre_trade_check通過後)
+  pushover_tag: "[Atlas/Earnings]"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# VIX Term Structure 戦術パラメータ
+# VIX9D/VIX/VIX3M/VIX6Mの比率から環境判定し戦術バイアスを決定する
+# ══════════════════════════════════════════════════════════════════════════════
+vix_term_structure:
+  enable: true
+
+  # term_ratio = VIX9D / VIX3M による環境判定閾値
+  # 固定値ではなく比率ベース (0-1スケール) で判定するため環境適応的
+  contango_threshold: 0.85    # term_ratio < this → contango → CS売り優先
+  backwardation_threshold: 1.05  # term_ratio > this → backwardation → Straddle買い優先
+
+  # 各regimeのサイズ係数
+  size_factor_contango:      1.0   # コンタンゴ: CS売りに有利 → フルサイズ
+  size_factor_neutral:       0.9   # ニュートラル: やや縮小
+  size_factor_backwardation: 0.8   # バックワーデーション: リスク回避縮小
+
+  # spot ratio (VIX9D / VIX) 補助チェック
+  spot_ratio_warn: 1.0        # > この値で size_factor × 0.9 追加縮小
+
+  # VIX6M (長期) 追加考慮
+  # VIX6M data source: Yahoo Finance %5EVIX6M
+  enable_vix6m: true
+  vix6m_stress_threshold: 25.0  # VIX6M > 25 → size_factor × 0.9 追加縮小
+
+  # premarket_assessment スコアへの加算/減算
+  score_adjustment_contango:      +5    # コンタンゴはCS売り有利環境 → +5点
+  score_adjustment_backwardation: -10   # バックワーデーションはリスク環境 → -10点
+  score_adjustment_neutral:         0
+
+  # ロギング用PnLファイル
+  pnl_file: data/butterfly_pnl.json
+
+# ══════════════════════════════════════════════════════════════════════════════
+# IC Sell 戦術パラメータ (IronCondorSellEngine)
+# Call CS + Put CS の同時売り。credit受取・max_loss限定。
+# 対象銘柄: SPY/QQQ/META/AMZN/GOOGL etc (US.SPX除外・マルチ銘柄対応)
+# ══════════════════════════════════════════════════════════════════════════════
+ic_sell:
+  # グローバルON/OFF
+  enable: true
+
+  # エントリー条件（動的算出のベース値）
+  vix_min: 18.0          # この VIX 以上でエントリー（低IV環境ではプレミアム不足）
+  vix_max: 40.0          # この VIX 以上はスキップ（方向性リスク大）
+  ivr_min_percentile: 40.0  # IVR が過去60日の40%ile 以上で有効
+  env_score_min: 55.0    # 環境スコア下限（pre_trade_check前フィルタ）
+
+  # デルタ目標（動的算出のベース値）
+  call_delta_base: 0.20  # CALL 売りデルタ目標
+  put_delta_base: 0.20   # PUT 売りデルタ（絶対値）目標
+  # VIX補正: VIX > vix_delta_adj_threshold でデルタを delta_adj 分縮小（守り）
+  vix_delta_adj_threshold: 28.0
+  delta_adj_high_vix: -0.03   # 高VIX時のデルタ調整値（マイナス=縮小方向）
+  # IVR補正: IVR > ivr_delta_adj_threshold でデルタを delta_adj 分拡大（積極的）
+  ivr_delta_adj_threshold: 70.0
+  delta_adj_high_ivr: 0.03    # 高IVR時のデルタ調整値（プラス=拡大方向）
+
+  # スプレッド幅（ATR × mult で動的算出）
+  width_atr_mult: 0.50   # spread_width = ATR_14 * width_atr_mult
+  width_min: 1           # 最小幅（ドル / ストライク刻み単位）
+  width_default: 5       # ATR 取得失敗時のフォールバック幅
+
+  # 資本配分（Call/Put 合算 max_loss で計算）
+  capital_pct_base: 0.40       # 基本資本配分率
+  capital_pct_high_vix: 0.30   # VIX >= vix_high_threshold 時の縮小配分
+  vix_high_threshold: 28.0     # 配分縮小の VIX 閾値
+
+  # エグジット条件
+  profit_target_pct: 0.50    # net_credit の 50% でテイクプロフィット
+  stop_loss_mult: 2.0        # net_credit × 2.0 で損切り（spread max_loss 上限）
+
+  # 時刻ウィンドウ (ET)
+  entry_start_hour: 10
+  entry_start_min: 30
+  entry_cutoff_hour: 14
+  entry_cutoff_min: 0
+  force_close_hour: 15
+  force_close_min: 45
+
+  # サイジング
+  max_qty: 3
+  max_qty_paper: 10
+  small_account_usd: 15000
+  max_consecutive_losses: 3
+
+  # PnLファイル
+  pnl_file: data/ic_sell_pnl.json
