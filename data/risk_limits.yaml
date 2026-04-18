@@ -1,0 +1,45 @@
+# Risk Limits Phase別設定 — yaml上書き用
+# common/risk_limits.py の DEFAULT_LIMITS を上書き可能
+#
+# 【設計思想訂正 2026-04-18】
+# ペーパーは学習データ収集場。本番パラメータの妥当性検証のため、
+# 本番想定パラメータ(P2相当)で攻撃的に回す。機会損失最小化。
+
+P0_paper:
+  # Phase 2 (live mid) 相当に緩和。ペーパーを本番検証場として活用
+  max_margin_pct_per_trade: 0.05
+  daily_loss_pct: -0.05
+  weekly_loss_pct: -0.10
+  monthly_loss_pct: -0.20
+  max_positions: 20
+  max_concentration_pct: 0.25
+  max_margin_pct_total: 0.60
+  max_qty_per_order: 50
+  max_option_price: 50.0
+  max_bid_ask_spread_pct: 0.15  # ペーパーは流動性が本番より荒い場合あり
+  orders_per_minute_limit: 20
+
+# P1-P4はリスク度順に厳格化
+P1_live_small:
+  max_margin_pct_per_trade: 0.05
+  daily_loss_pct: -0.05
+  max_positions: 5
+  max_qty_per_order: 10
+
+P2_live_mid:
+  max_margin_pct_per_trade: 0.05
+  daily_loss_pct: -0.05
+  max_positions: 15
+  max_qty_per_order: 30
+
+P3_live_large:
+  max_margin_pct_per_trade: 0.04
+  daily_loss_pct: -0.04
+  max_positions: 20
+  max_qty_per_order: 50
+
+P4_fund:
+  max_margin_pct_per_trade: 0.02
+  daily_loss_pct: -0.02
+  max_positions: 30
+  max_qty_per_order: 100

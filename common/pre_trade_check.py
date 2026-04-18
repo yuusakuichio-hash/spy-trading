@@ -12,6 +12,12 @@ from typing import Optional
 from common.risk_limits import RiskLimits, load_limits
 from common import kill_switch, portfolio_aggregator
 
+try:
+    from common.quote_context_manager import get_global_manager as _qcm_get
+    _QCM_AVAILABLE = True
+except ImportError:
+    _QCM_AVAILABLE = False
+
 
 # 発注頻度トラッキング（プロセス内メモリ）
 _recent_orders: collections.deque = collections.deque(maxlen=100)
@@ -59,6 +65,21 @@ def check_order(ctx: OrderContext, limits: Optional[RiskLimits] = None) -> Check
     # Kill Switch最優先
     if kill_switch.is_active():
         return CheckResult(False, "KILL", f"Kill Switch発動中: {kill_switch.reason()}", "critical", True)
+
+    # Quote Context level check (段階的フェイルオーバー)
+    if _QCM_AVAILABLE:
+        qcm = _qcm_get()
+        if not qcm.allow_new_entry():
+            return CheckResult(
+                False, "QCM",
+                f"Quote context level={qcm.get_level()} — 新規エントリー停止中(既存exitは許可)",
+                "high", False,
+            )
+        # level 1-2 は margin_scale で est_margin を事実上縮小判定
+        scale = qcm.margin_scale()
+        if scale < 1.0 and ctx.est_margin > 0:
+            # スケール適用: est_margin / scale で実効判定
+            ctx.est_margin = ctx.est_margin / max(scale, 0.01)
 
     # Layer 1: Pre-trade Sanity
     if ctx.symbol not in limits.symbol_whitelist:
