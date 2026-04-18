@@ -23,6 +23,7 @@ earnings_engine.py — 決算日参戦エンジン
 from __future__ import annotations
 
 import datetime
+import fcntl
 import json
 import logging
 import os
@@ -174,7 +175,7 @@ class EarningsEngine:
                     log.debug(f"[Earnings] {symbol}: amc too late → skip")
                     continue
 
-            size_factor = self._calc_size_factor(crush_rate)
+            size_factor = self._calc_size_factor(crush_rate, symbol=symbol)
             full_code = f"US.{symbol}"
 
             candidates.append(EarningsCandidate(
@@ -196,7 +197,7 @@ class EarningsEngine:
     def get_entry_params(self, symbol: str) -> EarningsEngineResult:
         """指定銘柄のエントリーパラメータを返す。"""
         crush_rate = self._get_iv_crush_rate(symbol)
-        size_factor = self._calc_size_factor(crush_rate)
+        size_factor = self._calc_size_factor(crush_rate, symbol=symbol)
         notes = (
             f"iv_crush_rate={crush_rate:.2f} "
             f"size_factor={size_factor:.2f} "
@@ -383,26 +384,60 @@ class EarningsEngine:
             return []
 
     def _get_iv_crush_rate(self, symbol: str) -> float:
-        """銘柄のIVクラッシュ率を返す (履歴→デフォルト順)。"""
-        # 実績履歴から動的算出
+        """銘柄のIVクラッシュ率を返す (履歴→デフォルト順)。
+
+        H-7: 履歴3件未満/dict外symbol は crush_rate は返すが、
+        _calc_size_factor() で信頼性ペナルティが適用される。
+        """
+        # 実績履歴から動的算出（3件以上で信頼可能）
         if symbol in self._history and len(self._history[symbol]) >= 3:
             crush_vals = [r["actual_crush"] for r in self._history[symbol]]
-            # 外れ値除去: 中央値を使う
             sorted_vals = sorted(crush_vals)
             median = sorted_vals[len(sorted_vals) // 2]
             return round(median, 4)
 
-        # デフォルト値
-        return _DEFAULT_IV_CRUSH_RATES.get(symbol, _DEFAULT_CRUSH_RATE)
+        if symbol in _DEFAULT_IV_CRUSH_RATES:
+            return _DEFAULT_IV_CRUSH_RATES[symbol]
+        return _DEFAULT_CRUSH_RATE
 
-    def _calc_size_factor(self, crush_rate: float) -> float:
-        """IVクラッシュ率からサイズ係数を算出する。"""
+    def _has_sufficient_history(self, symbol: str) -> bool:
+        """履歴が3件以上あり信頼可能かを返す (H-7)。"""
+        return symbol in self._history and len(self._history[symbol]) >= 3
+
+    def _is_in_default_dict(self, symbol: str) -> bool:
+        """バックテスト由来のデフォルト dict に存在するかを返す (H-7)。"""
+        return symbol in _DEFAULT_IV_CRUSH_RATES
+
+    def _calc_size_factor(self, crush_rate: float, symbol: str = "") -> float:
+        """IVクラッシュ率からサイズ係数を算出する。
+
+        H-7: 以下の場合にペナルティを追加適用する。
+          - 完全未知(履歴なし+dict外): size×0.5
+          - 履歴1-2件のみ: size×0.7
+        """
         if crush_rate >= 0.38:
-            return SIZE_FACTOR_HIGH
+            base = SIZE_FACTOR_HIGH
         elif crush_rate >= 0.30:
-            return SIZE_FACTOR_MID
+            base = SIZE_FACTOR_MID
         else:
-            return SIZE_FACTOR_LOW
+            base = SIZE_FACTOR_LOW
+
+        if symbol:
+            has_history = self._has_sufficient_history(symbol)
+            in_default  = self._is_in_default_dict(symbol)
+            if not has_history and not in_default:
+                log.info(
+                    f"[Earnings] {symbol}: 履歴なし+dict外 → size_factor×0.5 [H-7]"
+                )
+                base = round(base * 0.5, 2)
+            elif not has_history:
+                n = len(self._history.get(symbol, []))
+                log.info(
+                    f"[Earnings] {symbol}: 履歴不足({n}件) → size_factor×0.7 [H-7]"
+                )
+                base = round(base * 0.7, 2)
+
+        return max(0.1, base)
 
     def _estimate_announcement_dt(
         self,
@@ -490,7 +525,24 @@ class EarningsEngine:
             return {}
 
     def _save_history(self) -> None:
+        # H-11: fcntl.flock で排他ロックを取得してから read-modify-write
+        # 複数Bot同時実行時の race condition による history 消失を防ぐ
         try:
-            EARNINGS_HISTORY_FILE.write_text(json.dumps(self._history, indent=2))
+            lock_file = str(EARNINGS_HISTORY_FILE) + ".lock"
+            with open(lock_file, "w") as lf:
+                fcntl.flock(lf, fcntl.LOCK_EX)
+                try:
+                    # ロック取得後にディスクの最新データをマージしてから書き込む
+                    if EARNINGS_HISTORY_FILE.exists():
+                        try:
+                            disk_data = json.loads(EARNINGS_HISTORY_FILE.read_text())
+                        except Exception:
+                            disk_data = {}
+                        for sym, recs in self._history.items():
+                            disk_data[sym] = recs
+                        self._history = disk_data
+                    EARNINGS_HISTORY_FILE.write_text(json.dumps(self._history, indent=2))
+                finally:
+                    fcntl.flock(lf, fcntl.LOCK_UN)
         except Exception as e:
             log.warning(f"[Earnings] history save error: {e}")
