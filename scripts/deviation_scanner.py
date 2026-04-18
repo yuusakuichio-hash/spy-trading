@@ -71,13 +71,24 @@ def parse_log_lines(days: int = 7):
 
 
 def analyze(events, threshold: int = 10):
-    """頻度×期間マトリクス生成 + 常態化判定"""
+    """頻度×期間マトリクス生成 + 3段階判定（急増/当日累積/常態化）
+
+    Sora Labの改善ペース（1日で複数commit）に合わせた階層化:
+    - surge (急増): 1時間で10件以上 → 即日対応
+    - daily (当日累積): 24時間で30件以上 → 翌朝AAR強調
+    - normalized (常態化): 2日連続 → 週次レビュー
+    """
+    import datetime as _dt
+    now = _dt.datetime.now()
+
     by_cat = collections.defaultdict(list)
     for ts, cat, raw in events:
         by_cat[cat].append((ts, raw))
 
     report = []
-    normalized = []  # 常態化してるカテゴリ
+    normalized = []
+    surging = []      # 1時間急増
+    daily_high = []   # 当日累積高
     for cat in sorted(by_cat, key=lambda c: -len(by_cat[c])):
         evs = by_cat[cat]
         cnt = len(evs)
@@ -87,44 +98,101 @@ def analyze(events, threshold: int = 10):
         last = evs[-1][0]
         span_hours = max(1, (last - first).total_seconds() / 3600)
         rate = cnt / span_hours
-        # 常態化判定: 閾値超 + 日数が2日以上（持続性）
         days_span = (last - first).days
-        is_normalized = cnt >= threshold and days_span >= 2
+
+        # 3段階判定
+        last_1h_cutoff = now - _dt.timedelta(hours=1)
+        last_24h_cutoff = now - _dt.timedelta(hours=24)
+        count_1h = sum(1 for ts, _ in evs if ts >= last_1h_cutoff)
+        count_24h = sum(1 for ts, _ in evs if ts >= last_24h_cutoff)
+
+        is_surging = count_1h >= 10            # 急増（即日対応）
+        is_daily_high = count_24h >= 30        # 当日累積高（AAR強調）
+        is_normalized = cnt >= threshold and days_span >= 2  # 常態化（週次）
+
+        if is_surging:
+            surging.append(cat)
+        if is_daily_high:
+            daily_high.append(cat)
         if is_normalized:
             normalized.append(cat)
+
         report.append({
             "category": cat,
             "count": cnt,
+            "count_1h": count_1h,
+            "count_24h": count_24h,
             "first": first,
             "last": last,
             "span_hours": span_hours,
             "rate_per_hour": rate,
             "days_span": days_span,
+            "surging": is_surging,
+            "daily_high": is_daily_high,
             "normalized": is_normalized,
             "sample": evs[0][1],
         })
-    return report, normalized
+    return report, normalized, surging, daily_high
 
 
-def render_dashboard(report, normalized, days: int):
+def render_dashboard(report, normalized, days: int, surging=None, daily_high=None):
+    if surging is None:
+        surging = []
+    if daily_high is None:
+        daily_high = []
+    return _render_dashboard_impl(report, normalized, days, surging, daily_high)
+
+
+def _render_dashboard_impl(report, normalized, days, surging, daily_high):
     now = datetime.now().strftime("%Y-%m-%d %H:%M JST")
     lines = [
         "# Atlas Deviation Dashboard",
         "",
         f"**生成日時**: {now}  ",
         f"**対象期間**: 直近{days}日  ",
-        f"**常態化検知カテゴリ数**: {len(normalized)}  ",
+        f"**🚨 急増検知（1h ≥10件・即日対応）**: {len(surging)}件  ",
+        f"**🟠 当日累積（24h ≥30件・AAR強調）**: {len(daily_high)}件  ",
+        f"**🔴 常態化検知（2日連続・週次レビュー）**: {len(normalized)}件  ",
         "",
         "## 理論的背景",
         "",
         "Challenger O-ring事故（1986）の教訓: 同じ異常が繰り返されても「今までも大丈夫だったから」"
         "と正常扱いされる現象（Normalization of Deviance・Diane Vaughan 1996）。",
         "",
-        "**小さな逸脱を慣れる前に可視化**するのが対策。",
+        "**Sora Labの改善ペースに合わせ3段階で検知**（急増/当日/常態化）。",
         "",
-        "## 常態化検知（要対処）",
+        "## 🚨 急増検知（1時間で10件超・即日対応必須）",
         "",
     ]
+    if surging:
+        lines.append("| カテゴリ | 直近1h件数 | 直近24h件数 | rate/h |")
+        lines.append("|---|---:|---:|---:|")
+        for r in report:
+            if r.get("surging"):
+                lines.append(
+                    f"| `{r['category']}` | **{r['count_1h']}** | "
+                    f"{r['count_24h']} | {r['rate_per_hour']:.1f} |"
+                )
+    else:
+        lines.append("_急増検知なし_")
+    lines.extend([
+        "",
+        "## 🟠 当日累積（24hで30件超・翌AARで強調）",
+        "",
+    ])
+    if daily_high:
+        lines.append("| カテゴリ | 直近24h件数 | 累計 |")
+        lines.append("|---|---:|---:|")
+        for r in report:
+            if r.get("daily_high") and not r.get("surging"):
+                lines.append(f"| `{r['category']}` | {r['count_24h']} | {r['count']} |")
+    else:
+        lines.append("_当日累積高なし_")
+    lines.extend([
+        "",
+        "## 🔴 常態化検知（2日連続・要中期対処）",
+        "",
+    ])
     if normalized:
         lines.append("| カテゴリ | 件数 | 期間 | rate/h |")
         lines.append("|---|---:|---|---:|")
@@ -135,7 +203,7 @@ def render_dashboard(report, normalized, days: int):
                     f"{r['days_span']}日 | {r['rate_per_hour']:.1f} |"
                 )
     else:
-        lines.append("_現在常態化検知なし_")
+        lines.append("_常態化検知なし_")
     lines.extend([
         "",
         "## 全逸脱カテゴリ（頻度降順）",
@@ -173,11 +241,11 @@ def main():
     args = ap.parse_args()
 
     events = parse_log_lines(args.days)
-    report, normalized = analyze(events, args.threshold)
+    report, normalized, surging, daily_high = analyze(events, args.threshold)
 
     # stdout
     print(f"[deviation_scanner] 直近{args.days}日・{len(events)}件の逸脱イベント")
-    print(f"[deviation_scanner] 常態化検知: {len(normalized)} カテゴリ")
+    print(f"[deviation_scanner] 🚨急増: {len(surging)} / 🟠当日: {len(daily_high)} / 🔴常態化: {len(normalized)}")
     for cat in normalized:
         r = next(x for x in report if x["category"] == cat)
         print(f"  🔴 {cat}: {r['count']}件 / {r['days_span']}日 / {r['rate_per_hour']:.1f}回/h")
@@ -186,11 +254,11 @@ def main():
     if args.dashboard:
         DASHBOARD.parent.mkdir(parents=True, exist_ok=True)
         with open(DASHBOARD, "w", encoding="utf-8") as f:
-            f.write(render_dashboard(report, normalized, args.days))
+            f.write(render_dashboard(report, normalized, args.days, surging, daily_high))
         print(f"[deviation_scanner] dashboard → {DASHBOARD}")
 
-    # exit code: 常態化検知あればnon-zero
-    sys.exit(1 if normalized else 0)
+    # exit code: 急増 or 常態化 どちらか発生でnon-zero
+    sys.exit(1 if (surging or normalized) else 0)
 
 
 if __name__ == "__main__":
