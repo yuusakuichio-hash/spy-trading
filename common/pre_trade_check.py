@@ -6,8 +6,11 @@
 from __future__ import annotations
 import collections
 import datetime
+import logging
 from dataclasses import dataclass
 from typing import Optional
+
+log = logging.getLogger(__name__)
 
 from common.risk_limits import RiskLimits, load_limits
 from common import kill_switch, portfolio_aggregator
@@ -124,10 +127,21 @@ def check_order(ctx: OrderContext, limits: Optional[RiskLimits] = None) -> Check
                                f"{ctx.symbol} 集中超過: {conc_with_new:.1%} > {limits.max_concentration_pct:.0%}",
                                "medium", False)
 
-    # Layer 3: Loss Gates
+    # Layer 3: Loss Gates (日次/週次/月次)
     allow, reason = portfolio_aggregator.check_loss_gates(ctx.capital_usd, limits)
     if not allow:
+        # 月次DD超過はKill Switch自動発動
+        if "monthly_loss_gate" in reason and not kill_switch.is_active():
+            kill_switch.activate(f"monthly_loss_gate_auto: {reason}")
+            log.critical("[L3] 月次DDゲート → Kill Switch自動発動: %s", reason)
         return CheckResult(False, "L3", reason, "high", True)
+
+    # Layer 3b: Cross-Bot portfolio limits
+    cross_allow, cross_reason = portfolio_aggregator.check_cross_bot_limits(
+        ctx.capital_usd, limits
+    )
+    if not cross_allow:
+        return CheckResult(False, "L3B", cross_reason, "high", True)
 
     # Layer 4: Frequency & Duplicate
     now = datetime.datetime.now()
