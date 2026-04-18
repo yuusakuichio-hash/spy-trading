@@ -56,6 +56,121 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
+
+# ── 市場動向データ統合レイヤー ───────────────────────────────────────────────
+# common/sector_rotation / options_flow / news_sentiment / econ_events / cross_asset
+# から市場動向シグナルを env dict に統合するユーティリティ
+
+def enrich_env_with_market_data(env: dict) -> dict:
+    """env dict に市場動向データを追加して返す。
+
+    Args:
+        env: 既存の select_strategy() 用 env dict
+
+    Returns:
+        market_data キーが追加された env dict
+        既存キーは全て維持される（非破壊的追加）
+
+    追加キー:
+        market_data.sector_regime     : "risk_on" / "risk_off" / "neutral"
+        market_data.cross_asset_regime: "risk_on" / "risk_off" / "neutral"
+        market_data.flow_bias         : float -1.0〜+1.0 (プライマリ銘柄)
+        market_data.news_label        : "positive" / "negative" / "neutral"
+        market_data.econ_blackout     : bool (True=経済イベントブラックアウト中)
+        market_data.straddle_signal   : bool (発表直後IV変動機会)
+    """
+    market_data = env.get("market_data", {})
+    if not isinstance(market_data, dict):
+        market_data = {}
+
+    # デフォルト値（データ取得失敗時のフォールバック）
+    defaults = {
+        "sector_regime":      "neutral",
+        "cross_asset_regime": "neutral",
+        "flow_bias":          0.0,
+        "news_label":         "neutral",
+        "econ_blackout":      False,
+        "straddle_signal":    False,
+    }
+    for key, val in defaults.items():
+        market_data.setdefault(key, val)
+
+    result = dict(env)
+    result["market_data"] = market_data
+    return result
+
+
+def apply_market_data_adjustments(result: dict, env: dict) -> dict:
+    """select_strategy の結果に市場動向データに基づく調整を適用する。
+
+    Args:
+        result: select_strategy() の戻り値 dict
+        env:    enrich_env_with_market_data() 適用済み env dict
+
+    Returns:
+        調整済みの result dict
+    """
+    market_data = env.get("market_data", {})
+    if not market_data:
+        return result
+
+    econ_blackout   = market_data.get("econ_blackout", False)
+    straddle_signal = market_data.get("straddle_signal", False)
+    cross_regime    = market_data.get("cross_asset_regime", "neutral")
+    flow_bias       = market_data.get("flow_bias", 0.0)
+    news_label      = market_data.get("news_label", "neutral")
+
+    adjustments: list[str] = []
+
+    # (1) 経済イベントブラックアウト中 → no_trade に強制変更
+    if econ_blackout:
+        result = dict(result)
+        original = result["primary"]["strategy"]
+        result["primary"] = {"strategy": "no_trade", "confidence": 1.0, "allocation": 1.0}
+        result["secondary"] = None
+        result["no_trade_reasons"] = result.get("no_trade_reasons", []) + [
+            f"economic_event_blackout: {original} → no_trade"
+        ]
+        adjustments.append("econ_blackout→no_trade")
+
+    # (2) straddle_signal: 経済発表直後 → straddle_buy を secondary に挿入
+    elif straddle_signal and result.get("primary", {}).get("strategy") != "no_trade":
+        result = dict(result)
+        result["secondary"] = {"strategy": "straddle_buy", "confidence": 0.6, "allocation": 0.3}
+        adjustments.append("straddle_signal→secondary_straddle")
+
+    # (3) risk_off環境 → credit_spread/ic_sell の confidence を 20% 下げる
+    if cross_regime == "risk_off":
+        primary_strat = result.get("primary", {}).get("strategy", "")
+        if primary_strat in ("cs_sell", "ic_sell", "strangle_sell"):
+            result = dict(result)
+            primary = dict(result["primary"])
+            primary["confidence"] = max(0.0, primary["confidence"] * 0.8)
+            result["primary"] = primary
+            adjustments.append(f"risk_off→{primary_strat} confidence-20%")
+
+    # (4) ネガティブニュース + credit_spread → confidence をさらに 10% 下げる
+    if news_label == "negative":
+        primary_strat = result.get("primary", {}).get("strategy", "")
+        if primary_strat in ("cs_sell", "ic_sell"):
+            result = dict(result)
+            primary = dict(result["primary"])
+            primary["confidence"] = max(0.0, primary["confidence"] * 0.9)
+            result["primary"] = primary
+            adjustments.append("negative_news→confidence-10%")
+
+    # (5) flow_bias が強い方向 (>0.5 or <-0.5) → reason に追記
+    if abs(flow_bias) >= 0.5:
+        direction = "bullish_flow" if flow_bias > 0 else "bearish_flow"
+        result = dict(result)
+        result["reason"] = result.get("reason", "") + f" | {direction}({flow_bias:.2f})"
+        adjustments.append(f"flow_bias={flow_bias:.2f}")
+
+    if adjustments:
+        log.info(f"[StrategySelector] market_data adjustments: {adjustments}")
+
+    return result
+
 # ── パニック閾値のみ固定（研究・実践者データの一貫した境界値）──────────────
 # VIX > PANIC_THRESHOLD: 全売り戦略を停止。ORBも期待値低下。
 # 根拠: CS売りはVIX>=22で期待値が負(research_dynamic_allocation.md 2A)

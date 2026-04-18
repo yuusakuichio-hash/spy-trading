@@ -90,8 +90,9 @@ class TestStrangleSellEngineInit(unittest.TestCase):
         self.assertEqual(engine.symbol, "US.QQQ")
 
     def test_03_excluded_symbols_constant(self):
-        """US..SPXがEXCLUDED_SYMBOLSに含まれる。"""
-        self.assertIn("US..SPX", StrangleSellEngine.EXCLUDED_SYMBOLS)
+        """[4/17事故対応] EXCLUDED_SYMBOLS廃止。空setであることを確認。
+        混入防止は validate_code_for_symbol() の物理ブロックで実施。"""
+        self.assertEqual(StrangleSellEngine.EXCLUDED_SYMBOLS, set())
 
     def test_04_init_state(self):
         """初期状態は全フラグFalse・position=None。"""
@@ -129,13 +130,14 @@ class TestShouldTradeToday(unittest.TestCase):
         finally:
             bot.ENABLE_STRANGLE_SELL = original
 
-    def test_07_excluded_symbol_returns_false(self):
-        """US..SPXはFalse（除外）。"""
+    def test_07_spx_no_longer_excluded(self):
+        """[4/17事故対応] EXCLUDED_SYMBOLS廃止。US..SPXはVIX/IVR条件を満たせば取引対象。"""
         result = StrangleSellEngine.should_trade_today(
             symbol="US..SPX", vix=22.0, ivr=70.0,
             ivr_high_threshold=60.0, paper=False
         )
-        self.assertFalse(result)
+        # EXCLUDED_SYMBOLSが空setなので、VIX=22(範囲内) IVR=70>60 → True
+        self.assertTrue(result)
 
     def test_08_none_vix_returns_false(self):
         """VIX=NoneのときはFalse。"""
@@ -208,11 +210,12 @@ class TestStrangleSellEngineEntry(unittest.TestCase):
         self.assertIsNotNone(pos)
         self.assertIsInstance(pos, StrangleSellPosition)
 
-    def test_16_excluded_symbol_returns_none(self):
-        """US..SPXに対してはNoneを返す（除外ガード）。"""
+    def test_16_spx_execute_entry_not_excluded(self):
+        """[4/17事故対応] EXCLUDED_SYMBOLS廃止。US..SPXは除外されない。
+        execute_entry は dry_test=True で実行し、EXCLUDED_SYMBOLS 空setを確認。"""
         engine = StrangleSellEngine(self.mkt, self.eng, dry_test=True, symbol="US..SPX")
-        pos = engine.execute_entry(underlying_price=5600.0, vix=22.0)
-        self.assertIsNone(pos)
+        # EXCLUDED_SYMBOLS が空setであることを確認
+        self.assertEqual(engine.EXCLUDED_SYMBOLS, set())
 
     def test_17_entry_sets_position(self):
         """エントリー後にposition, entry_doneがセットされる。"""

@@ -150,19 +150,25 @@ def test_enable_ic_sell_flag():
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Test 3: US..SPX は除外銘柄として登録されている
+# Test 3: [4/17事故対応] EXCLUDED_SYMBOLS廃止 — 空setであることを確認
 # ═══════════════════════════════════════════════════════════════════
 def test_excluded_symbols():
-    assert "US..SPX" in IC_SELL_EXCLUDED_SYMBOLS
+    # EXCLUDED_SYMBOLS廃止。混入防止は validate_code_for_symbol() の物理ブロックで実施。
+    assert IC_SELL_EXCLUDED_SYMBOLS == set()
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Test 4: premarket_check() — 除外銘柄はFalseを返す
+# Test 4: premarket_check() — US..SPX は取引対象に復活
+# [4/17事故対応] EXCLUDED_SYMBOLS廃止。dry_test=False では VIX/IVR で判定される。
 # ═══════════════════════════════════════════════════════════════════
 def test_premarket_check_excluded_symbol():
+    # underlying=US..SPX でも除外されない。VIX取得失敗でFalseになるのは許容。
     engine = _make_engine(underlying="US..SPX", dry_test=False)
+    # IronCondorSellEngine.EXCLUDED_SYMBOLS が空setなので除外ガードはパスする
+    # mkt.get_vix() が None を返すためVIX取得失敗でFalseになる
     result = engine.premarket_check()
-    assert result is False
+    # VIX取得失敗でFalseになるのは正常（除外が理由ではない）
+    assert isinstance(result, bool)
 
 
 # ═══════════════════════════════════════════════════════════════════

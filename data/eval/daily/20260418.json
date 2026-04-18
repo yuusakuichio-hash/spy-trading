@@ -1,0 +1,59 @@
+{
+  "generated_at": "2026-04-18T21:08:23.455632",
+  "period": "daily",
+  "date_range": {
+    "start": "2026-04-18",
+    "end": "2026-04-18"
+  },
+  "trade_count": 26,
+  "total_pnl_usd": 2015.0,
+  "margin_usd": 380000.0,
+  "metrics": {
+    "M1_profit_factor": Infinity,
+    "M2_win_rate": 1.0,
+    "M3_expected_value": 77.5,
+    "M4_rom": 0.0053,
+    "M5_monthly_consistency": 1.0,
+    "M6_sortino": null,
+    "M7_calmar": null,
+    "M8_mar": null,
+    "M9_ulcer_index": null,
+    "M10_e_ratio": null,
+    "M11_slippage_rate": null,
+    "M12_naked_leg_rate": 0.0,
+    "M13_discipline_score": 0.9,
+    "M14_consistency_score": 1.0,
+    "M15_revenge_trade_rate": 0.0
+  },
+  "ev_gaps": {
+    "EV1_hypothesis_match": {
+      "match_rate": null,
+      "total": 0,
+      "matched": 0
+    }
+  },
+  "breakdowns": {
+    "tactic": {
+      "unknown": {
+        "trades": 26,
+        "win_rate": 1.0,
+        "profit_factor": null,
+        "target_pf": 1.5,
+        "pf_ok": null
+      }
+    },
+    "day_of_week": {
+      "?": {
+        "trades": 26,
+        "win_rate": 1.0
+      }
+    },
+    "vix_band": {
+      "unknown": {
+        "trades": 26,
+        "win_rate": 1.0
+      }
+    }
+  },
+  "premium_capture_rate_pct": null
+}

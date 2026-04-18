@@ -1,0 +1,91 @@
+{
+  "generated_at": "2026-04-18T21:06:57.458556",
+  "period": "daily",
+  "date_range": {
+    "start": "2026-04-17",
+    "end": "2026-04-17"
+  },
+  "trade_count": 132,
+  "total_pnl_usd": 8309.24,
+  "margin_usd": 380000.0,
+  "metrics": {
+    "M1_profit_factor": 2.763,
+    "M2_win_rate": 0.4394,
+    "M3_expected_value": 37.2,
+    "M4_rom": 0.0219,
+    "M5_monthly_consistency": 1.0,
+    "M6_sortino": null,
+    "M7_calmar": null,
+    "M8_mar": null,
+    "M9_ulcer_index": null,
+    "M10_e_ratio": 8.586,
+    "M11_slippage_rate": null,
+    "M12_naked_leg_rate": 0.0,
+    "M13_discipline_score": 0.9129,
+    "M14_consistency_score": 1.0,
+    "M15_revenge_trade_rate": 0.206
+  },
+  "ev_gaps": {
+    "EV1_hypothesis_match": {
+      "match_rate": 0.4394,
+      "total": 132,
+      "matched": 58
+    }
+  },
+  "breakdowns": {
+    "tactic": {
+      "standard": {
+        "trades": 1,
+        "win_rate": 1.0,
+        "profit_factor": null,
+        "target_pf": 1.5,
+        "pf_ok": null
+      },
+      "cs_sell": {
+        "trades": 35,
+        "win_rate": 0.5143,
+        "profit_factor": 9.472,
+        "target_pf": 1.5,
+        "pf_ok": true
+      },
+      "straddle_buy": {
+        "trades": 23,
+        "win_rate": 0.3478,
+        "profit_factor": 3.266,
+        "target_pf": 1.5,
+        "pf_ok": true
+      },
+      "orb_buy": {
+        "trades": 20,
+        "win_rate": 0.25,
+        "profit_factor": 1.981,
+        "target_pf": 1.5,
+        "pf_ok": true
+      },
+      "unknown": {
+        "trades": 53,
+        "win_rate": 0.4906,
+        "profit_factor": 1.475,
+        "target_pf": 1.5,
+        "pf_ok": false
+      }
+    },
+    "day_of_week": {
+      "Fri": {
+        "trades": 132,
+        "win_rate": 0.4394
+      }
+    },
+    "vix_band": {
+      "15-20": {
+        "trades": 111,
+        "win_rate": 0.4234
+      },
+      "20-30": {
+        "trades": 21,
+        "win_rate": 0.5238
+      }
+    }
+  },
+  "premium_capture_rate_pct": 779.09
+}
