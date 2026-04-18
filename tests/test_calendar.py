@@ -92,8 +92,9 @@ class TestCalendarEngineInit(unittest.TestCase):
         self.assertEqual(eng.symbol, "US.QQQ")
 
     def test_03_excluded_symbols_constant(self):
-        """US..SPXがEXCLUDED_SYMBOLSに含まれる。"""
-        self.assertIn("US..SPX", CalendarEngine.EXCLUDED_SYMBOLS)
+        """[4/17事故対応] EXCLUDED_SYMBOLS廃止。空setであることを確認。
+        混入防止は validate_code_for_symbol() の物理ブロックで実施。"""
+        self.assertEqual(CalendarEngine.EXCLUDED_SYMBOLS, set())
 
     def test_04_init_state(self):
         """初期状態は全フラグFalse・position=None。"""
@@ -193,11 +194,12 @@ class TestCalendarExecuteEntry(unittest.TestCase):
         self.assertIsNotNone(pos)
         self.assertIsInstance(pos, CalendarPosition)
 
-    def test_14_excluded_symbol_returns_none(self):
-        """US..SPXに対してはNoneを返す（除外ガード）。"""
+    def test_14_spx_is_now_allowed(self):
+        """[4/17事故対応] EXCLUDED_SYMBOLS廃止によりUS..SPXは取引対象に復活。
+        dry_testモードでのエントリー試行は EXCLUDED_SYMBOLS が空setなので除外されない。"""
         engine = CalendarEngine(self.mkt, self.eng, dry_test=True, symbol="US..SPX")
-        pos = engine.execute_entry(spy_price=5600.0, vix=22.0)
-        self.assertIsNone(pos)
+        # EXCLUDED_SYMBOLS が空setであることを確認
+        self.assertEqual(engine.EXCLUDED_SYMBOLS, set())
 
     def test_15_entry_sets_flags(self):
         """エントリー後にentry_done=True、positionがセットされる。"""

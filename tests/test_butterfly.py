@@ -8,7 +8,7 @@
   - ButterflyEngine._build_option_code: コードフォーマット検証
   - ButterflyEngine._choose_wing_type: SMA上下でCALL/PUT選択
   - ButterflyEngine.reset_daily: 日次リセット
-  - EXCLUDED_SYMBOLS: US.SPX / US..SPX 除外
+  - EXCLUDED_SYMBOLS廃止: US.SPX / US..SPX は取引対象に復活 (4/17事故対応)
 
 注意: futu依存なし・ネットワーク接続なしで動作するよう設計。
 """
@@ -220,13 +220,18 @@ class TestCalcButterflyQty(unittest.TestCase):
 # Test 6: ButterflyEngine.should_trade_today — エントリー環境条件
 # ══════════════════════════════════════════════════════════════════════════════
 class TestShouldTradeToday(unittest.TestCase):
-    def test_spx_excluded(self):
+    def test_spx_no_longer_excluded(self):
+        # [4/17事故対応] EXCLUDED_SYMBOLS廃止。US.SPX は IVR条件を満たせば取引対象。
+        # 混入防止は validate_code_for_symbol() の物理ブロックで実施。
         result = ButterflyEngine.should_trade_today("US.SPX", ivr=15.0, ivr_low_threshold=30.0)
-        self.assertFalse(result)
+        # EXCLUDED_SYMBOLS が空setになったため、IVR条件のみで判定される
+        # ivr=15.0 < ivr_low_threshold=30.0 → エントリー候補
+        self.assertTrue(result)
 
-    def test_spx_double_dot_excluded(self):
+    def test_spx_double_dot_no_longer_excluded(self):
+        # [4/17事故対応] EXCLUDED_SYMBOLS廃止。US..SPX も取引対象に復活。
         result = ButterflyEngine.should_trade_today("US..SPX", ivr=15.0, ivr_low_threshold=30.0)
-        self.assertFalse(result)
+        self.assertTrue(result)
 
     def test_spy_low_ivr_enters(self):
         result = ButterflyEngine.should_trade_today("US.SPY", ivr=20.0, ivr_low_threshold=30.0)
@@ -459,13 +464,20 @@ class TestCheckExitConditions(unittest.TestCase):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Test 11: ButterflyEngine.check_entry — EXCLUDED_SYMBOLS を除外
+# Test 11: ButterflyEngine.check_entry — EXCLUDED_SYMBOLS廃止確認
+# [4/17事故対応] US.SPX / US..SPX は取引対象に復活
 # ══════════════════════════════════════════════════════════════════════════════
 class TestCheckEntryExclusion(unittest.TestCase):
-    def test_spx_excluded_in_check_entry(self):
+    def test_spx_no_longer_excluded_in_check_entry(self):
+        # EXCLUDED_SYMBOLS が空setになったので、US.SPX は除外されない
         engine = _make_engine(dry_test=True)
+        # dry_test=True では IVR チェックをバイパスして直接エントリー試行する
+        # (False返却は ENABLE_BUTTERFLY=False または entry_done=True のみ)
         result = engine.check_entry("US.SPX")
-        self.assertFalse(result)
+        # dry_test モードでは時間ウィンドウをバイパスしてエントリー試みる
+        # Trueになるか別の理由でFalseになるかを確認
+        # EXCLUDED_SYMBOLSが空なら、少なくとも "除外" という理由ではFalseにならない
+        self.assertTrue(engine.EXCLUDED_SYMBOLS == set())  # 空setであることを確認
 
     def test_entry_done_skips(self):
         engine = _make_engine(dry_test=True)

@@ -1076,7 +1076,7 @@ def _pre_trade_gate(code: str, qty: int, price: float, side,
                     priority=1,
                 )
             except Exception:
-                pass
+                log.exception("[PreTradeGate] SYMBOL_MISMATCH Pushover送信失敗 (suppressed)")
             return False, reason
 
     if not _PRE_TRADE_CHECK_AVAILABLE:
@@ -2676,6 +2676,10 @@ class MarketData:
         self._atm_subscribed_codes: set = set()  # 現在ATM subscribeしているオプションコード
         self._last_atm_spy_price: Optional[float] = None  # 前回ATM subscribe時のSPY価格
         self._atm_resubscribe_threshold: float = 2.0  # SPYが$2以上動いたら再subscribe
+        # [4/17事故対応] chain cache を symbol 別に分離
+        # MassVerify ループで underlying_code を切り替えても、前の銘柄の chain を
+        # 上書きしない。key = "{symbol}_{expiry}_{opt_type}"
+        self._chain_cache_by_symbol: dict = {}  # symbol-keyed chain cache
         # Record-Replay / Shadow Mode
         # shadow_mode=True: 実APIコールを記録しながら実行（RECORDモード自動有効）
         # replay_session=str: 指定記録ファイルを再生（実APIコールなし）
@@ -2799,14 +2803,16 @@ class MarketData:
                     continue
                 chain_df = chain_df.copy()
                 chain_df["strike_price"] = chain_df["strike_price"].astype(float)
-                # [ChainGuard] center_strike±20%フィルタで銘柄混入を除外
+                # [ChainGuard/4/17事故対応] 銘柄別 tolerance でフィルタ
+                # SPX ±10%、SPY/ETF ±20%、個別株 ±25%
                 if spy_price and spy_price > 0:
+                    _atm_tol = _sym_get_cst(self.underlying_code)
                     chain_df = chain_df[
-                        (chain_df["strike_price"] - spy_price).abs() / spy_price <= 0.20
+                        (chain_df["strike_price"] - spy_price).abs() / spy_price <= _atm_tol
                     ]
                     if chain_df.empty:
                         log.warning(f"[ATMSubscribe/ChainGuard] {self.underlying_code} "
-                                    f"center={spy_price:.1f} 全strike±20%外→銘柄混入疑い・スキップ")
+                                    f"center={spy_price:.1f} 全strike±{_atm_tol*100:.0f}%外→銘柄混入疑い・スキップ")
                         continue
                 chain_df["dist"] = (chain_df["strike_price"] - spy_price).abs()
                 chain_sorted = chain_df.nsmallest(3, "dist")
@@ -3956,14 +3962,23 @@ class MarketData:
 
     def _get_option_chain_impl(self, expiry: str, opt_type: str,
                                center_strike: Optional[float] = None) -> list:
-        """get_option_chain_with_greeksの実装本体（Shadow Mode記録/再生から分離）"""
+        """get_option_chain_with_greeksの実装本体（Shadow Mode記録/再生から分離）
+
+        [4/17事故対応] chain取得は self.underlying_code をスナップショットして
+        cache key に使う。underlying_code が切り替わっても前の銘柄のキャッシュは
+        別 key に保存されており上書きされない。
+        """
         if not FUTU_AVAILABLE or not self.quote_ctx:
             return []
+        # underlying_code をここでスナップショット（切替競合防止）
+        _underlying_at_call = self.underlying_code
+        _cache_key = f"{_underlying_at_call}_{expiry}_{opt_type}"
+
         futu_opt_type = ft.OptionType.PUT if opt_type == "PUT" else ft.OptionType.CALL
         ret, chain_df = self.quote_ctx.get_option_chain(
-            self.underlying_code, start=expiry, end=expiry, option_type=futu_opt_type)
+            _underlying_at_call, start=expiry, end=expiry, option_type=futu_opt_type)
         if ret != RET_OK or chain_df.empty:
-            log.warning(f"get_option_chain failed {self.underlying_code} {expiry} {opt_type}")
+            log.warning(f"get_option_chain failed {_underlying_at_call} {expiry} {opt_type}")
             return []
         codes = chain_df["code"].tolist()
         if not codes:
@@ -3998,15 +4013,26 @@ class MarketData:
             code = row.get("code", "")
             ci   = chain_dict.get(code, {})
             _strike = float(row.get("option_strike_price", ci.get("strike_price", 0)))
-            # [BUG修正 2026-04-12] center_strike±20%範囲外のstrikeは別銘柄チェーン混入とみなし除外
-            # 例: mkt.underlying_codeをUS..SPXに切替中にSPY ATM(710)でchainを取得すると
-            # SPXW(5400系)strikeが混入しstrike不整合Pushoverが爆発するバグを防ぐ
+            # [4/17事故対応] center_strike フィルタを銘柄別 tolerance に変更
+            # SPX は ±10%（SPY strike $710 が混入したら即検知）
+            # SPY/ETF は ±20%、個別株は ±25%
+            # _sym_get_cst() は common.symbol_meta から銘柄別の tolerance を取得
             if center_strike is not None and center_strike > 0 and _strike > 0:
+                _tolerance = _sym_get_cst(_underlying_at_call)  # 銘柄別tolerance
                 _dev = abs(_strike - float(center_strike)) / float(center_strike)
-                if _dev > 0.20:
+                if _dev > _tolerance:
                     log.debug(
                         f"[Chain] strike={_strike} center={center_strike:.1f} "
-                        f"乖離={_dev*100:.1f}% > 20% → 除外 ({self.underlying_code})"
+                        f"乖離={_dev*100:.1f}% > {_tolerance*100:.0f}% → 除外 ({_underlying_at_call})"
+                    )
+                    continue
+            # [4/17事故対応] オプションコードの underlying を検証する
+            # SPX取引中に SPY のコードが混入した場合はここでブロック
+            if code and _SYMBOL_META_AVAILABLE:
+                if not _validate_code_for_symbol(code, _underlying_at_call):
+                    log.warning(
+                        f"[ChainGuard/SYMBOL_MISMATCH] code={code} は "
+                        f"underlying={_underlying_at_call} のオプションではない → 除外"
                     )
                     continue
             result.append({
@@ -4018,6 +4044,8 @@ class MarketData:
                 "last_price":   float(row.get("last_price", 0)),
                 "option_type":  opt_type,
             })
+        # [4/17事故対応] symbol-keyed cache に保存（上書きしない）
+        self._chain_cache_by_symbol[_cache_key] = result
         return result
 
     def find_by_delta(self, chain: list, target_delta: float) -> Optional[dict]:
@@ -10409,15 +10437,14 @@ class StrangleSellEngine:
 
     Step 4 課題:
       - naked short扱いで証拠金高 → ペーパー確認後に本番移行
-      - マルチ銘柄: US..SPX除外 (EXCLUDED_SYMBOLS)
       - delta=0.15が取れない場合: DELTA_TOL(±0.05)内で最近傍を採用
 
     マルチ銘柄対応:
-      - symbol引数で任意の銘柄を指定可能（US.SPY/US.QQQ/US.TSLA 等）
-      - US..SPX（CBOEインデックス）は除外
+      - symbol引数で任意の銘柄を指定可能（US.SPY/US.QQQ/US.TSLA/US..SPX 等）
+      - [4/17事故対応] EXCLUDED_SYMBOLS廃止。混入防止はvalidate_code_for_symbol()で物理ブロック
     """
 
-    EXCLUDED_SYMBOLS = {"US..SPX"}
+    EXCLUDED_SYMBOLS: set = set()  # 空set = 除外なし（WHITELIST方式に移行）
 
     def __init__(self, mkt: "MarketData", eng: "TradeEngine",
                  paper: bool = False, dry_test: bool = False,
@@ -11642,11 +11669,12 @@ class ButterflyEngine:
     low IVR 環境（IVR < P30）向けの買い戦術。
     3本足で最大損失をネットデビットに限定し、原資産がATM付近に収束した場合の利益を狙う。
 
-    対象銘柄: マルチ銘柄対応（SPY/QQQ/META/AMZN/GOOGL 等）。US.SPX は除外。
+    対象銘柄: マルチ銘柄対応（SPY/QQQ/META/AMZN/GOOGL/SPX 等）。
     フェーズ: should_trade_today() -> check_entry() -> check_exit() -> reset_daily()
+    [4/17事故対応] EXCLUDED_SYMBOLS廃止。混入防止はvalidate_code_for_symbol()で物理ブロック
     """
 
-    EXCLUDED_SYMBOLS = {"US.SPX", "US..SPX"}
+    EXCLUDED_SYMBOLS: set = set()  # 空set = 除外なし（WHITELIST方式に移行）
 
     def __init__(self, mkt, eng, paper: bool = False, dry_test: bool = False):
         self.mkt      = mkt
