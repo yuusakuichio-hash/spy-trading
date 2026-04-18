@@ -327,6 +327,15 @@ autofix:
   # 1=ARMED (実際にrestart/stop実行)
   dry_run_default: 0
 
+  # Two-Man Rule: Level3/4 のアクションは人間の承認が必要
+  # ARMED=1 でも Level3/4 は pending_approval: true にして
+  # Pushover 応答待ちを挟む。タイムアウト後は自動実行しない（安全側）。
+  two_man_rule:
+    enabled: true
+    min_level: 3              # Level3 以上は承認必須
+    approval_timeout_sec: 300 # 5分応答なしで実行キャンセル（自動実行しない）
+    pushover_priority: 1      # 承認要求は priority=1 (high)
+
   # GitHub Issue作成時のリポジトリ
   github_repo: yuusakuichio-hash/spy-trading
   github_label_todo: todo

@@ -127,17 +127,64 @@ DEFAULT_LIMITS: dict[str, RiskLimits] = {
 }
 
 
-def determine_phase(capital_usd: float, paper: bool = False) -> str:
-    """資本規模からPhase判定"""
+def determine_phase(
+    capital_usd: float,
+    paper: bool = False,
+    trade_count: int = 0,
+    monthly_pnl_usd: float | None = None,
+    max_dd_pct: float | None = None,
+) -> str:
+    """資本規模 + 実績条件からPhase判定する（自動遷移対応版）。
+
+    CLAUDE.md §本番移行判断 (移行トリガー):
+    - 20トレード完了
+    - 月次プラス
+    - DD < 20%
+    を全て満たした場合のみ P1_live_small に昇格する。
+    条件未達の場合は資本が $25K 超でも P0_paper に留まる。
+
+    Args:
+        capital_usd:      口座残高 (USD)
+        paper:            明示的な paper モード override
+        trade_count:      累計完了トレード数 (0 = 未集計)
+        monthly_pnl_usd:  直近月次PnL (None = 未集計)
+        max_dd_pct:       最大DD% (正値。例: 15.0 = 15%DD。None = 未集計)
+
+    Returns:
+        Phase文字列 "P0_paper" / "P1_live_small" / "P2_live_mid" /
+                   "P3_live_large" / "P4_fund"
+    """
     if paper:
         return "P0_paper"
+
+    # P0→P1 昇格条件チェック（全条件必須）
+    # 条件未集計 (None) は未達扱い（安全側）
+    _trade_ok = trade_count >= 20
+    _pnl_ok = (monthly_pnl_usd is not None and monthly_pnl_usd > 0)
+    _dd_ok = (max_dd_pct is not None and max_dd_pct < 20.0)
+    _promotion_ready = _trade_ok and _pnl_ok and _dd_ok
+
     if capital_usd < 25_000:
+        # 資本 < $25K は条件関係なく P1_live_small（PDT制限下）
         return "P1_live_small"
+
+    # 資本 >= $25K だが昇格条件未達 → P0_paper で留まる
+    if not _promotion_ready:
+        import logging as _log
+        _log.getLogger(__name__).info(
+            f"[PhaseTransition] P0→P1 昇格条件未達: "
+            f"trades={trade_count}(需20), "
+            f"monthly_pnl={monthly_pnl_usd}(要>0), "
+            f"max_dd={max_dd_pct}%(要<20%) — P0_paper維持"
+        )
+        return "P0_paper"
+
+    # 昇格条件達成 → 資本額でフェーズ決定
     if capital_usd < 100_000:
-        return "P2_live_mid"
+        return "P1_live_small"
     if capital_usd < 1_000_000:
-        return "P3_live_large"
-    return "P4_fund"
+        return "P2_live_mid"
+    return "P3_live_large"
 
 
 def load_limits(phase: str | None = None, capital_usd: float = 0, paper: bool = False) -> RiskLimits:

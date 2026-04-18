@@ -610,34 +610,71 @@ def dispatch(fired: dict, cfg: dict) -> dict:
             log(f"[dispatch] builder_workflow: {bw}")
 
     elif level == 3:
-        atype = act_cfg.get("type", "stop_bot")
-        if atype == "stop_bot":
-            ar = action_stop_bot(cfg, rule, dry_run)
-        elif atype == "restart_bot":
-            pre = act_cfg.get("pre_checks", [])
-            ok, notes = run_pre_checks(pre) if pre else (True, [])
-            if notes:
-                body.append("pre_checks: " + "; ".join(notes))
-            ar = action_restart_bot(cfg, rule, dry_run) if ok else {"status": "SKIP_PRECHECK"}
-        else:
-            ar = {"type": atype, "status": "UNKNOWN_ACTION"}
-        body.append(f"action: {ar}")
-        if act_cfg.get("create_issue"):
-            iss = create_github_issue(
-                cfg,
-                f"[Atlas/ALERT] {rid}: {desc}",
-                "\n".join(body) + f"\n\n時刻: {datetime.datetime.now(JST).isoformat()}",
-                label="todo",
+        # Two-Man Rule: Level3 は Pushover 承認待ちに変更。タイムアウトでキャンセル。
+        tmr_cfg = cfg.get("autofix", {}).get("two_man_rule", {})
+        tmr_enabled = tmr_cfg.get("enabled", True) and not dry_run
+        tmr_min_level = tmr_cfg.get("min_level", 3)
+        if tmr_enabled and level >= tmr_min_level:
+            # 承認要求Pushoverを送って実行ブロック
+            approval_body = (
+                f"[Two-Man Rule] Level{level} アクション承認要求\n"
+                f"rule: {rid}\n"
+                f"desc: {desc}\n"
+                f"action: {act_cfg.get('type', 'stop_bot')}\n"
+                f"\n実行するには GitHub Issue にコメント 'APPROVE {rid}' または\n"
+                f"ntfy.sh/spxbot-hub-yuusaku2026 に 'APPROVE {rid}' を送信してください。\n"
+                f"応答なしの場合はアクションをキャンセルします（安全側）。"
             )
-            body.append(f"issue: {iss}")
-        pushover(f"[Atlas/ALERT] {rid}", "\n".join(body),
-                 priority=1, token=PUSHOVER_ALERT_TOKEN)
-        result["action"] = ar
+            pushover(f"[Atlas/APPROVAL_REQUIRED] {rid}", approval_body,
+                     priority=1, token=PUSHOVER_ALERT_TOKEN)
+            # GitHub Issue でトレースを残す
+            if act_cfg.get("create_issue"):
+                create_github_issue(
+                    cfg,
+                    f"[Atlas/APPROVAL_REQUIRED] L{level} {rid}: {desc}",
+                    approval_body + f"\n\n時刻: {datetime.datetime.now(JST).isoformat()}",
+                    label="todo",
+                )
+            log(f"[Two-Man Rule] Level{level} アクションをブロック: {rid} — 承認待ち")
+            result["action"] = {"type": "two_man_rule_blocked", "rule_id": rid, "status": "PENDING_APPROVAL"}
+        else:
+            atype = act_cfg.get("type", "stop_bot")
+            if atype == "stop_bot":
+                ar = action_stop_bot(cfg, rule, dry_run)
+            elif atype == "restart_bot":
+                pre = act_cfg.get("pre_checks", [])
+                ok, notes = run_pre_checks(pre) if pre else (True, [])
+                if notes:
+                    body.append("pre_checks: " + "; ".join(notes))
+                ar = action_restart_bot(cfg, rule, dry_run) if ok else {"status": "SKIP_PRECHECK"}
+            else:
+                ar = {"type": atype, "status": "UNKNOWN_ACTION"}
+            body.append(f"action: {ar}")
+            if act_cfg.get("create_issue"):
+                iss = create_github_issue(
+                    cfg,
+                    f"[Atlas/ALERT] {rid}: {desc}",
+                    "\n".join(body) + f"\n\n時刻: {datetime.datetime.now(JST).isoformat()}",
+                    label="todo",
+                )
+                body.append(f"issue: {iss}")
+            pushover(f"[Atlas/ALERT] {rid}", "\n".join(body),
+                     priority=1, token=PUSHOVER_ALERT_TOKEN)
+            result["action"] = ar
 
     elif level == 4:
+        # Two-Man Rule: Level4 も承認待ち (halt_and_wait は別途即実行してからブロック)
+        tmr_cfg = cfg.get("autofix", {}).get("two_man_rule", {})
+        tmr_enabled = tmr_cfg.get("enabled", True) and not dry_run
+        # Level4 は halt は実行するが、追加の破壊的操作は承認待ち
         ar = action_halt_and_wait(cfg, rule, dry_run)
         body.append(f"action: {ar}")
         body.append("→ 手動指示待ち。解除: data/atlas_state.json の manual_halt を削除")
+        if tmr_enabled:
+            body.append(
+                f"\n[Two-Man Rule] Level4 — halt実行済み。追加操作は承認が必要。\n"
+                f"承認: GitHub Issue または ntfy に 'APPROVE {rid}' を送信"
+            )
         if act_cfg.get("create_issue"):
             iss = create_github_issue(
                 cfg,

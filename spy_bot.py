@@ -148,7 +148,7 @@ def get_usdjpy_rate() -> float:
             if age_sec < _USDJPY_CACHE_TTL_SEC and cached.get("rate", 0) > 50:
                 return float(cached["rate"])
     except Exception:
-        pass
+        log.exception("[spy_bot] suppressed exception (L150)")  # AUDIT_FIX: was pass
 
     # 前日キャッシュ値（フォールバック用）
     _stale_rate: float = 0.0
@@ -157,7 +157,7 @@ def get_usdjpy_rate() -> float:
             _cached = json.loads(_USDJPY_CACHE_FILE.read_text(encoding="utf-8"))
             _stale_rate = float(_cached.get("rate", 0))
     except Exception:
-        pass
+        log.exception("[spy_bot] suppressed exception (L159)")  # AUDIT_FIX: was pass
 
     # 2. yfinance で取得
     try:
@@ -170,7 +170,7 @@ def get_usdjpy_rate() -> float:
                 _save_usdjpy_cache(_rate)
                 return _rate
     except Exception:
-        pass
+        log.exception("[spy_bot] suppressed exception (L172)")  # AUDIT_FIX: was pass
 
     # 3. Finnhub で取得
     try:
@@ -185,7 +185,7 @@ def get_usdjpy_rate() -> float:
                 _save_usdjpy_cache(_jpy)
                 return _jpy
     except Exception:
-        pass
+        log.exception("[spy_bot] suppressed exception (L187)")  # AUDIT_FIX: was pass
 
     # 4. 全取得失敗 → 前日値フォールバック + Pushover警告
     _fallback = _stale_rate if _stale_rate > 50 else _USDJPY_FALLBACK
@@ -206,7 +206,7 @@ def get_usdjpy_rate() -> float:
             timeout=5,
         )
     except Exception:
-        pass
+        log.exception("[spy_bot] suppressed exception (L208)")  # AUDIT_FIX: was pass
     return _fallback
 
 
@@ -215,12 +215,12 @@ def _save_usdjpy_cache(rate: float) -> None:
     try:
         _USDJPY_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
         _USDJPY_CACHE_FILE.write_text(
-            json.dumps({"rate": rate, "ts": time.time(), "date": datetime.datetime.now().isoformat()},
+            json.dumps({"rate": rate, "ts": time.time(), "date": datetime.datetime.now(JST).isoformat()},
                        ensure_ascii=False),
             encoding="utf-8",
         )
     except Exception:
-        pass
+        log.exception("[spy_bot] suppressed exception (L222)")  # AUDIT_FIX: was pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -352,8 +352,8 @@ MULTI_SYMBOL_MIN_SCORE  = 30.0  # この閾値以上のスコアのみ追加銘�
 # ペーパーモードでは全銘柄×全戦術を並列実行して1日50〜100件のトレードを生成する。
 # 銘柄スコアフィルタなし・各銘柄に複数戦術を同時割当・PortfolioRisk制限なし。
 PAPER_MASS_VERIFY_MODE = True   # Falseにすると従来の5銘柄1戦術モードに戻る
-PAPER_MASS_VERIFY_SYMBOLS = [   # 大量検証対象の全10銘柄 (US..SPXはSPXW混入源のため除外)
-    "US.SPY", "US.QQQ", "US.IWM",               # ETF (US..SPXはSPXWと別管理)
+PAPER_MASS_VERIFY_SYMBOLS = [   # 大量検証対象の全11銘柄 (US..SPX対応復活・混入は物理ガードで防止)
+    "US.SPY", "US..SPX", "US.QQQ", "US.IWM",    # ETF + CBOEインデックス
     "US.TSLA", "US.NVDA", "US.AAPL",             # 個別株 (月水金0DTE)
     "US.MSFT", "US.AMZN", "US.META", "US.GOOGL", # 個別株
 ]
@@ -982,6 +982,34 @@ except ImportError as _e:
         pass
 
 
+# ── Symbol Meta + Option Code (銘柄混入物理防止) ──────────────────────────────
+_SYMBOL_META_AVAILABLE = False
+try:
+    from common.symbol_meta import (
+        get_meta as _sym_get_meta,
+        get_center_strike_tolerance as _sym_get_cst,
+        is_allowed as _sym_is_allowed,
+        ALLOWED_SYMBOLS as _ALLOWED_SYMBOLS,
+    )
+    from common.option_code import (
+        validate_code_for_symbol as _validate_code_for_symbol,
+        build_option_code as _build_option_code_new,
+        round_strike as _round_strike_new,
+    )
+    _SYMBOL_META_AVAILABLE = True
+    log.info("[Module] common.symbol_meta + common.option_code ロード成功 (SPX混入物理防止有効)")
+except ImportError as _e:
+    log.warning(f"[Module] common.symbol_meta/option_code ロード失敗 → 混入検知無効: {_e}")
+    def _sym_get_cst(symbol): return 0.20
+    def _sym_is_allowed(symbol): return True
+    def _validate_code_for_symbol(code, expected_symbol): return True
+    def _build_option_code_new(symbol, expiry, strike, opt_type, use_0dte=True):
+        ticker   = symbol.replace("US.", "").replace(".", "")
+        yy_mm_dd = expiry.replace("-", "")[2:]
+        cp       = "C" if opt_type.upper() in ("CALL", "C") else "P"
+        return f"US.{ticker}{yy_mm_dd}{cp}{int(round(strike * 1000)):08d}"
+    def _round_strike_new(symbol, price): return round(price)
+
 # ── Pre-Trade Check (Defense-in-Depth 誤発注→全損阻止) ─────────────────────
 _PRE_TRADE_CHECK_AVAILABLE = False
 try:
@@ -1023,12 +1051,34 @@ def _pre_trade_gate(code: str, qty: int, price: float, side,
                     est_margin: float = 0, capital_usd: float = 0,
                     open_positions: int = 0, open_margin_total: float = 0,
                     symbol_margin: float = 0, paper: bool = True,
-                    bid: float = 0, ask: float = 0) -> tuple[bool, str]:
+                    bid: float = 0, ask: float = 0,
+                    expected_symbol: Optional[str] = None) -> tuple[bool, str]:
     """全 place_order 呼び出し直前に呼ぶ防護gate。
+
+    [4/17事故対応] expected_symbol を渡すと validate_code_for_symbol() で
+    銘柄混入を物理ブロックする。SPX取引中にSPY strikeが混入した場合も確実に検知。
 
     Returns: (allow: bool, reason: str)
     違反時: ログ出力 + 必要時のみPushover通知
     """
+    # [4/17事故防止] 銘柄コードバリデーション — 最優先ゲート
+    if expected_symbol and _SYMBOL_META_AVAILABLE:
+        if not _validate_code_for_symbol(code, expected_symbol):
+            reason = (
+                f"銘柄混入検知: code={code} は expected_symbol={expected_symbol} "
+                f"のオプションではない (4/17事故防止ブロック)"
+            )
+            log.error(f"[PreTradeGate/SYMBOL_MISMATCH] {reason}")
+            try:
+                pushover_alert(
+                    "[Atlas/CRITICAL] 銘柄混入ブロック",
+                    reason,
+                    priority=1,
+                )
+            except Exception:
+                pass
+            return False, reason
+
     if not _PRE_TRADE_CHECK_AVAILABLE:
         return False, "pre_trade_check unavailable — blocking order (fail safe)"
 
@@ -1039,7 +1089,7 @@ def _pre_trade_gate(code: str, qty: int, price: float, side,
             if "BUY" in side_val:
                 side_str = "BUY"
         except Exception:
-            pass
+            log.exception("[spy_bot] suppressed exception (L1041)")  # AUDIT_FIX: was pass
 
         ctx = _PTOrderContext(
             symbol=_extract_symbol_from_code(code),
@@ -1069,7 +1119,7 @@ def _pre_trade_gate(code: str, qty: int, price: float, side,
                         priority=1,
                     )
                 except Exception:
-                    pass
+                    log.exception("[spy_bot] suppressed exception (L1071)")  # AUDIT_FIX: was pass
             return False, result.reason
         return True, "ok"
     except Exception as _e:
@@ -1229,7 +1279,7 @@ def load_pnl() -> list:
         if PNL_FILE.exists():
             return json.loads(PNL_FILE.read_text()).get("trades", [])
     except Exception:
-        pass
+        log.exception("[spy_bot] suppressed exception (L1231)")  # AUDIT_FIX: was pass
     return []
 
 
@@ -1583,7 +1633,7 @@ def load_failures() -> int:
         if FAILURES_FILE.exists():
             return int(json.loads(FAILURES_FILE.read_text()).get("count", 0))
     except Exception:
-        pass
+        log.exception("[spy_bot] suppressed exception (L1585)")  # AUDIT_FIX: was pass
     return 0
 
 
@@ -1591,7 +1641,7 @@ def save_failures(count: int):
     try:
         FAILURES_FILE.write_text(json.dumps({"count": count}))
     except Exception:
-        pass
+        log.exception("[spy_bot] suppressed exception (L1593)")  # AUDIT_FIX: was pass
 
 
 def get_capital_phase(cash_usd: float) -> dict:
@@ -1805,7 +1855,7 @@ def calc_category_stats(pnl_file: Optional[Path] = None) -> dict:
                     weekdays[wd] = _empty_bucket()
                 _update_bucket(weekdays[wd], pnl)
             except Exception:
-                pass
+                log.exception("[spy_bot] suppressed exception (L1807)")  # AUDIT_FIX: was pass
             # 戦術別
             strat = t.get("strategy") or t.get("tactic") or "CS"
             if strat not in strategies:
@@ -1952,7 +2002,7 @@ def check_memory_usage():
             data["last"] = datetime.datetime.now(ET).isoformat()
             MEMORY_WARN_FILE.write_text(json.dumps(data))
     except Exception:
-        pass
+        log.exception("[spy_bot] suppressed exception (L1954)")  # AUDIT_FIX: was pass
 
 
 # ── VIX spike cache (persist across sessions) ─────────────────────────────────
@@ -1991,7 +2041,7 @@ def get_yesterday_vix() -> Optional[float]:
             data = json.loads(VIX_SPIKE_FILE.read_text())
             return float(data.get("vix", 0)) or None
     except Exception:
-        pass
+        log.exception("[spy_bot] suppressed exception (L1993)")  # AUDIT_FIX: was pass
     return None
 
 
@@ -2017,7 +2067,7 @@ def load_ivr_cache() -> Optional[float]:
             if (datetime.datetime.now(ET).date() - cache_date).days <= 1:
                 return float(entry["ivr"])
     except Exception:
-        pass
+        log.exception("[spy_bot] suppressed exception (L2019)")  # AUDIT_FIX: was pass
     return None
 
 
@@ -2034,7 +2084,7 @@ def load_ivr_history() -> list:
             if "ivr" in data:
                 return [float(data["ivr"])]
     except Exception:
-        pass
+        log.exception("[spy_bot] suppressed exception (L2036)")  # AUDIT_FIX: was pass
     return []
 
 
@@ -2423,7 +2473,7 @@ def is_notrade_today() -> bool:
                         log.info(f"No-trade: {ev['keyword']}")
                         return True
         except Exception:
-            pass
+            log.exception("[spy_bot] suppressed exception (L2425)")  # AUDIT_FIX: was pass
     return False
 
 
@@ -2596,7 +2646,7 @@ class ATMOptionQuoteHandler(_QuoteHandlerBase):
                 if 0.01 < iv_bs < 5.0:
                     self._iv_samples.append(iv_bs)
             except Exception:
-                pass
+                log.exception("[spy_bot] suppressed exception (L2598)")  # AUDIT_FIX: was pass
 
         # 蓄積したIVサンプルを平均化してPriceCacheに書き込む
         if self._iv_samples:
@@ -2775,7 +2825,7 @@ class MarketData:
                         self._atm_subscribed_codes -= set(old_codes)
                         log.debug(f"[ATMSubscribe] unsubscribe old: {old_codes}")
                     except Exception:
-                        pass
+                        log.exception("[spy_bot] suppressed exception (L2777)")  # AUDIT_FIX: was pass
 
             # 新しいATMコードをsubscribe
             subscribe_codes = [c for c in new_atm_codes if c not in self._atm_subscribed_codes]
@@ -2898,7 +2948,7 @@ class MarketData:
             try:
                 self.quote_ctx.close()
             except Exception:
-                pass
+                log.exception("[spy_bot] suppressed exception (L2900)")  # AUDIT_FIX: was pass
 
     def _get_vix_from_atm_straddle(self) -> Optional[float]:
         """ATMストラドルのIVからVIX代替値を算出する。
@@ -3760,7 +3810,7 @@ class MarketData:
         # futu
         if FUTU_AVAILABLE and self.quote_ctx:
             try:
-                end_date   = datetime.datetime.now().date()
+                end_date   = datetime.datetime.now(ET).date()  # AUDIT_FIX: DST対応・ET基準
                 start_date = end_date - datetime.timedelta(days=int(period * 2.5))
                 ret, kline, _ = self.quote_ctx.request_history_kline(
                     symbol,
@@ -4092,7 +4142,7 @@ class TradeEngine:
             try:
                 self.trade_ctx.close()
             except Exception:
-                pass
+                log.exception("[spy_bot] suppressed exception (L4094)")  # AUDIT_FIX: was pass
 
     def _resolve_account(self):
         ret, data = self.trade_ctx.get_acc_list()
@@ -4119,17 +4169,35 @@ class TradeEngine:
             log.warning(f"unlock: {e}")
 
     def get_account_cash(self) -> float:
-        if not FUTU_AVAILABLE or not self.trade_ctx:
-            return 10000.0  # dry-run
+        # DRY_TEST / futu未接続 → テスト用デフォルト値（本番では絶対に到達しない）
+        if DRY_TEST or not FUTU_AVAILABLE or not self.trade_ctx:
+            return 10000.0  # dry-run only
         try:
             ret, data = self.trade_ctx.accinfo_query(
                 trd_env=self.trade_env, acc_id=int(self.account_id or 0))
             if ret == RET_OK and not data.empty:
                 row = data.iloc[0]
-                return float(row.get("net_assets", 0) or row.get("cash", 0) or 10000)
+                net_assets = row.get("net_assets")
+                cash = row.get("cash")
+                # net_assets/cash どちらも取れなかった場合はfallbackせず例外を上げる
+                if not net_assets and not cash:
+                    raise RuntimeError(
+                        f"get_account_cash: net_assets={net_assets!r}, cash={cash!r} — "
+                        "API responded but both fields are empty/zero. Refusing to use $10K fallback."
+                    )
+                return float(net_assets or cash)
+            else:
+                raise RuntimeError(
+                    f"get_account_cash: accinfo_query failed ret={ret}, data={data!r}. "
+                    "Cannot determine capital — refusing trade."
+                )
+        except RuntimeError:
+            raise
         except Exception as e:
-            log.warning(f"get_account_cash: {e}")
-        return 10000.0
+            raise RuntimeError(
+                f"get_account_cash: exception during API call — {e}. "
+                "Cannot determine capital — refusing trade."
+            ) from e
 
     def get_margin_usage_ratio(self) -> Optional[float]:
         """証拠金使用率を返す。futu accinfo_query の initial_margin / total_assets。
@@ -4185,7 +4253,8 @@ class TradeEngine:
 
     def _place_single_leg(self, code: str, side, qty: int, label: str,
                           init_price: Optional[float] = None,
-                          use_limit: bool = False
+                          use_limit: bool = False,
+                          signal_id: Optional[str] = None,
                           ) -> tuple:
         """1本足を発注する。
 
@@ -4205,14 +4274,55 @@ class TradeEngine:
         acc = int(self.account_id or 0)
 
         # ── Pre-Trade Check 共通コンテキスト取得 (capital_usd=0素通し防止) ──────
-        # capital_usd を必ず実際に取得する。0デフォルト禁止。
-        _pt_capital_usd = self.get_account_cash()
+        # capital_usd を必ず実際に取得する。0デフォルト禁止・fallback禁止。
+        try:
+            _pt_capital_usd = self.get_account_cash()
+        except RuntimeError as _cash_err:
+            log.error(f"[PreTrade] get_account_cash 失敗 — 発注ブロック: {_cash_err}")
+            try:
+                import requests as _req
+                _req.post(
+                    "https://api.pushover.net/1/messages.json",
+                    data={
+                        "token":    PUSHOVER_TOKEN,
+                        "user":     PUSHOVER_USER,
+                        "title":    "[Atlas/ALERT] 口座残高取得失敗・発注ブロック",
+                        "message":  f"get_account_cash() 失敗により発注を拒否しました。\n"
+                                    f"label={label}\nerror={_cash_err}",
+                        "priority": 1,
+                        "retry":    60,
+                        "expire":   300,
+                    },
+                    timeout=5,
+                )
+            except Exception:
+                log.exception("[spy_bot] suppressed exception (L4248)")  # AUDIT_FIX: was pass
+            return None, "failed"
         if _pt_capital_usd <= 0:
             log.error(
                 f"[PreTrade] capital_usd={_pt_capital_usd} <= 0 — "
                 f"口座残高取得失敗のため発注ブロック (label={label})"
             )
             return None, "failed"
+
+        # ── 冪等性チェック (idempotency key) ──────────────────────────────────
+        # プロセス再起動後の二重発注を防止する。
+        # moomoo place_order に client_order_id がないため remark フィールドを利用する。
+        _idem_key: Optional[str] = None
+        if signal_id:
+            try:
+                from common.idempotency import get_store as _get_idm_store
+                _idem_store = _get_idm_store()
+                _idem_key = _idem_store.make_key(signal_id=signal_id, label=label)
+                if not _idem_store.check_and_register(_idem_key):
+                    log.warning(
+                        f"[Idempotency] 重複発注ブロック: label={label} signal_id={signal_id}"
+                    )
+                    return None, "idempotency_blocked"
+            except Exception as _idem_err:
+                log.warning(f"[Idempotency] チェックスキップ (非致命的): {_idem_err}")
+                _idem_key = None
+
         _pt_open_positions_list = self.get_open_positions()
         _pt_open_positions = len(_pt_open_positions_list)
         # open_margin_total: ポジション一覧の market_val の絶対値合計（概算）
@@ -4253,6 +4363,7 @@ class TradeEngine:
                 trd_side=side, order_type=OrderType.NORMAL,
                 trd_env=env, acc_id=acc,
                 time_in_force=TimeInForce.DAY,
+                remark=_idem_key,
             )
             if ret != RET_OK:
                 log.warning(f"Leg {label} limit initial failed: {data}")
@@ -4326,6 +4437,7 @@ class TradeEngine:
                 trd_side=side, order_type=OrderType.MARKET,
                 trd_env=env, acc_id=acc,
                 time_in_force=TimeInForce.DAY,
+                remark=_idem_key,
             )
             if ret == RET_OK:
                 order_id = data.iloc[0].get("order_id", "") if not data.empty else ""
@@ -4335,6 +4447,13 @@ class TradeEngine:
             log.warning(f"Leg {label} {fill_method} attempt {attempt + 1} failed: {data}")
             if attempt == 0:
                 time.sleep(1)
+        # 全試行失敗 → idempotency key を削除して次回再試行を許可
+        if _idem_key:
+            try:
+                from common.idempotency import get_store as _get_idm_store
+                _get_idm_store().clear_key(_idem_key)
+            except Exception:
+                log.exception("[spy_bot] suppressed exception (L4405)")  # AUDIT_FIX: was pass
         log.error(f"Leg {label} failed after all attempts")
         return None, "failed"
 
@@ -4580,7 +4699,7 @@ class TradeEngine:
             try:
                 pushover_alert(f"[Atlas/SweepCancel] {reason}", f"{canceled}件の未約定オーダーをキャンセル")
             except Exception:
-                pass
+                log.exception("[spy_bot] suppressed exception (L4651)")  # AUDIT_FIX: was pass
         return canceled
 
     def close_all_positions(self, reason: str = "force_close") -> bool:
@@ -4841,7 +4960,7 @@ class SMADirectionDetector:
                         spy_open = float(snap.iloc[0].get("open_price", 0) or
                                          snap.iloc[0].get("last_price", 0))
                 except Exception:
-                    pass
+                    log.exception("[spy_bot] suppressed exception (L4912)")  # AUDIT_FIX: was pass
         if not spy_open:
             return None
         direction = "PUT" if spy_open > sma20 else "CALL"
@@ -4857,7 +4976,7 @@ class SMADirectionDetector:
                 if data.get("date") == today:
                     return float(data["sma20"])
         except Exception:
-            pass
+            log.exception("[spy_bot] suppressed exception (L4928)")  # AUDIT_FIX: was pass
 
         if DRY_TEST:
             # dry-testモード: Yahoo実データから直接SMA計算（futu不要）
@@ -6050,7 +6169,7 @@ class IntradayMonitor:
                             )
                             return
                     except Exception:
-                        pass
+                        log.exception("[spy_bot] suppressed exception (L6121)")  # AUDIT_FIX: was pass
 
             # 週次PDTカウンタのリセットチェック（月曜切替）
             self._reset_pdt_weekly_hedge_if_needed()
@@ -6953,7 +7072,7 @@ def _orb_load_pnl() -> list:
         if ORB_PNL_FILE.exists():
             return json.loads(ORB_PNL_FILE.read_text()).get("trades", [])
     except Exception:
-        pass
+        log.exception("[spy_bot] suppressed exception (L7024)")  # AUDIT_FIX: was pass
     return []
 
 
@@ -7652,7 +7771,7 @@ class ORBEngine:
                 _pr_update_positions("orb_atlas", [{"entry_price": option_price,
                                                       "qty": qty, "direction": direction}])
             except Exception:
-                pass
+                log.exception("[spy_bot] suppressed exception (L7723)")  # AUDIT_FIX: was pass
 
         _orb_sym_short = self.mkt.underlying_code.replace("US.", "") if self.mkt else "SPY"
         pushover(
@@ -7725,7 +7844,7 @@ class ORBEngine:
                     log.warning(f"[ORB] Crisis regime: 含み益{pnl_pct:+.1%} → 即利確")
                     return self._close_position(pos, current_price, "crisis_profit_take")
             except Exception:
-                pass
+                log.exception("[spy_bot] suppressed exception (L7796)")  # AUDIT_FIX: was pass
 
         reason = pos.check_exit(current_price)
         if reason:
@@ -7808,7 +7927,7 @@ class ORBEngine:
                 record_daily_pnl(datetime.datetime.now(ET).strftime("%Y-%m-%d"),
                                  pnl_usd, "orb_atlas")
             except Exception:
-                pass
+                log.exception("[spy_bot] suppressed exception (L7879)")  # AUDIT_FIX: was pass
 
         self.position  = None
         self.trade_done = True
@@ -7914,8 +8033,11 @@ class CalendarEngine:
       - 7DTEオプション存在確認: SPYはWeekly発行あり → 通常7DTE付近のexpiryが存在する
     """
 
-    # US.SPX（CBOEインデックス）はカレンダー戦術対象外
-    EXCLUDED_SYMBOLS = {"US..SPX"}
+    # [4/17事故対応] EXCLUDED_SYMBOLS方式廃止 → WHITELIST方式に移行
+    # CalendarはSPXのbackleg持ち越し・Weekly発行確認が必要。
+    # ペーパーで動作確認後にUS..SPXも対象に追加可能。
+    # 現時点は空set（スキップではなくWHITELISTで制御）
+    EXCLUDED_SYMBOLS: set = set()
 
     def __init__(self, mkt: 'MarketData', eng: 'TradeEngine',
                  paper: bool = False, dry_test: bool = False,
@@ -8214,7 +8336,7 @@ class CalendarEngine:
             greeks = self.mkt.get_option_greeks(front_code)
             front_iv = greeks.get("iv", 0.30) or 0.30
         except Exception:
-            pass
+            log.exception("[spy_bot] suppressed exception (L8285)")  # AUDIT_FIX: was pass
 
         self._record_pnl("entry", 0, direction, atm_strike, qty)
         return CalendarPosition(
@@ -8423,7 +8545,7 @@ def _gamma_scalp_load_pnl() -> list:
         if GAMMA_SCALP_PNL_FILE.exists():
             return json.loads(GAMMA_SCALP_PNL_FILE.read_text()).get("trades", [])
     except Exception:
-        pass
+        log.exception("[spy_bot] suppressed exception (L8494)")  # AUDIT_FIX: was pass
     return []
 
 
@@ -9024,14 +9146,15 @@ STRANGLE_SELL_FORCE_CLOSE_H = 15     # フォースクローズ(ET)
 STRANGLE_SELL_FORCE_CLOSE_M = 45
 STRANGLE_SELL_PNL_FILE      = _BASE_DIR / "strangle_sell_pnl.json"
 ENABLE_STRANGLE_SELL        = True   # グローバルON/OFF
-# US.SPX（CBOEインデックス）除外リスト — US..SPXはSPXW混入源のため
-STRANGLE_SELL_EXCLUDED_SYMBOLS = {"US..SPX"}
+# [4/17事故対応] EXCLUDED_SYMBOLS方式廃止。混入防止はvalidate_code_for_symbol()で物理ブロック。
+# SPX/SPXWは取引対象に復活（Section 1256税制優遇・証拠金効率最高）。
+STRANGLE_SELL_EXCLUDED_SYMBOLS: set = set()  # 空set = 除外なし（WHITELIST方式に移行）
 
 # ── IC Sell 戦術定数 (IronCondorSellEngine) ──────────────────────────────────
 # Call CS + Put CS の同時売り。credit受取・max_loss限定。
 # 全値は atlas_rules.yaml ic_sell セクションにも記載（ランタイム動的算出のベース）。
-# US..SPX（CBOEインデックス）は除外 — moomooでの建玉管理が複雑なため
-IC_SELL_EXCLUDED_SYMBOLS       = {"US..SPX"}
+# [4/17事故対応] EXCLUDED_SYMBOLS方式廃止。混入防止はvalidate_code_for_symbol()で物理ブロック。
+IC_SELL_EXCLUDED_SYMBOLS: set = set()  # 空set = 除外なし（WHITELIST方式に移行）
 IC_SELL_CALL_DELTA_BASE        = 0.20   # CALL 売りデルタ目標（動的補正前ベース）
 IC_SELL_PUT_DELTA_BASE         = 0.20   # PUT 売りデルタ（絶対値）目標（動的補正前ベース）
 IC_SELL_WIDTH_ATR_MULT         = 0.50   # spread_width = ATR_14 * mult
@@ -9065,7 +9188,7 @@ def _ic_sell_load_pnl() -> list:
         if IC_SELL_PNL_FILE.exists():
             return json.loads(IC_SELL_PNL_FILE.read_text()).get("trades", [])
     except Exception:
-        pass
+        log.exception("[spy_bot] suppressed exception (L9136)")  # AUDIT_FIX: was pass
     return []
 
 
@@ -9102,7 +9225,7 @@ def _straddle_buy_load_pnl() -> list:
         if STRADDLE_BUY_PNL_FILE.exists():
             return json.loads(STRADDLE_BUY_PNL_FILE.read_text()).get("trades", [])
     except Exception:
-        pass
+        log.exception("[spy_bot] suppressed exception (L9173)")  # AUDIT_FIX: was pass
     return []
 
 
@@ -9239,7 +9362,7 @@ class StraddleBuyEngine:
                         log.info("[STRADDLE_BUY] premarket: DD上限到達 → スキップ")
                         return False
             except Exception:
-                pass
+                log.exception("[spy_bot] suppressed exception (L9310)")  # AUDIT_FIX: was pass
 
         log.info(f"[STRADDLE_BUY] premarket_check OK: VIX={vix:.2f} (P25以下)")
         return True
@@ -9334,7 +9457,7 @@ class StraddleBuyEngine:
                     log.info("[STRADDLE_BUY] PortfolioRisk上限 → スキップ")
                     return None
             except Exception:
-                pass
+                log.exception("[spy_bot] suppressed exception (L9405)")  # AUDIT_FIX: was pass
 
         log.info(f"[STRADDLE_BUY] CALL:{call_code} ${call_mid:.2f} "
                  f"PUT:{put_code} ${put_mid:.2f} qty={qty}")
@@ -9374,7 +9497,7 @@ class StraddleBuyEngine:
                                      [{"entry_price": call_mid + put_mid,
                                        "qty": qty, "direction": "STRADDLE_BUY"}])
             except Exception:
-                pass
+                log.exception("[spy_bot] suppressed exception (L9445)")  # AUDIT_FIX: was pass
 
         pushover("[STRADDLE_BUY]",
                  f"エントリー: ATM={atm_strike} x{qty}\n"
@@ -9558,7 +9681,7 @@ class StraddleBuyEngine:
                 record_daily_pnl(datetime.datetime.now(ET).strftime("%Y-%m-%d"),
                                  pnl_usd, "straddle_buy_atlas")
             except Exception:
-                pass
+                log.exception("[spy_bot] suppressed exception (L9629)")  # AUDIT_FIX: was pass
 
         self.position   = None
         self.trade_done = True
@@ -9915,14 +10038,14 @@ class IVCrushEngine:
                 if v is not None:
                     vix_current = float(v)
         except Exception:
-            pass
+            log.exception("[spy_bot] suppressed exception (L9986)")  # AUDIT_FIX: was pass
         try:
             if hasattr(self.eng, "get_account_cash"):
                 c = self.eng.get_account_cash()
                 if c is not None:
                     cash_usd = float(c)
         except Exception:
-            pass
+            log.exception("[spy_bot] suppressed exception (L9993)")  # AUDIT_FIX: was pass
         self._dynamic_params = calc_iv_crush_params(
             symbol=symbol,
             vix_current=vix_current,
@@ -10392,7 +10515,7 @@ class StrangleSellEngine:
                 if v is not None:
                     vix = float(v)
             except Exception:
-                pass
+                log.exception("[spy_bot] suppressed exception (L10463)")  # AUDIT_FIX: was pass
             # delta=0.15 ≒ 1.2σ OTM
             sigma_daily = underlying_price * (vix / 100.0) / _math.sqrt(252.0)
             offset      = 1.2 * sigma_daily
@@ -10880,7 +11003,7 @@ class IronCondorSellEngine:
                 below = sum(1 for v in hist if v <= vix)
                 return round(below / len(hist) * 100, 1)
         except Exception:
-            pass
+            log.exception("[spy_bot] suppressed exception (L10951)")  # AUDIT_FIX: was pass
         return 50.0
 
     # -- Phase 1: プレマーケット環境チェック -----------------------------------
@@ -10923,7 +11046,7 @@ class IronCondorSellEngine:
                         log.info("[IC_SELL] premarket: DD上限 -> スキップ")
                         return False
             except Exception:
-                pass
+                log.exception("[spy_bot] suppressed exception (L10994)")  # AUDIT_FIX: was pass
         log.info(f"[IC_SELL] premarket_check OK: VIX={vix:.1f} IVR={ivr_pct:.0f}%ile")
         return True
 
@@ -11361,7 +11484,7 @@ def _butterfly_load_pnl() -> list:
         if BUTTERFLY_PNL_FILE.exists():
             return json.loads(BUTTERFLY_PNL_FILE.read_text()).get("trades", [])
     except Exception:
-        pass
+        log.exception("[spy_bot] suppressed exception (L11432)")  # AUDIT_FIX: was pass
     return []
 
 
@@ -11680,12 +11803,12 @@ class ButterflyEngine:
         try:
             vix = self.mkt.get_vix()
         except Exception:
-            pass
+            log.exception("[spy_bot] suppressed exception (L11751)")  # AUDIT_FIX: was pass
         ivr = None
         try:
             ivr = self.mkt.calc_ivr(vix or 20.0)
         except Exception:
-            pass
+            log.exception("[spy_bot] suppressed exception (L11756)")  # AUDIT_FIX: was pass
 
         if not self.should_trade_today(symbol, ivr, ivr_threshold, paper=self.paper):
             log.info(f"[Butterfly] {symbol} 環境条件不一致 -> スキップ")
@@ -12241,7 +12364,7 @@ class SPYCreditSpreadBot:
                 if _vix_for_sel is not None and _vix_for_sel < 20.0:
                     tactic = "buy"
             except Exception:
-                pass
+                log.exception("[spy_bot] suppressed exception (L12312)")  # AUDIT_FIX: was pass
 
             # SymbolSelectorを初期化して選択実行
             _sym_sel = _SymbolSelector()
@@ -12365,7 +12488,7 @@ class SPYCreditSpreadBot:
                 if _vix is not None and _vix < 20.0:
                     tactic = "buy"
             except Exception:
-                pass
+                log.exception("[spy_bot] suppressed exception (L12436)")  # AUDIT_FIX: was pass
 
             max_n = MULTI_SYMBOL_MAX_N_PAPER if self.paper else MULTI_SYMBOL_MAX_N
             _sym_sel = _SymbolSelector()
@@ -12802,7 +12925,11 @@ class SPYCreditSpreadBot:
                 self.traded_today = True
                 return
 
-        # ── [StrategySelector] Phase1: 推奨戦術をログ出力（実際の選択は既存ロジック） ──
+        # ── [StrategySelector] 推奨戦術で実際に分岐（ハードコード廃止） ──────────
+        # strategy_selector の primary.strategy を実際のエントリー経路に接続する。
+        # 利用不可時は従来のVIX/env_scoreベースフォールバックを使う。
+        _ss_primary_strategy: Optional[str] = None
+        _ss_confidence: float = 0.0
         if _STRATEGY_SELECTOR_AVAILABLE:
             try:
                 _ss_env = {
@@ -12816,14 +12943,15 @@ class SPYCreditSpreadBot:
                 }
                 _ss_rec = _ss_select_strategy(_ss_env)
                 if _ss_rec and _ss_rec.get("primary"):
-                    _ss_primary = _ss_rec["primary"]
+                    _ss_primary_strategy = _ss_rec["primary"].get("strategy")
+                    _ss_confidence = float(_ss_rec["primary"].get("confidence", 0.0))
                     log.info(
-                        f"[StrategySelector] 推奨: {_ss_primary['strategy']} "
-                        f"(confidence={_ss_primary['confidence']:.2f}) "
-                        f"実際: {'IC' if (vix < 18.0 and (assessment.get('score', 0) or 0) >= 70) else 'CS'}"
+                        f"[StrategySelector] 推奨: {_ss_primary_strategy} "
+                        f"(confidence={_ss_confidence:.2f})"
                     )
             except Exception as _ss_e:
-                log.debug(f"[StrategySelector] スキップ: {_ss_e}")
+                log.warning(f"[StrategySelector] 例外発生 — フォールバックへ: {_ss_e}")
+                _ss_primary_strategy = None
 
         # ── [SymbolSelector] 今日の適用銘柄をログ出力（起動時に選択済み） ───────
         log.info(
@@ -12834,15 +12962,36 @@ class SPYCreditSpreadBot:
         if self.demo_compare:
             DemoLogger(self.mkt.quote_ctx, self.underlying_code).run("standard", direction, expiry, vix, ivr)
 
-        # ── IC vs CS 自動切替 ────────────────────────────────────────────────
-        # VIX < 18 (calm 環境) かつ 環境スコア >= 70 の場合に Iron Condor を選択する。
-        # IC ならコール側・プット側の両方からクレジットを取れるため低VIX環境で有効。
+        # ── IC vs CS 自動切替（strategy_selector 優先・フォールバック: VIX/env_score） ──
+        # strategy_selector が ic_sell を推奨 → IC
+        # strategy_selector が cs_sell / no_trade / その他 → CS (or skip)
+        # strategy_selector 利用不可 → 従来ロジック (VIX<18 かつ env_score>=70)
         _env_score = assessment.get("score", 0) or 0
-        _use_ic = (vix < 18.0 and _env_score >= 70)
+        if _ss_primary_strategy is not None:
+            # strategy_selector 接続済み: 推奨に従う
+            if _ss_primary_strategy == "no_trade":
+                log.info(
+                    f"[Entry] strategy_selector → no_trade 推奨 (confidence={_ss_confidence:.2f}) "
+                    f"→ エントリースキップ"
+                )
+                self.traded_today = True
+                return
+            _use_ic = (_ss_primary_strategy == "ic_sell")
+            log.info(
+                f"[Entry] strategy_selector → {'IC' if _use_ic else 'CS'} "
+                f"(strategy={_ss_primary_strategy}, confidence={_ss_confidence:.2f})"
+            )
+        else:
+            # フォールバック: 固定閾値ロジック (strategy_selector 利用不可時のみ)
+            _use_ic = (vix < 18.0 and _env_score >= 70)
+            log.info(
+                f"[Entry] strategy_selector 利用不可 → フォールバック: "
+                f"VIX={vix:.1f}, env_score={_env_score} → {'IC' if _use_ic else 'CS'}"
+            )
+
         if _use_ic:
             log.info(
-                f"[Entry] IC 選択: VIX={vix:.1f} < 18 かつ env_score={_env_score} >= 70 "
-                f"→ Iron Condor (PUT CS + CALL CS)"
+                f"[Entry] IC 選択 → Iron Condor (PUT CS + CALL CS)"
             )
             signal_id = f"{now.strftime('%Y-%m-%d')}_standard_IC_{now.strftime('%H:%M')}"
             ok = self.builder.place_iron_condor(
@@ -12851,11 +13000,6 @@ class SPYCreditSpreadBot:
             )
             entry_direction = "IC"
         else:
-            if _use_ic is False and vix < 18.0:
-                log.info(
-                    f"[Entry] CS 選択: VIX={vix:.1f} < 18 だが env_score={_env_score} < 70 "
-                    f"→ 通常 CS ({direction})"
-                )
             signal_id = f"{now.strftime('%Y-%m-%d')}_standard_{direction}_{now.strftime('%H:%M')}"
             ok = self.builder.place(expiry, qty, params, vix, direction, "standard", bot=self,
                                     signal_id=signal_id)
@@ -14331,7 +14475,7 @@ class SPYCreditSpreadBot:
                             exit_cost += mid
                         snap_ok = True
                 except Exception:
-                    pass
+                    log.exception("[spy_bot] suppressed exception (L14423)")  # AUDIT_FIX: was pass
 
             if not snap_ok:
                 # スナップショットも取れない場合：creditそのままを利益とみなす（期限切れ＝full profit）
@@ -14786,7 +14930,7 @@ class SPYCreditSpreadBot:
                     mem_warn = f"メモリ警告{mw['count']}回(最大{mw.get('max_pct', 0):.0f}%)"
                 MEMORY_WARN_FILE.unlink(missing_ok=True)
         except Exception:
-            pass
+            log.exception("[spy_bot] suppressed exception (L14878)")  # AUDIT_FIX: was pass
 
         flags = []
         if self.paper:
@@ -15404,11 +15548,11 @@ class SPYCreditSpreadBot:
                 try:
                     self.mkt.close()
                 except Exception:
-                    pass
+                    log.exception("[spy_bot] suppressed exception (L15496)")  # AUDIT_FIX: was pass
                 try:
                     self.eng.close()
                 except Exception:
-                    pass
+                    log.exception("[spy_bot] suppressed exception (L15500)")  # AUDIT_FIX: was pass
                 if not self.mkt.connect():
                     log.error("再接続: Quote context 失敗 → リトライカウント継続")
                 elif not self.eng.connect():
@@ -15573,7 +15717,7 @@ class SPYCreditSpreadBot:
                                 try:
                                     self.mkt.subscribe_option_legs([_orb_pos.code])
                                 except Exception:
-                                    pass
+                                    log.exception("[spy_bot] suppressed exception (L15665)")  # AUDIT_FIX: was pass
                 else:
                     _orb_direction = self.orb_engine.check_breakout()
                     if _orb_direction is not None:
@@ -15586,7 +15730,7 @@ class SPYCreditSpreadBot:
                                 try:
                                     self.mkt.subscribe_option_legs([_orb_pos.code])
                                 except Exception:
-                                    pass
+                                    log.exception("[spy_bot] suppressed exception (L15678)")  # AUDIT_FIX: was pass
                     elif not DRY_TEST:
                         # カットオフ到達チェック（11:00 ET 以降はエントリーしない）
                         if (h > ORB_BREAKOUT_CUTOFF_H or
@@ -15606,7 +15750,7 @@ class SPYCreditSpreadBot:
                         try:
                             self.mkt.unsubscribe_all_option_legs()
                         except Exception:
-                            pass
+                            log.exception("[spy_bot] suppressed exception (L15698)")  # AUDIT_FIX: was pass
 
             # ── Calendar: エントリー監視（10:30〜12:00 ET）─────────────────────
             if (self.calendar_engine is not None
@@ -15818,7 +15962,7 @@ class SPYCreditSpreadBot:
                                     self.mkt.subscribe_option_legs(
                                         [_sb_pos.call_code, _sb_pos.put_code])
                                 except Exception:
-                                    pass
+                                    log.exception("[spy_bot] suppressed exception (L15910)")  # AUDIT_FIX: was pass
                     elif (_current_min >= _sb_cutoff_min
                             and not self._straddle_buy_entry_attempted):
                         log.info("[STRADDLE_BUY] 10:30 ET カットオフ → 本日エントリーなし")
@@ -15836,7 +15980,7 @@ class SPYCreditSpreadBot:
                         try:
                             self.mkt.unsubscribe_all_option_legs()
                         except Exception:
-                            pass
+                            log.exception("[spy_bot] suppressed exception (L15928)")  # AUDIT_FIX: was pass
                 else:
                     # エグジットしていない場合のみヘッジ監視
                     self.straddle_buy_engine.check_hedge()
