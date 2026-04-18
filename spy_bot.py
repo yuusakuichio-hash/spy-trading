@@ -246,7 +246,7 @@ PAPER_MASS_VERIFY_SYMBOLS = [   # 大量検証対象の全10銘柄 (US..SPXはSP
     "US.MSFT", "US.AMZN", "US.META", "US.GOOGL", # 個別株
 ]
 PAPER_MASS_VERIFY_TACTICS = ["cs_sell", "orb_buy", "straddle_buy",
-                             "calendar_sell", "strangle_sell"]  # 全戦術
+                             "calendar_sell", "strangle_sell", "ic_sell"]  # 全戦術
 # active_symbols キーフォーマット: "{symbol}_{tactic}" で銘柄×戦術をユニーク管理
 PAPER_MASS_VERIFY_ENTRY_INTERVAL_MIN = 90  # 同一symbol+tacticで再エントリーまでの間隔(分)
 
@@ -7545,11 +7545,12 @@ class CalendarEngine:
         self.symbol   = symbol or getattr(mkt, "underlying_code", "US.SPY")
 
         # 日次状態
-        self.position:      Optional[CalendarPosition] = None
-        self.entry_done:    bool = False
-        self.trade_done:    bool = False
-        self.today_vix:     Optional[float] = None
+        self.position:         Optional[CalendarPosition] = None
+        self.entry_done:       bool = False
+        self.trade_done:       bool = False
+        self.today_vix:        Optional[float] = None
         self._entry_attempted: bool = False
+        self._dry_test_start:  datetime.datetime = datetime.datetime.now(ET)
 
     def reset_daily(self):
         """日付変わり・EODに日次状態をリセットする。
@@ -7733,7 +7734,7 @@ class CalendarEngine:
                 f"debit=${back_price - front_price:.2f}"
             )
             self._record_pnl("entry", 0, direction, atm_strike, qty)
-            return CalendarPosition(
+            pos = CalendarPosition(
                 front_code=front_code,
                 back_code=back_code,
                 strike=atm_strike,
@@ -7743,6 +7744,9 @@ class CalendarEngine:
                 back_entry_price=back_price,
                 front_iv=front_iv,
             )
+            self.position   = pos
+            self.entry_done = True
+            return pos
 
         if not FUTU_AVAILABLE or not self.mkt.quote_ctx:
             log.warning("[Calendar] execute_entry: futu未接続 → スキップ")
@@ -11791,6 +11795,11 @@ class SPYCreditSpreadBot:
         if self.strangle_sell_engine is not None:
             self.strangle_sell_engine.reset_daily()
         self._strangle_sell_entry_attempted = False
+        # IronCondorSell日次リセット
+        if self.ic_sell_engine is not None:
+            self.ic_sell_engine.reset_daily()
+        self._ic_sell_premarket_ok    = False
+        self._ic_sell_entry_attempted = False
         # ペーパー複数回エントリー: 日次リセット
         self._paper_last_standard_entry_et = None
         # マルチ銘柄日次リセット
@@ -14713,6 +14722,11 @@ class SPYCreditSpreadBot:
                 self.strangle_sell_engine = StrangleSellEngine(
                     self.mkt, self.eng, paper=self.paper, dry_test=True)
                 log.info("[DRY-TEST] StrangleSellEngine initialized")
+            # IronCondorSellEngine初期化 (dry_test)
+            if ENABLE_IC_SELL:
+                self.ic_sell_engine = IronCondorSellEngine(
+                    self.mkt, self.eng, paper=self.paper, dry_test=True)
+                log.info("[DRY-TEST] IronCondorSellEngine initialized")
         else:
             if not self.mkt.connect():
                 log.error("Quote context connect failed")
@@ -14776,6 +14790,11 @@ class SPYCreditSpreadBot:
                 self.strangle_sell_engine = StrangleSellEngine(
                     self.mkt, self.eng, paper=self.paper, dry_test=False)
                 log.info("StrangleSellEngine initialized")
+            # IronCondorSellEngine初期化
+            if ENABLE_IC_SELL:
+                self.ic_sell_engine = IronCondorSellEngine(
+                    self.mkt, self.eng, paper=self.paper, dry_test=False)
+                log.info("IronCondorSellEngine initialized")
             self.consecutive_start_failures = 0
             save_failures(0)
             log.info("OpenD connected")
@@ -15465,6 +15484,36 @@ class SPYCreditSpreadBot:
                             f"[StrangleSell] 決済完了: reason={_ss_exit['reason']} "
                             f"pnl=${_ss_exit['pnl_usd']:+.2f}"
                         )
+
+            # ── IronCondorSell エントリー・エグジット監視 ──────────────────────────
+            if self.ic_sell_engine is not None:
+                # エントリー: 10:30〜14:00 ET（VIX/IVR条件充足時）
+                if (not self.ic_sell_engine.entry_done
+                        and not self._ic_sell_entry_attempted
+                        and in_market):
+                    _ic_in_window = (
+                        DRY_TEST
+                        or (
+                            (h > IC_SELL_ENTRY_H or (h == IC_SELL_ENTRY_H and m >= IC_SELL_ENTRY_M))
+                            and (h < IC_SELL_CUTOFF_H or (h == IC_SELL_CUTOFF_H and m < IC_SELL_CUTOFF_M))
+                        )
+                    )
+                    if _ic_in_window and not self._ic_sell_premarket_ok:
+                        self._ic_sell_premarket_ok = self.ic_sell_engine.premarket_check()
+                    if _ic_in_window and self._ic_sell_premarket_ok:
+                        _ic_pos = self.ic_sell_engine.execute_entry(bot=self)
+                        if _ic_pos is not None:
+                            self._ic_sell_entry_attempted = True
+                            log.info(
+                                f"[IC_SELL] Entry記録: CALL {_ic_pos.call_sell_strike:.0f}"
+                                f"/{_ic_pos.call_buy_strike:.0f} "
+                                f"PUT {_ic_pos.put_sell_strike:.0f}/{_ic_pos.put_buy_strike:.0f} "
+                                f"credit=${_ic_pos.net_credit:.2f} x{_ic_pos.qty}"
+                            )
+
+                # エグジット監視: ポジション保有中
+                if self.ic_sell_engine.is_active():
+                    self.ic_sell_engine.check_exit()
 
             # ── 10:00 ET: ORF check (window: 10:00~10:29) ──
             if DRY_TEST:
