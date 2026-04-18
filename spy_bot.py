@@ -1062,6 +1062,47 @@ try:
 except ImportError as _e:
     log.warning(f"[Module] common.pre_trade_check ロード失敗 → 防護なし: {_e}")
 
+# ── PDT Tracker (全戦術合算 FINRA PDTカウンタ) ─────────────────────────────────
+_PDT_TRACKER_AVAILABLE = False
+try:
+    from common.pdt_tracker import get_global_tracker as _pdt_get_tracker
+    _pdt_tracker = _pdt_get_tracker()
+    _PDT_TRACKER_AVAILABLE = True
+    log.info("[Module] common.pdt_tracker ロード成功 (全戦術合算PDTカウンタ有効)")
+except ImportError as _e:
+    log.warning(f"[Module] common.pdt_tracker ロード失敗 → PDT追跡なし: {_e}")
+    _pdt_tracker = None
+
+
+def _pdt_record(
+    symbol: str,
+    entry_time_str: str,
+    exit_time_str: str,
+    strategy: str,
+    exit_type: str = "manual_close",
+) -> None:
+    """close_position 完了後に PDTTracker へ round_trip を記録する。
+
+    FINRA PDT厳密定義対応:
+      - exit_type="manual_close": SL/TP/Kill Switch/タイムストップ → PDT対象（同日なら計上）
+      - exit_type="expired_worthless": 満期OTM消滅 → PDT対象外
+      - exit_type="assigned": ITM自動行使 → PDT対象外
+      - exit_type="cash_settled": SPX等の現金決済 → PDT対象外
+
+    entry_time_str / exit_time_str は ISO format 文字列を受け取る。
+    例外は必ずキャッチしてBot本体の処理を止めない。
+    """
+    if not _PDT_TRACKER_AVAILABLE or _pdt_tracker is None:
+        return
+    try:
+        entry_dt = datetime.datetime.fromisoformat(entry_time_str)
+        exit_dt  = datetime.datetime.fromisoformat(exit_time_str)
+        _pdt_tracker.record_round_trip(symbol, entry_dt, exit_dt, strategy,
+                                       exit_type=exit_type)
+    except Exception as _e:
+        log.warning(f"[PDT] record_round_trip 例外（無視して続行）: {_e}")
+
+
 # ── API Recorder (Record-Replay / Shadow Mode) ────────────────────────────────
 _API_RECORDER_AVAILABLE = False
 try:
@@ -1072,6 +1113,33 @@ except ImportError as _e:
     log.warning(f"[Module] common.api_recorder ロード失敗 → Record-Replay無効: {_e}")
     def _get_api_recorder():
         return None
+
+
+def _reason_to_exit_type(reason: str, allow_expiry: bool = False) -> str:
+    """close reason文字列から FINRA PDT exit_type を判定する。
+
+    Args:
+        reason:       close理由（例: "force_close_eod", "profit_target", "expired_worthless"）
+        allow_expiry: True = このエンジンはallow_expiry_pass_through（満期放置OK）
+                      True + タイムストップ系reason → "expired_worthless"
+                      False → 常に "manual_close"
+
+    Returns:
+        "manual_close" | "expired_worthless" | "assigned" | "cash_settled"
+    """
+    if reason in ("expired_worthless", "assigned", "cash_settled"):
+        return reason
+    if "cash_settle" in reason or "cash_settled" in reason:
+        return "cash_settled"
+    if "assigned" in reason or "auto_exercise" in reason:
+        return "assigned"
+    # 満期放置前提エンジン + EOD強制クローズ → 満期消滅として記録
+    if allow_expiry and any(kw in reason for kw in (
+        "expired_worthless", "expired", "time_stop", "force_close_eod",
+        "force_close_time", "eod", "cutoff",
+    )):
+        return "expired_worthless"
+    return "manual_close"
 
 
 def _extract_symbol_from_code(code: str) -> str:
@@ -7235,7 +7303,8 @@ class ORBPosition:
     """ORBエントリー後のロングオプションポジションを管理する。"""
 
     def __init__(self, code: str, qty: int, entry_price: float,
-                 direction: str, orb_high: float, orb_low: float):
+                 direction: str, orb_high: float, orb_low: float,
+                 entry_time: Optional[str] = None):
         self.code          = code
         self.qty           = qty
         self.entry_price   = entry_price
@@ -7244,6 +7313,7 @@ class ORBPosition:
         self.orb_low       = orb_low
         self.orb_range     = orb_high - orb_low
         self.partial_closed = 0
+        self.entry_time    = entry_time or datetime.datetime.now(ET).isoformat()
 
     @property
     def sl_price(self) -> float:
@@ -7268,6 +7338,14 @@ class ORBEngine:
     spy_bot.py の MarketData/TrateEngine/IntradayMonitor を共有する。
     SPYCreditSpreadBot から参照される。
     """
+
+    # PDT 1DTE対応: ORBはbracketed order設計で1DTE化可能
+    supports_1dte: bool = True
+
+    # PDT満期放置サポート:
+    # ORBは買い戦術 → OTM消滅=全損 → 満期放置NGで必ず時間内にclose
+    # False: 15:45 ET 強制closeを実施（スキップしない）
+    allow_expiry_pass_through: bool = False
 
     # [M-8修正] fallback_prices: 起動時にFinnhubから取得してキャッシュ・古値ハードコード禁止
     # ハードコード値（SPY=560, NVDA=900等）は2026/04時点の値で将来的に大きくズレる。
@@ -8098,6 +8176,17 @@ class ORBEngine:
             except Exception:
                 log.exception("[spy_bot] suppressed exception (L7879)")  # AUDIT_FIX: was pass
 
+        # PDT全戦術合算カウンタへ記録
+        # ORB = 買い戦術: allow_expiry_pass_through=False → 常に manual_close
+        _sym = _extract_symbol_from_code(pos.code) or "US.SPY"
+        _pdt_record(
+            symbol=_sym,
+            entry_time_str=getattr(pos, "entry_time", datetime.datetime.now(ET).isoformat()),
+            exit_time_str=datetime.datetime.now(ET).isoformat(),
+            strategy="ORB",
+            exit_type=_reason_to_exit_type(reason, allow_expiry=self.allow_expiry_pass_through),
+        )
+
         self.position  = None
         self.trade_done = True
         return {"reason": reason, "exit_price": exit_price, "pnl_usd": pnl_usd}
@@ -8158,6 +8247,7 @@ class CalendarPosition:
         front_entry_price: float,
         back_entry_price: float,
         front_iv: float,
+        entry_time: Optional[str] = None,
     ):
         self.front_code        = front_code
         self.back_code         = back_code
@@ -8169,6 +8259,7 @@ class CalendarPosition:
         self.initial_debit     = back_entry_price - front_entry_price  # 正の値 = コスト
         self.front_iv          = front_iv          # エントリー時のfront IV（crush判定用）
         self.front_closed      = False             # front満期消滅 or 手動クローズ済み
+        self.entry_time        = entry_time or datetime.datetime.now(ET).isoformat()
 
 
 class CalendarEngine:
@@ -8201,6 +8292,15 @@ class CalendarEngine:
       - back持ち越し: PDT非該当。翌日のcheck_back_leg()で決済
       - 7DTEオプション存在確認: SPYはWeekly発行あり → 通常7DTE付近のexpiryが存在する
     """
+
+    # PDT 1DTE対応: Calendarはそもそも複数日満期（front 0DTE + back 7DTE）
+    # back legは翌日クローズ = overnight = PDT対象外
+    supports_1dte: bool = True
+
+    # PDT満期放置サポート:
+    # Calendarのfront legは満期消滅が設計の一部（backは翌日close）
+    # True: front legのタイムストップ等はexpired_worthlessとして記録
+    allow_expiry_pass_through: bool = True
 
     # [4/17事故対応] EXCLUDED_SYMBOLS方式廃止 → WHITELIST方式に移行
     # CalendarはSPXのbackleg持ち越し・Weekly発行確認が必要。
@@ -8620,6 +8720,13 @@ class CalendarEngine:
             pnl_usd = pos.initial_debit * pos.qty * 100 * 0.5  # dry-test: 仮想利益50%
             log.info(f"[Calendar][DRY-TEST] CLOSE: reason={reason} pnl=${pnl_usd:.2f}")
             self._record_pnl("exit", pnl_usd, pos.direction, pos.strike, pos.qty, reason)
+            _pdt_record(
+                symbol=_extract_symbol_from_code(pos.front_code) or "US.SPY",
+                entry_time_str=getattr(pos, "entry_time", datetime.datetime.now(ET).isoformat()),
+                exit_time_str=datetime.datetime.now(ET).isoformat(),
+                strategy="Calendar",
+                exit_type=_reason_to_exit_type(reason, allow_expiry=self.allow_expiry_pass_through),
+            )
             self.position  = None
             self.trade_done = True
             return {"reason": reason, "pnl_usd": pnl_usd}
@@ -8642,6 +8749,13 @@ class CalendarEngine:
             pnl_usd = abs(pnl_usd) * 0.5  # 利益と仮定
         log.info(f"[Calendar] CLOSE: reason={reason} pnl_est=${pnl_usd:.2f}")
         self._record_pnl("exit", pnl_usd, pos.direction, pos.strike, pos.qty, reason)
+        _pdt_record(
+            symbol=_extract_symbol_from_code(pos.front_code) or "US.SPY",
+            entry_time_str=getattr(pos, "entry_time", datetime.datetime.now(ET).isoformat()),
+            exit_time_str=datetime.datetime.now(ET).isoformat(),
+            strategy="Calendar",
+            exit_type=_reason_to_exit_type(reason, allow_expiry=self.allow_expiry_pass_through),
+        )
         self.position  = None
         self.trade_done = True
         return {"reason": reason, "pnl_usd": pnl_usd}
@@ -8807,6 +8921,10 @@ class StraddleEngine:
       - ET 9:45〜10:30 の間にエントリー
       - ATMストライクのCALL + PUT を1〜3枚ずつ購入
     """
+
+    # PDT 1DTE対応: StraddleはGamma Scalpingが目的・1DTE化は設計ミスマッチ
+    # 翌日保有はgamma崩壊・収益構造が成立しない
+    supports_1dte: bool = False
 
     def __init__(self, mkt: 'MarketData', eng: 'TradeEngine',
                  paper: bool = False, dry_test: bool = False):
@@ -9423,7 +9541,8 @@ class StraddleBuyPosition:
     """ATM Long Straddle (CALL+PUT) のポジションを管理する。"""
 
     def __init__(self, call_code: str, put_code: str,
-                 qty: int, call_price: float, put_price: float, strike: float):
+                 qty: int, call_price: float, put_price: float, strike: float,
+                 entry_time: Optional[str] = None):
         self.call_code   = call_code
         self.put_code    = put_code
         self.qty         = qty
@@ -9433,6 +9552,7 @@ class StraddleBuyPosition:
         self.strike      = strike
         self.hedge_count = 0
         self.hedge_legs: dict = {}  # {option_code: qty}
+        self.entry_time  = entry_time or datetime.datetime.now(ET).isoformat()
 
     @property
     def entry_price_per_unit(self) -> float:
@@ -9460,6 +9580,13 @@ class StraddleBuyEngine:
       - VIX急騰（+10%/h以上）で即利確、静かな日はシータ損切
       - 0DTEガンマスキャルピングではなくLow-IVエントリー戦術
     """
+
+    # PDT 1DTE対応: StraddleBuyはIV crush（当日）狙い・翌日保有はシータ崩壊で逆効果
+    supports_1dte: bool = False
+
+    # PDT満期放置サポート:
+    # StraddleBuy = 買い戦術: 価値取り戻し狙い → 満期放置NGで必ず時間内にclose
+    allow_expiry_pass_through: bool = False
 
     def __init__(self, mkt: 'MarketData', eng: 'TradeEngine',
                  paper: bool = False, dry_test: bool = False):
@@ -9857,6 +9984,16 @@ class StraddleBuyEngine:
             except Exception:
                 log.exception("[spy_bot] suppressed exception (L9629)")  # AUDIT_FIX: was pass
 
+        # PDT全戦術合算カウンタへ記録
+        _sym_sbl = _extract_symbol_from_code(pos.call_code) or "US.SPY"
+        _pdt_record(
+            symbol=_sym_sbl,
+            entry_time_str=getattr(pos, "entry_time", datetime.datetime.now(ET).isoformat()),
+            exit_time_str=datetime.datetime.now(ET).isoformat(),
+            strategy="StraddleBuy",
+            exit_type=_reason_to_exit_type(reason, allow_expiry=self.allow_expiry_pass_through),
+        )
+
         self.position   = None
         self.trade_done = True
         return {"reason": reason, "exit_value": exit_value, "pnl_usd": pnl_usd}
@@ -10175,6 +10312,15 @@ class IVCrushEngine:
       reset_daily()     → 日次リセット
     """
 
+    # PDT 1DTE対応: IVCrushはそもそも1DTE（翌日満期）設計
+    # 0DTE版はIVcrush収益構造が成立しない（決算当日に安売り）
+    supports_1dte: bool = False  # 元々1DTE設計だが0DTE→1DTE「フォールバック」という概念は不適用
+
+    # PDT満期放置サポート:
+    # IVCrushは翌日クローズ前提（翌朝9:45-10:15 ET）
+    # 満期放置は損失 → close必須
+    allow_expiry_pass_through: bool = False
+
     def __init__(self, mkt, eng, paper=False, dry_test=False):
         self.mkt      = mkt
         self.eng      = eng
@@ -10472,6 +10618,13 @@ class IVCrushEngine:
             pnl_usd = pos.entry_premium * pos.qty * 100 * 0.5
             log.info(f"[IVCrush][DRY-TEST] CLOSE: {reason} pnl=${pnl_usd:.2f}")
             self._record_pnl("exit", pnl_usd, pos.symbol, pos.strike, pos.qty, reason)
+            _pdt_record(
+                symbol=str(pos.symbol) if str(pos.symbol).startswith("US.") else f"US.{pos.symbol}",
+                entry_time_str=getattr(pos, "entry_time", datetime.datetime.now(ET).isoformat()),
+                exit_time_str=datetime.datetime.now(ET).isoformat(),
+                strategy="IVCrush",
+                exit_type=_reason_to_exit_type(reason, allow_expiry=self.allow_expiry_pass_through),
+            )
             self.position = None
             self.trade_done = True
             return {"reason": reason, "pnl_usd": pnl_usd}
@@ -10508,6 +10661,13 @@ class IVCrushEngine:
                 pnl_usd = -pos.entry_premium * pos.qty * 100 * _dp["stop_loss_pct"]
         log.info(f"[IVCrush] CLOSE: {reason} pnl_usd=${pnl_usd:.2f} exit_premium={exit_premium}")
         self._record_pnl("exit", pnl_usd, pos.symbol, pos.strike, pos.qty, reason)
+        _pdt_record(
+            symbol=str(pos.symbol) if str(pos.symbol).startswith("US.") else f"US.{pos.symbol}",
+            entry_time_str=getattr(pos, "entry_time", datetime.datetime.now(ET).isoformat()),
+            exit_time_str=datetime.datetime.now(ET).isoformat(),
+            strategy="IVCrush",
+            exit_type=_reason_to_exit_type(reason, allow_expiry=self.allow_expiry_pass_through),
+        )
         self.position = None
         self.trade_done = True
         return {"reason": reason, "pnl_usd": pnl_usd}
@@ -10593,6 +10753,14 @@ class StrangleSellEngine:
       - symbol引数で任意の銘柄を指定可能（US.SPY/US.QQQ/US.TSLA/US..SPX 等）
       - [4/17事故対応] EXCLUDED_SYMBOLS廃止。混入防止はvalidate_code_for_symbol()で物理ブロック
     """
+
+    # PDT 1DTE対応: ストラングル売りは翌日満期で同様のIV crush収益構造が成立
+    supports_1dte: bool = True
+
+    # PDT満期放置サポート:
+    # StrangleSell = OTM売り → 満期まで両方OTMなら expired_worthless で最大利益
+    # True: EODタイムストップ = 満期消滅として記録（PDT不消費）
+    allow_expiry_pass_through: bool = True
 
     EXCLUDED_SYMBOLS: set = set()  # 空set = 除外なし（WHITELIST方式に移行）
 
@@ -10979,6 +11147,13 @@ class StrangleSellEngine:
                 f"{self.symbol} reason={reason} pnl=${pnl_usd:.2f}",
             )
             self._record_pnl("exit", pnl_usd, pos, reason)
+            _pdt_record(
+                symbol=str(pos.symbol) if str(pos.symbol).startswith("US.") else f"US.{pos.symbol}",
+                entry_time_str=getattr(pos, "entry_time", datetime.datetime.now(ET).isoformat()),
+                exit_time_str=datetime.datetime.now(ET).isoformat(),
+                strategy="StrangleSell",
+                exit_type=_reason_to_exit_type(reason, allow_expiry=self.allow_expiry_pass_through),
+            )
             self.position   = None
             self.trade_done = True
             return {"reason": reason, "pnl_usd": pnl_usd}
@@ -11006,6 +11181,13 @@ class StrangleSellEngine:
             f"{self.symbol} reason={reason} pnl_est=${pnl_usd:.2f}",
         )
         self._record_pnl("exit", pnl_usd, pos, reason)
+        _pdt_record(
+            symbol=str(pos.symbol) if str(pos.symbol).startswith("US.") else f"US.{pos.symbol}",
+            entry_time_str=getattr(pos, "entry_time", datetime.datetime.now(ET).isoformat()),
+            exit_time_str=datetime.datetime.now(ET).isoformat(),
+            strategy="StrangleSell",
+            exit_type=_reason_to_exit_type(reason, allow_expiry=self.allow_expiry_pass_through),
+        )
         self.position   = None
         self.trade_done = True
         return {"reason": reason, "pnl_usd": pnl_usd}
@@ -11103,6 +11285,14 @@ class IronCondorSellEngine:
 
     US..SPX除外。pre_trade_check全4層通過必須。TMR qty検証有効。
     """
+
+    # PDT 1DTE対応: Iron Condorは翌日満期でも同様の収益構造（IV crush + range-bound）
+    supports_1dte: bool = True
+
+    # PDT満期放置サポート:
+    # IC売り = OTM運用想定 → 満期までOTMならexpired_worthlessで最大利益
+    # True: EODタイムストップ = 満期消滅として記録（PDT不消費）
+    allow_expiry_pass_through: bool = True
 
     def __init__(self, mkt, eng, paper=False, dry_test=False):
         self.mkt      = mkt
@@ -11569,6 +11759,13 @@ class IronCondorSellEngine:
                 "put_sell_strike":  pos.put_sell_strike,
                 "time_key": time_key,
             })
+            _pdt_record(
+                symbol=str(pos.symbol),
+                entry_time_str=getattr(pos, "entry_time", now_et.isoformat()),
+                exit_time_str=now_et.isoformat(),
+                strategy="IC",
+                exit_type=_reason_to_exit_type(reason, allow_expiry=self.allow_expiry_pass_through),
+            )
             self.position   = None
             self.trade_done = True
             return True
@@ -11623,6 +11820,13 @@ class IronCondorSellEngine:
             "put_buy_strike":   pos.put_buy_strike,
             "time_key": time_key, "close_ok": close_ok,
         })
+        _pdt_record(
+            symbol=str(pos.symbol),
+            entry_time_str=getattr(pos, "entry_time", now_et.isoformat()),
+            exit_time_str=now_et.isoformat(),
+            strategy="IC",
+            exit_type=_reason_to_exit_type(reason, allow_expiry=self.allow_expiry_pass_through),
+        )
         self.position   = None
         self.trade_done = True
         return close_ok
@@ -11849,6 +12053,15 @@ class ButterflyEngine:
     フェーズ: should_trade_today() -> check_entry() -> check_exit() -> reset_daily()
     [4/17事故対応] EXCLUDED_SYMBOLS廃止。混入防止はvalidate_code_for_symbol()で物理ブロック
     """
+
+    # PDT 1DTE対応: Butterfly翌日満期でもATM収束狙いの構造は有効
+    supports_1dte: bool = True
+
+    # PDT満期放置サポート:
+    # Butterflyは買い戦術（ネットデビット）→ OTM消滅=全損
+    # ただし売り脚がOTM消滅で利益の場合もある（Long Butterfly）
+    # 安全側: 常に manual_close（満期放置=損失リスク）
+    allow_expiry_pass_through: bool = False
 
     EXCLUDED_SYMBOLS: set = set()  # 空set = 除外なし（WHITELIST方式に移行）
 
@@ -12365,6 +12578,14 @@ class ButterflyEngine:
             f"{pos.symbol} {pos.wing_type} K={pos.atm_strike:.1f}\n"
             f"P&L: ${pnl_usd:+.2f}\n"
             f"debit=${pos.net_debit:.3f} -> val={current_val:.3f}",
+        )
+        # PDT全戦術合算カウンタへ記録
+        _pdt_record(
+            symbol=str(pos.symbol),
+            entry_time_str=getattr(pos, "entry_time", datetime.datetime.now(ET).isoformat()),
+            exit_time_str=datetime.datetime.now(ET).isoformat(),
+            strategy="Butterfly",
+            exit_type=_reason_to_exit_type(reason, allow_expiry=self.allow_expiry_pass_through),
         )
         self.position   = None
         self.trade_done = True
@@ -13546,19 +13767,47 @@ class SPYCreditSpreadBot:
                          f"→ tomorrow is recovery day")
         save_vix_spike_data(vix, spike_for_tomorrow=spike)
 
-    def _on_position_closed(self, pnl_usd: float):
+    def _on_position_closed(self, pnl_usd: float, close_reason: str = "manual_close"):
         """ポジション決済完了後に呼ぶ後処理。
         portfolio_risk.pyのポジションクリアと日次PnL記録を行う。
+
+        Args:
+            pnl_usd:      決済P&L（USD）
+            close_reason: 決済理由（PDT exit_type判定用）
+                          "force_close_eod"/"time_stop" → CS売り戦術ではexpired_worthless扱い
+                          "profit_target"/"stop_loss"   → manual_close
         """
-        if not _PORTFOLIO_RISK_AVAILABLE:
-            return
+        if _PORTFOLIO_RISK_AVAILABLE:
+            try:
+                _pr_clear_positions("spy_bot")
+                date_str = datetime.datetime.now(ET).strftime("%Y-%m-%d")
+                record_daily_pnl(date_str, pnl_usd, "spy_bot")
+                log.info(f"[PortfolioRisk] 決済完了: pnl=${pnl_usd:+.2f} positions cleared")
+            except Exception as _prc_e:
+                log.warning(f"[PortfolioRisk] _on_position_closed失敗: {_prc_e}")
+
+        # PDT全戦術合算カウンタへ記録（CS/IC のメインBot close）
+        # entry_timeはcondor_pnl.jsonの当日最新entryレコードのtsから取得
         try:
-            _pr_clear_positions("spy_bot")
-            date_str = datetime.datetime.now(ET).strftime("%Y-%m-%d")
-            record_daily_pnl(date_str, pnl_usd, "spy_bot")
-            log.info(f"[PortfolioRisk] 決済完了: pnl=${pnl_usd:+.2f} positions cleared")
-        except Exception as _prc_e:
-            log.warning(f"[PortfolioRisk] _on_position_closed失敗: {_prc_e}")
+            _today_et = datetime.datetime.now(ET).strftime("%Y-%m-%d")
+            _pnl_recs = load_pnl()
+            _cs_entries = [
+                r for r in _pnl_recs
+                if r.get("event") == "entry" and r.get("date") == _today_et and r.get("ts")
+            ]
+            _cs_entry_time = _cs_entries[-1]["ts"] if _cs_entries else datetime.datetime.now(ET).isoformat()
+            # CS売り戦術はallow_expiry_pass_through=True
+            # EODタイムストップ = 満期放置とみなしてexpired_worthless
+            _cs_exit_type = _reason_to_exit_type(close_reason, allow_expiry=True)
+            _pdt_record(
+                symbol=str(self.underlying_code),
+                entry_time_str=_cs_entry_time,
+                exit_time_str=datetime.datetime.now(ET).isoformat(),
+                strategy="CS",
+                exit_type=_cs_exit_type,
+            )
+        except Exception as _pdt_e:
+            log.debug(f"[PDT] CS _on_position_closed PDT記録失敗（無視）: {_pdt_e}")
 
     # ── Research data logging（ログのみ・発注なし） ───────────────────────────
     def _log_research_data(self):
@@ -14537,7 +14786,8 @@ class SPYCreditSpreadBot:
                 })
                 check_signal_divergence(_snap_signal_id)
                 self.mkt.unsubscribe_all_option_legs()
-                self._on_position_closed(force_pnl_usd)
+                # CS売り: EODタイムストップ = 満期放置（expired_worthless）
+                self._on_position_closed(force_pnl_usd, close_reason=_fc_reason)
             else:
                 # 失敗: リトライカウントを増やす
                 self._force_close_retry_count += 1
@@ -14572,7 +14822,8 @@ class SPYCreditSpreadBot:
                         "signal_id": _snap_signal_id,
                     })
                     check_signal_divergence(_snap_signal_id)
-                    self._on_position_closed(force_pnl_usd)
+                    # 決済失敗 = 満期消滅の可能性が高い（0DTE失効）
+                    self._on_position_closed(force_pnl_usd, close_reason=_fc_reason + "_failed")
             return
 
         # 動的ストップ倍率（IntradayMonitorが引き締めた場合はそちらを使用）
@@ -15038,7 +15289,8 @@ class SPYCreditSpreadBot:
                 "signal_id": _dry_snap_signal_id,
             })
             check_signal_divergence(_dry_snap_signal_id)
-            self._on_position_closed(total_pl_usd)
+            # dry-test EOD = CS売り満期放置相当
+            self._on_position_closed(total_pl_usd, close_reason="dry_test_force_close")
             self.eng.close_all_positions("dry_test_force_close")
             # ── 各エンジンの dry-test force close ────────────────────────────
             # VirtualPositionManagerとは別に各エンジン専用ポジションもクローズしてPnL記録する
