@@ -111,6 +111,108 @@ UNDERLYING_CODE = "US.SPY"
 OPEND_HOST = "127.0.0.1"
 OPEND_PORT = 11111
 
+# ── USDJPY rate cache (CRITICAL-6) ─────────────────────────────────────────────
+_USDJPY_CACHE_FILE = Path(__file__).parent / "data" / "usdjpy_cache.json"
+_USDJPY_FALLBACK   = 150.0   # ネットワーク全断時の緊急フォールバック値
+_USDJPY_CACHE_TTL_SEC = 3600  # 1時間キャッシュ
+
+
+def get_usdjpy_rate() -> float:
+    """USD/JPY為替レートを取得する（CRITICAL-6修正）。
+
+    優先順位:
+      1. キャッシュが1時間以内 → キャッシュ値を返す
+      2. yfinance USDJPY=X から取得
+      3. Finnhub forex rates から取得
+      4. キャッシュが古くても前日値をフォールバック + Pushover priority=1 警告
+      5. 全断時 → _USDJPY_FALLBACK (150.0) + Pushover警告
+
+    Returns:
+        float: USD/JPY レート
+    """
+    # 1. キャッシュチェック
+    try:
+        if _USDJPY_CACHE_FILE.exists():
+            cached = json.loads(_USDJPY_CACHE_FILE.read_text(encoding="utf-8"))
+            age_sec = time.time() - cached.get("ts", 0)
+            if age_sec < _USDJPY_CACHE_TTL_SEC and cached.get("rate", 0) > 50:
+                return float(cached["rate"])
+    except Exception:
+        pass
+
+    # 前日キャッシュ値（フォールバック用）
+    _stale_rate: float = 0.0
+    try:
+        if _USDJPY_CACHE_FILE.exists():
+            _cached = json.loads(_USDJPY_CACHE_FILE.read_text(encoding="utf-8"))
+            _stale_rate = float(_cached.get("rate", 0))
+    except Exception:
+        pass
+
+    # 2. yfinance で取得
+    try:
+        import yfinance as _yf
+        _ticker = _yf.Ticker("USDJPY=X")
+        _hist = _ticker.history(period="1d", interval="1h")
+        if not _hist.empty:
+            _rate = float(_hist["Close"].iloc[-1])
+            if 50 < _rate < 300:
+                _save_usdjpy_cache(_rate)
+                return _rate
+    except Exception:
+        pass
+
+    # 3. Finnhub で取得
+    try:
+        if FINNHUB_API_KEY:
+            resp = requests.get(
+                "https://finnhub.io/api/v1/forex/rates",
+                params={"base": "USD", "token": FINNHUB_API_KEY},
+                timeout=5,
+            )
+            _jpy = float(resp.json().get("quote", {}).get("JPY", 0))
+            if 50 < _jpy < 300:
+                _save_usdjpy_cache(_jpy)
+                return _jpy
+    except Exception:
+        pass
+
+    # 4. 全取得失敗 → 前日値フォールバック + Pushover警告
+    _fallback = _stale_rate if _stale_rate > 50 else _USDJPY_FALLBACK
+    _stale_msg = f"前日値 {_stale_rate:.1f} 円を使用" if _stale_rate > 50 else f"固定値 {_USDJPY_FALLBACK:.1f} 円を使用"
+    log.warning(f"[USDJPY] 取得失敗 → {_stale_msg}")
+    try:
+        requests.post(
+            "https://api.pushover.net/1/messages.json",
+            data={
+                "token":    PUSHOVER_TOKEN,
+                "user":     PUSHOVER_USER,
+                "title":    "[Atlas/ALERT] USDJPY取得失敗",
+                "message":  f"yfinance・Finnhub両方から取得失敗\n{_stale_msg}\n計算精度が低下しています",
+                "priority": 1,
+                "retry":    60,
+                "expire":   300,
+            },
+            timeout=5,
+        )
+    except Exception:
+        pass
+    return _fallback
+
+
+def _save_usdjpy_cache(rate: float) -> None:
+    """USDJPY レートをキャッシュファイルに保存する。"""
+    try:
+        _USDJPY_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _USDJPY_CACHE_FILE.write_text(
+            json.dumps({"rate": rate, "ts": time.time(), "date": datetime.datetime.now().isoformat()},
+                       ensure_ascii=False),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Strategy parameters
 # ══════════════════════════════════════════════════════════════════════════════
@@ -286,6 +388,69 @@ DYNAMIC_ENTRY_MIN_ENV_SCORE  = 60   # 環境スコア最低ライン
 # VRPはweakシグナル扱い（False=必須にしない・Trueで必須化）
 DYNAMIC_ENTRY_VRP_REQUIRED   = False
 
+# ── US Market Holidays (全休場日) - CRITICAL-7 ────────────────────────────────
+# NYSE公式: https://www.nyse.com/markets/hours-calendars
+# 毎年1月に次年度分を追加すること
+US_MARKET_HOLIDAYS: set = {
+    # 2026
+    "2026-01-01",  # New Year's Day
+    "2026-01-19",  # MLK Day (3rd Mon Jan)
+    "2026-02-16",  # Presidents' Day (3rd Mon Feb)
+    "2026-04-03",  # Good Friday
+    "2026-05-25",  # Memorial Day (last Mon May)
+    "2026-06-19",  # Juneteenth
+    "2026-07-03",  # Independence Day observed (7/4=Sat -> 7/3 Fri 全休)
+    "2026-09-07",  # Labor Day (1st Mon Sep)
+    "2026-11-26",  # Thanksgiving
+    "2026-12-25",  # Christmas
+    # 2027
+    "2027-01-01",  # New Year's Day
+    "2027-01-18",  # MLK Day
+    "2027-02-15",  # Presidents' Day
+    "2027-03-26",  # Good Friday
+    "2027-05-31",  # Memorial Day
+    "2027-06-18",  # Juneteenth observed (6/19=Sat -> 6/18 Fri)
+    "2027-07-05",  # Independence Day observed (7/4=Sun -> 7/5 Mon)
+    "2027-09-06",  # Labor Day
+    "2027-11-25",  # Thanksgiving
+    "2027-12-24",  # Christmas observed (12/25=Sat -> 12/24 Fri)
+}
+
+
+def _is_market_open_day(date_str: str) -> bool:
+    """date_str (YYYY-MM-DD) が NYSE 開場日かどうかを返す (weekday + holiday check)。"""
+    try:
+        d = datetime.date.fromisoformat(date_str)
+    except ValueError:
+        return False
+    if d.weekday() >= 5:  # 土(5) / 日(6)
+        return False
+    return date_str not in US_MARKET_HOLIDAYS
+
+
+def _get_expiry_today(now_et: datetime.datetime) -> str:
+    """0DTE オプションの expiry 日付文字列 (YYYY-MM-DD) を返す共通関数 (CRITICAL-7).
+
+    ルール:
+    - now_et が市場開場日（平日かつ非祝日）なら当日日付を返す
+    - 週末・祝日の場合は次の開場日を返す（呼び出し側が市場クローズ時に
+      エントリーをスキップすべきだが、コード生成ミスを防ぐためここでも補正する）
+    - ET 0:00〜0:05 の境界帯でも正確に当日日付を返す
+    """
+    candidate = now_et.strftime("%Y-%m-%d")
+    if _is_market_open_day(candidate):
+        return candidate
+    # 週末・祝日 -> 次の開場日を探す（最大7日）
+    d = now_et.date()
+    for _ in range(7):
+        d += datetime.timedelta(days=1)
+        ds = d.strftime("%Y-%m-%d")
+        if _is_market_open_day(ds):
+            return ds
+    # fallback (理論上到達しない)
+    return candidate
+
+
 # ── Early close days (半日取引日) ─────────────────────────────────────────────
 # NYSE公式パターン: ブラックフライデー / クリスマス前日 / 独立記念日前日
 # 全て13:00 ET クローズ。毎年1月に次年度分を追加すること。
@@ -298,9 +463,12 @@ EARLY_CLOSE_DAYS = {
     "2027-11-26": (13, 0),  # ブラックフライデー
     "2027-12-24": (13, 0),  # クリスマス前日
 }
-# 半日取引日の強制決済時刻: クローズ15分前 (12:45 ET)
-EARLY_CLOSE_FORCE_H = 12
-EARLY_CLOSE_FORCE_M = 45
+# 半日取引日のエントリー締め切り: クローズ5分前 (12:55 ET) - CRITICAL-7
+EARLY_CLOSE_ENTRY_CUTOFF_H = 12
+EARLY_CLOSE_ENTRY_CUTOFF_M = 55
+# 半日取引日の強制決済時刻: クローズ時刻ちょうど (13:00 ET) - CRITICAL-7
+EARLY_CLOSE_FORCE_H = 13
+EARLY_CLOSE_FORCE_M = 0
 # 半日取引日の graceful exit 時刻: クローズ30分後 (13:30 ET)
 EARLY_CLOSE_EXIT_H  = 13
 EARLY_CLOSE_EXIT_M  = 30
@@ -316,6 +484,23 @@ def get_early_close_time():
     """今日の早期クローズ時刻 (hour, minute) in ET のタプル。半日でなければ None。"""
     today_str = datetime.datetime.now(ET).strftime("%Y-%m-%d")
     return EARLY_CLOSE_DAYS.get(today_str)
+
+
+def is_early_close_entry_allowed(now_et: datetime.datetime) -> bool:
+    """半日取引日に新規エントリーが許可される時間帯かどうかを返す (CRITICAL-7).
+
+    半日でなければ常に True。
+    半日の場合は 12:55 ET より前なら True、以降は False。
+    """
+    today_str = now_et.strftime("%Y-%m-%d")
+    if today_str not in EARLY_CLOSE_DAYS:
+        return True
+    cutoff = now_et.replace(
+        hour=EARLY_CLOSE_ENTRY_CUTOFF_H,
+        minute=EARLY_CLOSE_ENTRY_CUTOFF_M,
+        second=0, microsecond=0,
+    )
+    return now_et < cutoff
 
 
 # ── SMA ───────────────────────────────────────────────────────────────────────
@@ -770,6 +955,7 @@ try:
     from common.qty_calculator import (
         calc_qty_verified as _calc_qty_verified,
         tmr_verify_spread_qty as _tmr_verify_spread_qty,
+        tmr_verify_naked_qty as _tmr_verify_naked_qty,
         QtyMismatchError,
     )
     _QTY_CALCULATOR_AVAILABLE = True
@@ -779,6 +965,8 @@ except ImportError as _e:
     def _calc_qty_verified(cash, premium, max_risk_pct, *, min_qty=1, max_qty=None):
         raise ImportError("common.qty_calculator not available")
     def _tmr_verify_spread_qty(cash, spread_width, capital_pct, qty_from_calc_qty):
+        pass  # no-op fallback
+    def _tmr_verify_naked_qty(cash, premium_per_share, qty, stop_loss_mult=2.0):
         pass  # no-op fallback
     class QtyMismatchError(Exception):
         pass
@@ -832,7 +1020,7 @@ def _pre_trade_gate(code: str, qty: int, price: float, side,
     違反時: ログ出力 + 必要時のみPushover通知
     """
     if not _PRE_TRADE_CHECK_AVAILABLE:
-        return True, "pre_trade_check unavailable — passing through"
+        return False, "pre_trade_check unavailable — blocking order (fail safe)"
 
     try:
         side_str = "SELL"
@@ -2132,8 +2320,8 @@ def calc_qty(cash: float, params: dict, paper: bool = False) -> int:
         limit = MAX_QTY_PAPER
     else:
         # G-NEW9: 資金フェーズに応じたmax_qty
-        # JPY建て口座のため USD概算変換（150円/ドル）でフェーズ判定
-        cash_usd = cash / 150.0
+        # JPY建て口座のため USD動的換算でフェーズ判定（CRITICAL-6: 固定150円廃止）
+        cash_usd = cash / get_usdjpy_rate()
         phase_cfg = get_capital_phase(cash_usd)
         limit = phase_cfg["max_qty"]
     return max(1, min(max_by_capital, limit))
@@ -2165,8 +2353,8 @@ def calc_qty_mass_verify(
 
     # 1組み合わせあたりに割り当てられる証拠金上限（総資金を均等分割）
     # 固定パラメータ原則違反を避けるため capital_pct も活用する
-    # cashはJPY建て・margin_per_contractはUSD建てのため換算必須（150円/ドル）
-    cash_usd = cash / 150.0
+    # cashはJPY建て・margin_per_contractはUSD建てのため換算必須（CRITICAL-6: 動的レート使用）
+    cash_usd = cash / get_usdjpy_rate()
     per_slot_cash = (cash_usd * params.get("capital_pct", 0.02)) / n_combinations
     margin_per_contract = params.get("width", 5) * 100  # 1枚あたりのスプレッド証拠金（USD）
     if margin_per_contract <= 0:
@@ -2535,7 +2723,7 @@ class MarketData:
 
         try:
             now_et = datetime.datetime.now(ET)
-            expiry = now_et.strftime("%Y-%m-%d")
+            expiry = _get_expiry_today(now_et)
 
             # ATM付近のコードを取得（Call 3本・Put 3本）
             new_atm_codes: list = []
@@ -2731,7 +2919,7 @@ class MarketData:
 
             # 2. 0DTE expiry（ET 当日日付）
             now_et = datetime.datetime.now(ET)
-            expiry = now_et.strftime("%Y-%m-%d")
+            expiry = _get_expiry_today(now_et)
 
             # 3. ATM 付近の Call/Put を chain から取得
             iv_values: list = []
@@ -3050,7 +3238,7 @@ class MarketData:
             try:
                 import futu as ft
                 now_et = datetime.datetime.now(ET)
-                expiry = now_et.strftime("%Y-%m-%d")
+                expiry = _get_expiry_today(now_et)
                 call_oi = 0
                 put_oi  = 0
                 for opt_type in [ft.OptionType.CALL, ft.OptionType.PUT]:
@@ -4005,14 +4193,44 @@ class TradeEngine:
         env = self.trade_env
         acc = int(self.account_id or 0)
 
+        # ── Pre-Trade Check 共通コンテキスト取得 (capital_usd=0素通し防止) ──────
+        # capital_usd を必ず実際に取得する。0デフォルト禁止。
+        _pt_capital_usd = self.get_account_cash()
+        if _pt_capital_usd <= 0:
+            log.error(
+                f"[PreTrade] capital_usd={_pt_capital_usd} <= 0 — "
+                f"口座残高取得失敗のため発注ブロック (label={label})"
+            )
+            return None, "failed"
+        _pt_open_positions_list = self.get_open_positions()
+        _pt_open_positions = len(_pt_open_positions_list)
+        # open_margin_total: ポジション一覧の market_val の絶対値合計（概算）
+        _pt_open_margin_total = sum(
+            abs(float(p.get("market_val", 0) or 0))
+            for p in _pt_open_positions_list
+        )
+        # symbol_margin: 同一シンボルのポジションのみ合算
+        _pt_symbol = _extract_symbol_from_code(code)
+        _pt_symbol_margin = sum(
+            abs(float(p.get("market_val", 0) or 0))
+            for p in _pt_open_positions_list
+            if _extract_symbol_from_code(str(p.get("code", ""))) == _pt_symbol
+        )
+
         # ── 指値モード ────────────────────────────────────────────────────────
         if use_limit and init_price is not None:
             price = round(init_price, 2)
             order_id = None
+            _pt_est_margin = price * qty * 100.0
 
-            # [Defense-in-Depth] Pre-Trade Check
+            # [Defense-in-Depth] Pre-Trade Check (capital_usd必須渡し)
             _pt_ok, _pt_reason = _pre_trade_gate(
-                code=code, qty=qty, price=price, side=side, paper=self.paper
+                code=code, qty=qty, price=price, side=side, paper=self.paper,
+                est_margin=_pt_est_margin,
+                capital_usd=_pt_capital_usd,
+                open_positions=_pt_open_positions,
+                open_margin_total=_pt_open_margin_total,
+                symbol_margin=_pt_symbol_margin,
             )
             if not _pt_ok:
                 log.error(f"Leg {label} pre_trade_check reject: {_pt_reason}")
@@ -4078,9 +4296,15 @@ class TradeEngine:
 
         # ── 成行モード（指値無効 / init_price=None / 指値失敗フォールバック）─────
         fill_method = "market_fallback" if (use_limit and init_price is not None) else "market"
-        # [Defense-in-Depth] Pre-Trade Check (fallback/market entry)
+        # [Defense-in-Depth] Pre-Trade Check (fallback/market entry, capital_usd必須渡し)
+        _pt_market_est_margin = float(init_price or 0) * qty * 100.0
         _pt_ok, _pt_reason = _pre_trade_gate(
-            code=code, qty=qty, price=0, side=side, paper=self.paper
+            code=code, qty=qty, price=0, side=side, paper=self.paper,
+            est_margin=_pt_market_est_margin,
+            capital_usd=_pt_capital_usd,
+            open_positions=_pt_open_positions,
+            open_margin_total=_pt_open_margin_total,
+            symbol_margin=_pt_symbol_margin,
         )
         if not _pt_ok:
             log.error(f"Leg {label} market pre_trade_check reject: {_pt_reason}")
@@ -4396,44 +4620,139 @@ class TradeEngine:
         env = self.trade_env
         acc = int(self.account_id or 0)
 
-        # P1-1: Credit SpreadのSELL脚（SHORT）を先に決済してレグリスクを閉じる
-        # SHORT脚を買い戻すことでデルタリスクをまず消す（優秀なトレーダーの基本）
+        # CRITICAL-8: sync barrier 方式
+        # Step-A: SHORT脚を先にbuybackして約定確認(60s timeout)
+        # Step-B: SHORT全完了確認後にLONG sell
+        # 1 leg 失敗 -> _pending_close に記録 + Pushover priority=2
         short_positions = [p for p in positions if p.get("position_side") == "SHORT"]
         long_positions  = [p for p in positions if p.get("position_side") != "SHORT"]
-        ordered_positions = short_positions + long_positions
-        if short_positions:
-            log.info(f"Close order sequence: {len(short_positions)} SHORT first, "
-                     f"then {len(long_positions)} LONG (leg risk control)")
 
-        failed = []
-        close_order_ids: list = []  # exit約定価格取得用
-        close_order_codes: dict = {}  # order_id → {"code": str, "position_side": str}
-        for pos in ordered_positions:
-            code = pos.get("code", "")
-            qty  = abs(int(pos.get("qty", 0)))
-            if qty == 0:
-                continue
-            position_side = pos.get("position_side", "LONG")
-            side = TrdSide.BUY if position_side == "SHORT" else TrdSide.SELL
-            ret, data = self.trade_ctx.place_order(
-                price=0, qty=qty, code=code,
-                trd_side=side, order_type=OrderType.MARKET,
+        if short_positions:
+            log.info(f"[SyncBarrier] Step-A: {len(short_positions)} SHORT buyback first, "
+                     f"then {len(long_positions)} LONG sell")
+
+        close_order_ids: list = []
+        close_order_codes: dict = {}  # order_id -> {"code": str, "position_side": str}
+        failed_legs: list = []
+
+        def _send_close_leg(pos_item: dict):
+            """1 leg の決済注文送信。成功時 order_id、失敗時 None。"""
+            code_ = pos_item.get("code", "")
+            qty_  = abs(int(pos_item.get("qty", 0)))
+            if qty_ == 0:
+                return None
+            position_side_ = pos_item.get("position_side", "LONG")
+            side_ = TrdSide.BUY if position_side_ == "SHORT" else TrdSide.SELL
+            ret_, data_ = self.trade_ctx.place_order(
+                price=0, qty=qty_, code=code_,
+                trd_side=side_, order_type=OrderType.MARKET,
                 trd_env=env, acc_id=acc,
                 time_in_force=TimeInForce.DAY,
             )
-            if ret != RET_OK:
-                log.error(f"Close order FAILED for {code} x{qty}: {data}")
-                failed.append(code)
-            else:
-                order_id = data.iloc[0].get("order_id", "?") if not data.empty else "?"
-                log.info(f"Close order sent: {code} x{qty} "
-                         f"side={position_side} order_id={order_id}")
-                close_order_ids.append(order_id)
-                close_order_codes[order_id] = {"code": code, "position_side": position_side}
+            if ret_ != RET_OK:
+                log.error(f"[SyncBarrier] Close order FAILED for {code_} x{qty_}: {data_}")
+                return None
+            oid_ = data_.iloc[0].get("order_id", "?") if not data_.empty else "?"
+            log.info(f"[SyncBarrier] Close order sent: {code_} x{qty_} "
+                     f"side={position_side_} order_id={oid_}")
+            return oid_
 
-        # 約定確認: 3秒待ってポジションを再チェック（qty=0のゾンビは除外）
+        def _wait_fills_with_timeout(order_ids_, timeout_sec=60):
+            """order_ids の約定を timeout_sec 内に確認。
+            Returns (filled_ids, timed_out_ids)."""
+            import time as _time
+            deadline = _time.monotonic() + timeout_sec
+            pending_ = list(order_ids_)
+            filled_ = []
+            while pending_ and _time.monotonic() < deadline:
+                _time.sleep(2)
+                still_pending_ = []
+                for oid__ in pending_:
+                    ret__, od = self.trade_ctx.order_list_query(
+                        order_id=oid__, trd_env=env, acc_id=acc,
+                    )
+                    if ret__ != 0 or od is None or (hasattr(od, "empty") and od.empty):
+                        still_pending_.append(oid__)
+                        continue
+                    status__ = od.iloc[0].get("order_status", "") if not od.empty else ""
+                    if status__ == "FILLED_ALL":
+                        filled_.append(oid__)
+                    else:
+                        still_pending_.append(oid__)
+                pending_ = still_pending_
+            return filled_, pending_
+
+        # Step-A: SHORT buyback
+        short_order_ids = []
+        for pos_ in short_positions:
+            oid = _send_close_leg(pos_)
+            if oid:
+                short_order_ids.append(oid)
+                close_order_codes[oid] = {
+                    "code": pos_.get("code", ""),
+                    "position_side": pos_.get("position_side", "SHORT"),
+                }
+            else:
+                failed_legs.append(pos_.get("code", "?"))
+
+        # SHORT 全約定確認 (timeout 60s) — sync barrier
+        if short_order_ids:
+            filled_short, timeout_short = _wait_fills_with_timeout(short_order_ids, timeout_sec=60)
+            close_order_ids.extend(filled_short)
+            if timeout_short:
+                log.error(f"[SyncBarrier] SHORT buyback timeout: {timeout_short}")
+                for oid_ in timeout_short:
+                    info_ = close_order_codes.get(oid_, {})
+                    failed_legs.append(info_.get("code", oid_) if isinstance(info_, dict) else oid_)
+
+        # SHORT で失敗がある場合は naked 化リスクとして即通知 + バリア停止
+        if failed_legs:
+            self._pending_close = list(failed_legs)
+            naked_msg = (
+                f"reason={reason}\nfailed_legs={failed_legs}\n"
+                f"次回 restart 時に _pending_close から再試行します"
+            )
+            log.error(f"[SyncBarrier] naked risk: {naked_msg}")
+            pushover_alert(
+                "[Atlas/ALERT] close_all_positions leg failed - naked risk",
+                naked_msg,
+                priority=2,
+            )
+            return False  # LONG を送らず停止
+
+        # Step-B: LONG sell (SHORT 全完了後)
+        long_order_ids = []
+        for pos_ in long_positions:
+            oid = _send_close_leg(pos_)
+            if oid:
+                long_order_ids.append(oid)
+                close_order_codes[oid] = {
+                    "code": pos_.get("code", ""),
+                    "position_side": pos_.get("position_side", "LONG"),
+                }
+            else:
+                failed_legs.append(pos_.get("code", "?"))
+
+        if long_order_ids:
+            filled_long, timeout_long = _wait_fills_with_timeout(long_order_ids, timeout_sec=60)
+            close_order_ids.extend(filled_long)
+            if timeout_long:
+                for oid_ in timeout_long:
+                    info_ = close_order_codes.get(oid_, {})
+                    failed_legs.append(info_.get("code", oid_) if isinstance(info_, dict) else oid_)
+
+        if failed_legs:
+            self._pending_close = list(failed_legs)
+            pushover_alert(
+                "[Atlas/ALERT] close_all_positions leg failed - naked risk",
+                f"LONG sell 失敗 reason={reason} failed={failed_legs}",
+                priority=2,
+            )
+            return False
+
+        # 全発注後の残留確認
         import time
-        time.sleep(3)
+        time.sleep(2)
         remaining_raw = self.get_open_positions()
         remaining = [
             p for p in remaining_raw
@@ -4441,42 +4760,40 @@ class TradeEngine:
         ]
         if remaining:
             remaining_codes = [p.get("code", "?") for p in remaining]
-            # 0DTE失効ポジションかどうか判定（日付が今日より前なら失効済み）
             now_et = datetime.datetime.now(ET)
             today_str = now_et.strftime("%y%m%d")
             _truly_open = [c for c in remaining_codes if today_str in c]
-            _expired = [c for c in remaining_codes if today_str not in c]
+            _expired    = [c for c in remaining_codes if today_str not in c]
             if _expired and not _truly_open:
-                # 全て失効済み → 正常。通知不要（自動クリーンアップが処理する）
                 log.info(f"Expired 0DTE positions after close ({reason}): {_expired} — auto-cleanup will handle")
                 return True
             elif _truly_open:
                 log.error(f"POSITIONS STILL OPEN after close ({reason}): {_truly_open}")
+                self._pending_close = _truly_open
                 pushover_alert(
-                    "決済確認中",
-                    f"{reason}で決済指示 → 約定確認中({len(_truly_open)}件)\n"
-                    f"次のループで再確認します",
-                    priority=0,
+                    "[Atlas/ALERT] close_all_positions leg failed - naked risk",
+                    f"{reason} 後もポジション残留: {_truly_open}",
+                    priority=2,
                 )
                 return False
             else:
                 log.warning(f"Unknown position codes after close ({reason}): {remaining_codes}")
                 return False
 
-        # exit実約定価格を収集して _last_exit_fills に格納
-        # {code: {"price": float|None, "position_side": str}} の形式で保存
+        # exit 実約定価格を収集して _last_exit_fills に格納
         if close_order_ids:
             fill_map = self._confirm_fills(close_order_ids, f"close_{reason}")
             self._last_exit_fills = {}
-            for oid, price in fill_map.items():
-                info = close_order_codes.get(oid, {})
-                c = info.get("code", oid) if isinstance(info, dict) else oid
-                ps = info.get("position_side", "LONG") if isinstance(info, dict) else "LONG"
-                self._last_exit_fills[c] = {"price": price, "position_side": ps}
+            for oid_, price in fill_map.items():
+                info_ = close_order_codes.get(oid_, {})
+                c_ = info_.get("code", oid_) if isinstance(info_, dict) else oid_
+                ps_ = info_.get("position_side", "LONG") if isinstance(info_, dict) else "LONG"
+                self._last_exit_fills[c_] = {"price": price, "position_side": ps_}
             log.info(f"Exit fills ({reason}): {self._last_exit_fills}")
         else:
             self._last_exit_fills = {}
 
+        self._pending_close = []  # 成功時にクリア
         log.info(f"All positions closed successfully ({reason})")
         return True
 
@@ -5700,6 +6017,23 @@ class IntradayMonitor:
           - Greeks取得失敗: スキップ
         """
         try:
+            # CRITICAL-5: Quote接続ヘルスチェック — 切断時はヘッジスキップ + Pushover通知
+            if self.mkt is not None:
+                _quote_ctx = getattr(self.mkt, "_quote_ctx", None)
+                if _quote_ctx is not None:
+                    try:
+                        _connected = getattr(_quote_ctx, "is_connected", None)
+                        if callable(_connected) and not _connected():
+                            log.warning("[DeltaHedge] Quote接続切断検知 → ヘッジスキップ")
+                            pushover(
+                                "[Atlas/ALERT] Quote disconnect - hedge skipped",
+                                "Quote接続が切断されています。ヘッジを実施できません。\nOpenD接続状態を確認してください。",
+                                priority=2,
+                            )
+                            return
+                    except Exception:
+                        pass
+
             # 週次PDTカウンタのリセットチェック（月曜切替）
             self._reset_pdt_weekly_hedge_if_needed()
 
@@ -5740,7 +6074,7 @@ class IntradayMonitor:
                     _raw = getattr(self.bot, "_last_cash_usd", None)
                     if _raw is None and self.eng:
                         _raw_jpy = self.eng.get_account_cash()
-                        _raw = _raw_jpy / 150.0 if _raw_jpy and _raw_jpy > 1000 else _raw_jpy
+                        _raw = _raw_jpy / get_usdjpy_rate() if _raw_jpy and _raw_jpy > 1000 else _raw_jpy
                     if _raw is not None:
                         _cash_usd = float(_raw)
                 except Exception:
@@ -5810,14 +6144,29 @@ class IntradayMonitor:
                 + (f", PDT残{_pdt_remaining}回" if _cash_usd < 25000 else "") + ")"
             )
 
-            # dry-test / futu未接続 → ログのみ（実発注なし）
-            _dry = not FUTU_AVAILABLE
-            if self.bot is not None:
-                _dry = _dry or getattr(self.bot, "dry_test", False)
+            # FUTU未接続チェック（CRITICAL-5: FUTU_AVAILABLE=False時は即return・delta_hedge_activeはセットしない）
+            if not FUTU_AVAILABLE:
+                log.warning(
+                    f"[DeltaHedge] FUTU未接続 → ヘッジスキップ"
+                    f" (方針: {hedge_direction} x{hedge_qty}, delta={total_delta:+.4f})"
+                )
+                pushover(
+                    "[Atlas/ALERT] FUTU unavailable - hedge skipped",
+                    f"total_delta={total_delta:+.4f} (閾値±{trigger:.2f})\n"
+                    f"銘柄: {getattr(getattr(self, 'mkt', None), 'underlying_code', 'unknown')}\n"
+                    f"方針: {hedge_direction} x{hedge_qty}枚\n"
+                    f"FUTU未接続のためヘッジ未実施 — 手動対応を検討",
+                    priority=2,
+                )
+                # delta_hedge_active はセットしない（実ヘッジ未実施）
+                return
+
+            # dry-test → ログのみ（実発注なし）
+            _dry = getattr(self.bot, "dry_test", False) if self.bot is not None else False
 
             if _dry:
                 log.info(
-                    f"[DeltaHedge] dry-test/futu未接続 → 実発注スキップ"
+                    f"[DeltaHedge] dry-test → 実発注スキップ"
                     f" (方針: {hedge_direction} x{hedge_qty})"
                 )
                 self._delta_hedge_active = True
@@ -5828,7 +6177,7 @@ class IntradayMonitor:
 
             # 実ヘッジ発注: ATMオプション買い（マルチ銘柄対応）
             try:
-                expiry_today = datetime.datetime.now(ET).strftime("%Y-%m-%d")
+                expiry_today = _get_expiry_today(datetime.datetime.now(ET))
                 # [マルチ銘柄] mkt.underlying_code から銘柄別に価格取得
                 _hedge_underlying = self.mkt.underlying_code if self.mkt else "US.SPY"
                 _hedge_ticker = _hedge_underlying.replace("US.", "").replace(".", "")
@@ -6861,8 +7210,24 @@ class ORBEngine:
                 if ret == 0 and not kline.empty:
                     bars = []
                     for _, row in kline.iterrows():
+                        # CRITICAL-9修正: time_key ("YYYY-MM-DD HH:MM:SS" ET) を実barタイムとして使用
+                        # datetime.now()で全barに同一時刻を設定していたバグを修正
+                        _raw_time_key = row.get("time_key", "")
+                        if not _raw_time_key:
+                            raise ValueError(
+                                f"[ORB] futu kline row に time_key が存在しない — "
+                                f"row columns: {list(row.index) if hasattr(row, 'index') else 'unknown'}"
+                            )
+                        try:
+                            # time_key は美東時間 (ET) の文字列
+                            _bar_time = datetime.datetime.strptime(_raw_time_key, "%Y-%m-%d %H:%M:%S")
+                            _bar_time = _bar_time.replace(tzinfo=ET)
+                        except (ValueError, AttributeError) as _te:
+                            raise ValueError(
+                                f"[ORB] futu kline time_key parse失敗: {_raw_time_key!r}: {_te}"
+                            ) from _te
                         bars.append({
-                            "time":  datetime.datetime.now(ET),
+                            "time":  _bar_time,
                             "open":  float(row.get("open", 0)),
                             "high":  float(row.get("high", 0)),
                             "low":   float(row.get("low", 0)),
@@ -7718,7 +8083,7 @@ class CalendarEngine:
 
         # dry-testモード
         if self.dry_test:
-            front_expiry = now_et.strftime("%Y-%m-%d")
+            front_expiry = _get_expiry_today(now_et)
             back_expiry  = self._find_back_expiry(spy_price)
             direction    = "CALL" if spy_price > 0 else "CALL"  # 常にCALL（dry-test）
             atm_strike   = round(spy_price / 5) * 5  # $5丸め
@@ -7753,7 +8118,7 @@ class CalendarEngine:
             return None
 
         # 今日の0DTEとbackのexpiryを決定
-        front_expiry = now_et.strftime("%Y-%m-%d")
+        front_expiry = _get_expiry_today(now_et)
         back_expiry  = self._find_back_expiry(spy_price)
         if back_expiry is None:
             log.warning("[Calendar] backレッグexpiry取得失敗")
@@ -8170,7 +8535,7 @@ class StraddleEngine:
             return None
 
         self.today_vix = vix
-        expiry = datetime.datetime.now(ET).strftime("%Y-%m-%d")
+        expiry = _get_expiry_today(datetime.datetime.now(ET))
         spy_price = self.mkt.get_spy_current()
         if spy_price is None or spy_price <= 0:
             log.warning("[StraddleEngine] SPY価格取得失敗 → スキップ")
@@ -10072,7 +10437,7 @@ class StrangleSellEngine:
 
         self._entry_attempted = True
         now_et  = datetime.datetime.now(ET)
-        expiry  = now_et.strftime("%Y-%m-%d")
+        expiry  = _get_expiry_today(now_et)
 
         call_opt = self._find_otm_option(expiry, "CALL", underlying_price,
                                           STRANGLE_SELL_CALL_DELTA)
@@ -10125,25 +10490,42 @@ class StrangleSellEngine:
             f"qty={qty} net_credit=${net_credit_total:.2f}"
         )
 
-        # pre_trade_check (全4層)
+        # pre_trade_check (全4層, capital_usd必須渡し)
         if FUTU_AVAILABLE and not self.dry_test:
             import futu as ft
+            _ss_open_positions_list = self.eng.get_open_positions() if self.eng else []
+            _ss_open_positions = len(_ss_open_positions_list)
+            _ss_open_margin_total = sum(
+                abs(float(p.get("market_val", 0) or 0))
+                for p in _ss_open_positions_list
+            )
+            # ストラングル: est_margin = 各脚のpremium * qty * 100
+            _ss_est_margin = (call_mid + put_mid) * qty * 100.0
             for _code, _price in [(call_code, call_mid), (put_code, put_mid)]:
+                _ss_sym_margin = sum(
+                    abs(float(p.get("market_val", 0) or 0))
+                    for p in _ss_open_positions_list
+                    if _extract_symbol_from_code(str(p.get("code", ""))) == _extract_symbol_from_code(_code)
+                )
                 allow, reason_str = _pre_trade_gate(
-                    _code, qty, _price, ft.TrdSide.SELL, paper=self.paper
+                    _code, qty, _price, ft.TrdSide.SELL, paper=self.paper,
+                    est_margin=_ss_est_margin / 2,
+                    capital_usd=cash,
+                    open_positions=_ss_open_positions,
+                    open_margin_total=_ss_open_margin_total,
+                    symbol_margin=_ss_sym_margin,
                 )
                 if not allow:
                     log.warning(f"[StrangleSell] pre_trade_gate ブロック: {reason_str}")
                     return None
 
-        # TMR qty検証
+        # TMR qty検証 (ネイキッドオプション専用経路: spread_width不要)
         if _QTY_CALCULATOR_AVAILABLE and not self.dry_test:
             try:
-                _tmr_verify_spread_qty(
+                _tmr_verify_naked_qty(
                     cash=cash,
-                    spread_width=0,
-                    capital_pct=STRANGLE_SELL_MAX_RISK_PCT,
-                    qty_from_calc_qty=qty,
+                    premium_per_share=net_per_share,
+                    qty=qty,
                 )
             except QtyMismatchError as qe:
                 log.error(f"[StrangleSell] TMR qty mismatch: {qe}")
@@ -11042,7 +11424,13 @@ def calc_butterfly_qty(cash: float, net_debit: float, paper: bool = False) -> in
         return qty
     except Exception as e:
         log.warning(f"[Butterfly][TMR] 検証エラー ({e}) -> フォールバック計算")
-        raw = int(cash * capital_pct / (net_debit * 100))
+        try:
+            raw_float = cash * capital_pct / (net_debit * 100)
+            if not math.isfinite(raw_float):
+                return 1
+            raw = int(raw_float)
+        except (OverflowError, ZeroDivisionError, ValueError):
+            return 1
         return max(1, min(raw, max_q))
 
 
@@ -12775,7 +13163,7 @@ class SPYCreditSpreadBot:
         """
         now_et  = datetime.datetime.now(ET)
         ts      = now_et.isoformat()
-        expiry  = now_et.strftime("%Y-%m-%d")
+        expiry  = _get_expiry_today(now_et)
         spy     = self.mkt.get_spy_current()
         if not spy:
             return
@@ -14455,7 +14843,7 @@ class SPYCreditSpreadBot:
 
         # G-NEW9: 資金フェーズ確認 + PDTモード報告
         try:
-            _cash_usd = self.eng.get_account_cash() / 150.0  # JPY→USD概算(150円/ドル)
+            _cash_usd = self.eng.get_account_cash() / get_usdjpy_rate()  # JPY→USD動的換算（CRITICAL-6）
             self._last_cash_usd = _cash_usd  # IntradayMonitor._try_delta_hedge()用キャッシュ更新
             _phase = get_capital_phase(_cash_usd)
             log.info(
@@ -14804,8 +15192,8 @@ class SPYCreditSpreadBot:
         if not self.paper:
             try:
                 _raw_cash = self.eng.get_account_cash()
-                # moomooは円建て口座のため JPY→USD 換算（150円/ドル）
-                _cash_usd = _raw_cash / 150.0 if _raw_cash > 1000 else _raw_cash
+                # moomooは円建て口座のため JPY→USD 動的換算（CRITICAL-6: 固定150円廃止）
+                _cash_usd = _raw_cash / get_usdjpy_rate() if _raw_cash > 1000 else _raw_cash
                 self._last_cash_usd = _cash_usd  # IntradayMonitor._try_delta_hedge()用
                 self.trading_mode = get_trading_mode(_cash_usd, paper=False)
                 log.info(
@@ -15952,19 +16340,8 @@ class SPYCreditSpreadBot:
             now_et     = datetime.datetime.now(ET)
             prev_month = (now_et.date().replace(day=1) - datetime.timedelta(days=1))
             month_str  = prev_month.strftime("%Y%m")
-            usdjpy     = 150.0
-            try:
-                resp = requests.get(
-                    "https://finnhub.io/api/v1/forex/rates",
-                    params={"base": "USD", "token": FINNHUB_API_KEY},
-                    timeout=5,
-                )
-                rates = resp.json().get("quote", {})
-                jpy = float(rates.get("JPY", 0))
-                if jpy > 0:
-                    usdjpy = jpy
-            except Exception:
-                pass
+            # CRITICAL-6: 固定150円廃止 → get_usdjpy_rate() でキャッシュ付き動的取得
+            usdjpy       = get_usdjpy_rate()
             trades       = load_pnl()
             month_prefix = prev_month.strftime("%Y-%m")
             month_trades = [t for t in trades if t.get("date", "").startswith(month_prefix)]
