@@ -7,6 +7,9 @@ watchdog 自己回復 + Pushover backoff のテスト。
   (b) 1回目kickstart成功 — attempt=0→1 で kickstart が呼ばれる
   (c) 3回失敗で人間通知 — attempt>=3 で priority=2 通知
   (d) backoff中にqueue追加 — 429 × 3回 → backoff → 次の send がキューへ
+  (e) 時間帯ゲート: 窓内stale → recovery発動
+  (f) 時間帯ゲート: 窓外stale → skip（recovery発動しない・通知しない）
+  (g) 時間帯ゲート: 境界時刻ハンドリング（22:25 JST は窓内）
 
 Atlas 版 (atlas_watchdog) も同等のテストを実施する。
 """
@@ -498,6 +501,117 @@ class TestBackoffStatePersistence(unittest.TestCase):
         finally:
             if tmp.exists():
                 tmp.unlink()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 時間帯ゲートテスト（3件追加）
+# ─────────────────────────────────────────────────────────────────────────────
+class TestWatchWindowGate(unittest.TestCase):
+    """chronos_watchdog / atlas_watchdog の時間帯ゲート (_is_in_watch_window) テスト。
+
+    (e) 窓内時間 + stale → recovery発動
+    (f) 窓外時間 + stale → skip（recovery発動しない・通知しない）
+    (g) 境界時刻ハンドリング（22:25 JST は 22:20〜05:10 窓内）
+    """
+
+    def setUp(self):
+        _reset_cw_globals()
+        _reset_aw_globals()
+        self._orig_cw_recovery_path = cw.RECOVERY_STATE_PATH
+        self._orig_aw_recovery_path = aw.RECOVERY_STATE_PATH
+        self._cw_tmp = Path("/tmp/cw_gate_recovery_test.json")
+        self._aw_tmp = Path("/tmp/aw_gate_recovery_test.json")
+        for p in [self._cw_tmp, self._aw_tmp]:
+            if p.exists():
+                p.unlink()
+        cw.RECOVERY_STATE_PATH = self._cw_tmp
+        aw.RECOVERY_STATE_PATH = self._aw_tmp
+
+    def tearDown(self):
+        cw.RECOVERY_STATE_PATH = self._orig_cw_recovery_path
+        aw.RECOVERY_STATE_PATH = self._orig_aw_recovery_path
+        for p in [self._cw_tmp, self._aw_tmp]:
+            if p.exists():
+                p.unlink()
+
+    # ── (e) 窓内時間 + stale → recovery発動 ─────────────────────────────────
+    def test_e_window_inside_stale_triggers_recovery(self):
+        """市場時間内(JST 23:00)で stale ファイルを検知 → _attempt_self_recovery が呼ばれる。"""
+        # JST 23:00 = 窓内 ("22:20" → "05:10")
+        from datetime import datetime, timezone, timedelta
+        fake_jst = datetime(2026, 4, 20, 23, 0, 0, tzinfo=timezone(timedelta(hours=9)))
+
+        with (
+            patch("chronos_watchdog.datetime") as mock_dt,
+            patch("chronos_watchdog.pushover_send"),
+            patch("chronos_watchdog._attempt_self_recovery") as mock_recovery,
+            patch("pathlib.Path.exists", return_value=True),
+            patch("pathlib.Path.stat") as mock_stat,
+        ):
+            mock_dt.now.return_value = fake_jst
+            st = MagicMock()
+            st.st_size = 100
+            st.st_mtime = time.time() - 700  # 700秒前 = stale
+            mock_stat.return_value = st
+
+            # chronos.log は市場時間帯のみ監視
+            cw.run_health_check([Path("/fake/chronos.log")])
+
+            # _attempt_self_recovery が呼ばれたことを確認
+            mock_recovery.assert_called_once()
+            call_label = mock_recovery.call_args[0][0]
+            self.assertIn("更新停止", call_label)
+
+    # ── (f) 窓外時間 + stale → skip ──────────────────────────────────────────
+    def test_f_window_outside_stale_skips_recovery(self):
+        """市場時間外(JST 07:41)で stale ファイルを検知 → recovery もアラートも発動しない。"""
+        from datetime import datetime, timezone, timedelta
+        # JST 07:41 = 窓外 ("22:20" → "05:10")
+        fake_jst = datetime(2026, 4, 20, 7, 41, 0, tzinfo=timezone(timedelta(hours=9)))
+
+        with (
+            patch("chronos_watchdog.datetime") as mock_dt,
+            patch("chronos_watchdog.pushover_send") as mock_push,
+            patch("chronos_watchdog._attempt_self_recovery") as mock_recovery,
+            patch("pathlib.Path.exists", return_value=True),
+            patch("pathlib.Path.stat") as mock_stat,
+        ):
+            mock_dt.now.return_value = fake_jst
+            st = MagicMock()
+            st.st_size = 100
+            st.st_mtime = time.time() - 115200  # 32時間前 = stale
+            mock_stat.return_value = st
+
+            # chronos.log エントリを WATCH_TARGETS から取得して path を合わせる
+            chronos_path = cw.WATCH_TARGETS[0]["path"]
+            cw.run_health_check([chronos_path])
+
+            # recovery も通知も発動しないこと
+            mock_recovery.assert_not_called()
+            mock_push.assert_not_called()
+
+    # ── (g) 境界時刻ハンドリング: 22:25 JST は窓内 ──────────────────────────
+    def test_g_boundary_22_25_jst_is_inside_window(self):
+        """22:25 JST は ("22:20", "05:10") 窓内と判定されること。"""
+        from datetime import datetime, timezone, timedelta
+
+        # _is_in_watch_window を直接テスト（モジュールのユーティリティ関数）
+        fake_jst = datetime(2026, 4, 20, 22, 25, 0, tzinfo=timezone(timedelta(hours=9)))
+        windows = [("22:20", "05:10")]
+
+        with patch("chronos_watchdog.datetime") as mock_dt:
+            mock_dt.now.return_value = fake_jst
+            result = cw._is_in_watch_window(windows)
+
+        self.assertTrue(result, "22:25 JST は市場時間帯窓内のはず")
+
+        # 05:15 JST は窓外のはず
+        fake_outside = datetime(2026, 4, 20, 5, 15, 0, tzinfo=timezone(timedelta(hours=9)))
+        with patch("chronos_watchdog.datetime") as mock_dt:
+            mock_dt.now.return_value = fake_outside
+            result_outside = cw._is_in_watch_window(windows)
+
+        self.assertFalse(result_outside, "05:15 JST は市場時間帯窓外のはず")
 
 
 if __name__ == "__main__":
