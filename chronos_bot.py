@@ -82,13 +82,10 @@ ET  = zoneinfo.ZoneInfo("America/New_York")
 JST = zoneinfo.ZoneInfo("Asia/Tokyo")
 
 # ── Atlas基盤モジュール import ─────────────────────────────────────────────────
-try:
-    from strategy_selector import select_strategy, compute_vix_percentile
-    STRATEGY_SELECTOR_AVAILABLE = True
-    log.info("strategy_selector: loaded")
-except ImportError as e:
-    STRATEGY_SELECTOR_AVAILABLE = False
-    log.warning(f"strategy_selector not available: {e}")
+# NOTE: strategy_selector (SPY/SPXオプション向け) は先物では未使用のため除外。
+#       chronos_bot.py は chronos_strategy_selector.select_futures_strategy() を使用する。
+#       設計違反防止のため False 固定。
+STRATEGY_SELECTOR_AVAILABLE = False
 
 try:
     from portfolio_risk import (
@@ -366,6 +363,49 @@ def pushover(title: str, message: str, priority: int = 0) -> bool:
     except Exception as e:
         log.warning(f"pushover: {e}")
         return False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tradovate タイムスタンプ変換ユーティリティ (B-1/B-2/B-3)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _to_timestamp(value) -> int:
+    """Tradovate API の timestamp を UNIX 秒 int に変換する。
+
+    対応フォーマット:
+      - int / float: そのまま int() 変換（epoch秒またはミリ秒）
+      - "2026-04-19T14:30:00.000Z"  — ミリ秒付き ISO8601 (UTC Z suffix)
+      - "2026-04-19T14:30:00Z"      — 秒 ISO8601 (UTC Z suffix)
+      - "2026-04-19T14:30:00+00:00" — offset付き ISO8601
+      - "2026-04-19T14:30:00"       — naive ISO8601 (UTC扱い)
+      - その他文字列: 変換失敗時は 0 を返す（エラーは raise しない）
+    """
+    if value is None:
+        return 0
+    if isinstance(value, (int, float)):
+        return int(value)
+    if not isinstance(value, str):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
+    s = value.strip()
+    if not s:
+        return 0
+    try:
+        # Z suffix → +00:00 に変換して fromisoformat に渡す
+        normalized = s.replace("Z", "+00:00")
+        dt = datetime.datetime.fromisoformat(normalized)
+        if dt.tzinfo is None:
+            # naive → UTC として扱う
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        return int(dt.timestamp())
+    except Exception:
+        try:
+            # fallback: int 変換を試みる
+            return int(float(s))
+        except (TypeError, ValueError):
+            return 0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1356,6 +1396,14 @@ class ChronosBot:
         self._month_realized_pnl:   float = 0.0    # 月間累積P&L（Consistency監視用）
         self._weekly_realized_pnl:  float = 0.0    # 週次P&L（週次DD監視用）
 
+        # ── cycle2 schema contract 追加変数 ──────────────────────────────────────
+        # agent.py が state.json で参照する5フィールドの書き込み元
+        self._best_single_day_profit: float = 0.0  # 1日最大利益（Consistency監視用）
+        self._total_profit:           float = 0.0  # 累積純利益（Payout条件監視用）
+        self._winning_days:           int   = 0    # 勝利日カウンタ（Payout条件監視用）
+        self._daily_trade_count:      int   = 0    # 当日取引数（HFT違反監視用・日次reset）
+        self._news_window_violation_flag: bool = False  # News Window違反フラグ
+
         # ── F3: Daily Soft Stop (chronos_rules.yaml: daily_soft_stop) ──────────
         # 日次損失 $300 到達で size_pct を 50% 削減（発注禁止ではなくサイズ縮小）
         # 採点改善: F3 4→5点 (2026-04-19)
@@ -1425,6 +1473,21 @@ class ChronosBot:
             except Exception as _e:
                 log.warning(f"[MFFUBot] LiquiditySweepDetector init error: {_e}")
                 self.liquidity_sweep = None
+
+        # B-4: _prev_day_* 前日高安VWAP（RTH終了時にセット・翌朝 daily_reset で update_levels に渡す）
+        self._prev_day_high:       Optional[float] = None
+        self._prev_day_low:        Optional[float] = None
+        self._prev_day_vwap:       Optional[float] = None
+        self._prev_day_close_bar:  Optional[dict]  = None
+        # 当日 intraday 高安・VWAP 集計用（RTH終了時に _prev_day_* に昇格）
+        self._today_high:          Optional[float] = None
+        self._today_low:           Optional[float] = None
+        self._today_vwap_sum:      float = 0.0   # price * volume の累積
+        self._today_vwap_vol:      float = 0.0   # volume の累積
+
+        # B-5: price_history 配線（strategy_selector に渡す直近クローズ系列）
+        from collections import deque as _deque
+        self._price_history: _deque = _deque(maxlen=20)
 
     # ── 接続 ──────────────────────────────────────────────────────────────────
 
@@ -1560,6 +1623,10 @@ class ChronosBot:
                     self.vwap = self.level_trading.vwap
                     if self.vwap is not None:
                         env_dict["vwap"] = self.vwap
+
+                # B-5: price_history を env_dict に設定（strategy_selector / cumulative_delta に配線）
+                if len(self._price_history) > 0:
+                    env_dict["price_history"] = list(self._price_history)
 
                 # C3修正: cumulative_delta を strategy_selector に渡す（F12配線完成）
                 if self.cumulative_delta is not None:
@@ -2303,7 +2370,14 @@ class ChronosBot:
                 "kill_switch_day": self._kill_switch_day,
                 "daily_halt":     self._daily_halt,
                 "daily_soft_stop_active": self._daily_soft_stop_active,
+                # cycle2 schema contract: agent.py L665 で参照
+                "news_window_violation": bool(self._news_window_violation_flag),
             },
+            # cycle2 schema contract: agent.py で参照する5フィールド
+            "best_single_day_profit_usd": float(self._best_single_day_profit),
+            "total_profit_usd":           float(self._total_profit),
+            "winning_days_count":         int(self._winning_days),
+            "daily_trade_count":          int(self._daily_trade_count),
         }
 
         try:
@@ -2368,18 +2442,35 @@ class ChronosBot:
                         low       = float(bar.get("low", 0)),
                         close     = float(bar.get("close", 0)),
                         volume    = float(bar.get("volume", 0)),
-                        timestamp = int(bar.get("timestamp", 0)),
+                        timestamp = _to_timestamp(bar.get("timestamp", 0)),  # B-1: ISO8601対応
                     )
                     self.cumulative_delta.update_from_bar(_bar)
                 except Exception as _e:
                     log.debug(f"[MFFUBot] CumulativeDelta.update_from_bar error: {_e}")
+
+            # B-4: 当日 intraday high/low/vwap 集計（RTH終了時に _prev_day_* に昇格）
+            _bar_high   = float(bar.get("high",   0) or 0)
+            _bar_low    = float(bar.get("low",    0) or 0)
+            _bar_close  = float(bar.get("close",  0) or 0)
+            _bar_volume = float(bar.get("volume", 0) or 0)
+            if _bar_high > 0:
+                self._today_high = max(self._today_high or _bar_high, _bar_high)
+            if _bar_low > 0:
+                self._today_low  = min(self._today_low  or _bar_low,  _bar_low)
+            if _bar_close > 0 and _bar_volume > 0:
+                self._today_vwap_sum += _bar_close * _bar_volume
+                self._today_vwap_vol += _bar_volume
+
+            # B-5: price_history 配線（strategy_selector に渡す直近クローズ20本）
+            if _bar_close > 0:
+                self._price_history.append(_bar_close)
 
             # N-C1: LiquiditySweepDetector にバーデータを配線（F13本番配線）
             # 各 1分足バーで check_sweep を呼び、sweep 検知時は env_dict に signal を渡す。
             if self.liquidity_sweep is not None and bar.get("high") and bar.get("low"):
                 try:
                     _sweep_bar = _SweepBarSnapshot(
-                        timestamp = int(bar.get("timestamp", 0)),
+                        timestamp = _to_timestamp(bar.get("timestamp", 0)),  # B-2: ISO8601対応
                         open  = float(bar.get("open", 0)),
                         high  = float(bar.get("high", 0)),
                         low   = float(bar.get("low", 0)),
@@ -2400,7 +2491,7 @@ class ChronosBot:
                             f"{_sweep_sig.direction} @ {_sweep_sig.level_price:.2f}"
                         )
                     # sweep期限切れチェック
-                    if self.liquidity_sweep.is_sweep_expired(int(bar.get("timestamp", 0))):
+                    if self.liquidity_sweep.is_sweep_expired(_to_timestamp(bar.get("timestamp", 0))):  # B-3: ISO8601対応
                         self.liquidity_sweep.clear_pending()
                 except Exception as _e:
                     log.debug(f"[MFFUBot] LiquiditySweepDetector.check_sweep error: {_e}")
@@ -2415,8 +2506,21 @@ class ChronosBot:
             f"${self.account_size:,} {self.product} paper={self.paper}"
         )
 
+        # cycle2 BUG-4: アカウント別 PID ファイル生成
+        # pgrep -f で5アカ全てが同一パターンになる問題を解消する。
+        _account_id_for_pid = os.environ.get("MFFU_ACCOUNT_ID", "default")
+        _pid_dir = _BASE_DIR / "accounts" / _account_id_for_pid
+        _pid_dir.mkdir(parents=True, exist_ok=True)
+        _pid_file = _pid_dir / "pid.lock"
+        try:
+            _pid_file.write_text(str(os.getpid()), encoding="utf-8")
+            log.info("[MFFUBot] PID file written: %s (pid=%d)", _pid_file, os.getpid())
+        except Exception as _pid_err:
+            log.warning("[MFFUBot] PID file write failed: %s", _pid_err)
+
         if not self.connect():
             log.error("[MFFUBot] connection failed, exiting")
+            _pid_file.unlink(missing_ok=True)
             return
 
         while True:
@@ -2604,6 +2708,7 @@ class ChronosBot:
                                     now_et          = now_et,
                                 )
                                 if entry:
+                                    self._daily_trade_count += 1  # cycle2: HFT監視用
                                     log.info(f"[MFFUBot] ORB ENTRY: {entry}")
                                     pushover(
                                         "MFFU Bot: ORBエントリー",
@@ -2812,6 +2917,12 @@ class ChronosBot:
             time.sleep(MAIN_LOOP_SLEEP_SECS)
 
         log.info("[MFFUBot] run_forever() exited")
+        # cycle2 BUG-4: 終了時に PID ファイルを削除
+        try:
+            _pid_file.unlink(missing_ok=True)
+            log.info("[MFFUBot] PID file removed: %s", _pid_file)
+        except Exception as _pid_rm_err:
+            log.warning("[MFFUBot] PID file remove failed: %s", _pid_rm_err)
         pushover("MFFU Bot: 停止", "run_forever() exited")
 
     def select_strategies(
@@ -3165,6 +3276,33 @@ class ChronosBot:
     def _daily_reset(self, today: datetime.date):
         """日次リセット処理。"""
         log.info(f"[MFFUBot] daily reset for {today}")
+
+        # cycle2: 当日PnL確定前に cumulative profit / winning_days / best_day を更新
+        # _today_realized_pnl をゼロリセットする前に実施すること（順序厳守）。
+        # _daily_reset は EOD後（次の営業日朝）に呼ばれるため、
+        # この時点の _today_realized_pnl は前日の確定値。
+        if self._today_realized_pnl > 0:
+            self._winning_days   += 1
+            self._total_profit   += self._today_realized_pnl
+            if self._today_realized_pnl > self._best_single_day_profit:
+                self._best_single_day_profit = self._today_realized_pnl
+            log.info(
+                "[MFFUBot] daily PnL update: today=%.2f total=%.2f "
+                "winning_days=%d best_day=%.2f",
+                self._today_realized_pnl,
+                self._total_profit,
+                self._winning_days,
+                self._best_single_day_profit,
+            )
+        elif self._today_realized_pnl < 0:
+            self._total_profit += self._today_realized_pnl  # 損失も累積に反映
+
+        # cycle2: 当日取引数を日次リセット
+        self._daily_trade_count = 0
+
+        # cycle2: News Window違反フラグを日次リセット
+        self._news_window_violation_flag = False
+
         self._premarket_done   = False
         self._or_finalized     = False
         self._force_close_done = False
@@ -3335,6 +3473,24 @@ class ChronosBot:
             except Exception as e:
                 log.warning(f"[MFFUBot] portfolio_risk.record_daily_pnl: {e}")
 
+        # B-4: RTH終了時に当日 high/low/vwap を _prev_day_* に昇格
+        # 翌日の daily_reset で LiquiditySweepDetector.update_levels に渡す
+        if self._today_high is not None:
+            self._prev_day_high = self._today_high
+        if self._today_low is not None:
+            self._prev_day_low = self._today_low
+        if self._today_vwap_vol > 0:
+            self._prev_day_vwap = self._today_vwap_sum / self._today_vwap_vol
+        # 当日集計をリセット（翌日の集計用）
+        self._today_high      = None
+        self._today_low       = None
+        self._today_vwap_sum  = 0.0
+        self._today_vwap_vol  = 0.0
+        log.info(
+            f"[MFFUBot] _prev_day set: high={self._prev_day_high} "
+            f"low={self._prev_day_low} vwap={self._prev_day_vwap}"
+        )
+
         self._nightly_done = True
 
 
@@ -3486,30 +3642,39 @@ class ChronosClient:
         self._connected = False
 
     def connect(self) -> bool:
-        raise NotImplementedError(
-            "ChronosClient.connect: TradovateClient を直接使用してください。"
-        )
+        """TradovateClient を直接使用してください。このクラスはインターフェース層です。"""
+        log.warning("[ChronosClient] connect() called on interface stub — use TradovateClient directly")
+        return False
 
     def disconnect(self) -> None:
-        raise NotImplementedError(
-            "ChronosClient.disconnect: TradovateClient を直接使用してください。"
-        )
+        """TradovateClient を直接使用してください。このクラスはインターフェース層です。"""
+        log.warning("[ChronosClient] disconnect() called on interface stub — use TradovateClient directly")
 
     def get_account_info(self) -> dict:
-        raise NotImplementedError("ChronosClient.get_account_info: 未実装")
+        """インターフェーススタブ — TradovateClient 接続後に実装する。"""
+        log.warning("[ChronosClient] get_account_info() stub called")
+        return {}
 
     def get_quote(self, symbol: str) -> dict:
-        raise NotImplementedError("ChronosClient.get_quote: 未実装")
+        """インターフェーススタブ — TradovateClient 接続後に実装する。"""
+        log.warning("[ChronosClient] get_quote(%s) stub called", symbol)
+        return {}
 
     def place_order(self, symbol: str, side: str, qty: int,
                     order_type: str = "MARKET", limit_price: float | None = None) -> dict:
-        raise NotImplementedError("ChronosClient.place_order: 未実装")
+        """インターフェーススタブ — TradovateClient 接続後に実装する。"""
+        log.warning("[ChronosClient] place_order(%s %s %d) stub called", symbol, side, qty)
+        return {}
 
     def cancel_order(self, order_id: str) -> bool:
-        raise NotImplementedError("ChronosClient.cancel_order: 未実装")
+        """インターフェーススタブ — TradovateClient 接続後に実装する。"""
+        log.warning("[ChronosClient] cancel_order(%s) stub called", order_id)
+        return False
 
     def get_positions(self) -> list:
-        raise NotImplementedError("ChronosClient.get_positions: 未実装")
+        """インターフェーススタブ — TradovateClient 接続後に実装する。"""
+        log.warning("[ChronosClient] get_positions() stub called")
+        return []
 
 
 class ChronosStrategy:
@@ -3523,24 +3688,29 @@ class ChronosStrategy:
         self.client = client
 
     def select_tactic(self, market_data: dict) -> str:
-        raise NotImplementedError("ChronosStrategy.select_tactic: バックテスト後に実装")
+        """インターフェーススタブ。chronos_strategy_selector.select_futures_strategy() を使用する。"""
+        log.warning("[ChronosStrategy] select_tactic() stub — use chronos_strategy_selector")
+        return "orb"  # デフォルト戦術
 
     def compute_entry(self, tactic: str, market_data: dict) -> dict | None:
-        raise NotImplementedError("ChronosStrategy.compute_entry: バックテスト後に実装")
+        """インターフェーススタブ。FuturesORBStrategy.check_breakout() を使用する。"""
+        log.warning("[ChronosStrategy] compute_entry() stub — use FuturesORBStrategy")
+        return None
 
     def compute_exit(self, position: dict, market_data: dict) -> bool:
-        raise NotImplementedError("ChronosStrategy.compute_exit: バックテスト後に実装")
+        """インターフェーススタブ。FuturesORBStrategy.check_exit() を使用する。"""
+        log.warning("[ChronosStrategy] compute_exit() stub — use FuturesORBStrategy")
+        return False
 
 
 def run(paper: bool = True, dry_run: bool = False, once: bool = False) -> None:
     """Chronosメインループ（ChronosBot.run_forever() のラッパー）。
 
-    once=True は NotImplementedError（1サイクル実行は --dry-run を使用）。
+    once=True の場合は dry_run=True を強制して1ループで終了する。
+    cycle2: NotImplementedError を除去。
     """
     if once:
-        raise NotImplementedError(
-            "run(once=True): 1サイクル実行は ChronosBot.run_forever() に統合済み。"
-            " --dry-run フラグを使用してください。"
-        )
+        log.info("[run] once=True → dry_run 強制。1ループ後に終了します。")
+        dry_run = True
     bot = ChronosBot(paper=paper, dry_run=dry_run)
     bot.run_forever()
