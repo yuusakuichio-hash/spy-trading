@@ -323,6 +323,149 @@ def grep_codebase(pattern: str, files: list[Path], max_results: int = 10) -> lis
     return results
 
 
+def ast_check_class_implemented(file_path: Path, class_name: str, required_methods: list[str]) -> dict:
+    """
+    C4修正: AST解析でクラスが実際に実装されているか確認する。
+
+    空クラス (pass / NotImplementedError のみ) は未実装とみなす。
+
+    Returns:
+        {
+            "found": bool,            # クラスが存在するか
+            "methods_found": list,    # 見つかったメソッド
+            "methods_implemented": list, # 空でないメソッド
+            "is_stub": bool,          # stubと判定される場合True
+        }
+    """
+    import ast as _ast
+    result = {
+        "found": False,
+        "methods_found": [],
+        "methods_implemented": [],
+        "is_stub": False,
+    }
+    if not file_path.exists():
+        return result
+    try:
+        source = file_path.read_text(encoding="utf-8", errors="ignore")
+        tree = _ast.parse(source)
+    except Exception:
+        return result
+
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.ClassDef) and node.name == class_name:
+            result["found"] = True
+            for item in node.body:
+                if isinstance(item, _ast.FunctionDef):
+                    method_name = item.name
+                    result["methods_found"].append(method_name)
+                    # 本体が pass / raise NotImplementedError のみなら stub
+                    # raise NotImplementedError は ast.Raise(exc=ast.Name(id='NotImplementedError'))
+                    # raise NotImplementedError() は ast.Raise(exc=ast.Call(func=ast.Name(id='NotImplementedError')))
+                    def _is_nie_raise(stmt):
+                        if not isinstance(stmt, _ast.Raise):
+                            return False
+                        exc = getattr(stmt, "exc", None)
+                        if exc is None:
+                            return False
+                        # raise NotImplementedError  (Name)
+                        if isinstance(exc, _ast.Name) and exc.id == "NotImplementedError":
+                            return True
+                        # raise NotImplementedError()  (Call)
+                        if (isinstance(exc, _ast.Call)
+                                and isinstance(getattr(exc, "func", None), _ast.Name)
+                                and exc.func.id == "NotImplementedError"):
+                            return True
+                        return False
+
+                    is_empty = (
+                        len(item.body) == 0
+                        or all(
+                            isinstance(s, _ast.Pass)
+                            or _is_nie_raise(s)
+                            or isinstance(s, _ast.Expr)  # docstringのみ
+                            for s in item.body
+                        )
+                    )
+                    if not is_empty:
+                        result["methods_implemented"].append(method_name)
+            if required_methods:
+                stubs = [m for m in required_methods if m not in result["methods_implemented"]]
+                result["is_stub"] = len(stubs) == len(required_methods)
+            break
+    return result
+
+
+def try_import_module(module_name: str, codebase_path: Optional[Path] = None) -> bool:
+    """
+    C4修正: モジュールを実際にimport試行して成否を返す。
+
+    Returns:
+        True: import成功
+        False: import失敗 (SyntaxError / ImportError)
+    """
+    _added_path = False
+    if codebase_path is not None:
+        _path_str = str(codebase_path)
+        if _path_str not in sys.path:
+            sys.path.insert(0, _path_str)
+            _added_path = True
+    try:
+        # importlib.util.find_spec 経由はモジュール依存関係で失敗するケースがある。
+        # __import__ で直接試行する方が確実。
+        __import__(module_name)
+        return True
+    except (ImportError, SyntaxError, Exception):
+        return False
+    finally:
+        if _added_path and str(codebase_path) in sys.path:
+            sys.path.remove(str(codebase_path))
+
+
+def run_pytest_and_get_result(test_file: Path, timeout: int = 60) -> dict:
+    """
+    C4修正: pytest を subprocess 実行してテスト結果を返す。
+
+    Returns:
+        {
+            "passed": int,
+            "failed": int,
+            "error": int,
+            "returncode": int,
+            "success": bool,
+        }
+    """
+    result = {"passed": 0, "failed": 0, "error": 0, "returncode": -1, "success": False}
+    if not test_file.exists():
+        return result
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "pytest", str(test_file), "-v", "--tb=no", "-q"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=str(test_file.parent.parent),
+        )
+        result["returncode"] = proc.returncode
+        # 出力から passed/failed を抽出
+        output = proc.stdout + proc.stderr
+        m_passed = re.search(r"(\d+) passed", output)
+        m_failed = re.search(r"(\d+) failed", output)
+        m_error  = re.search(r"(\d+) error", output)
+        if m_passed:
+            result["passed"] = int(m_passed.group(1))
+        if m_failed:
+            result["failed"] = int(m_failed.group(1))
+        if m_error:
+            result["error"] = int(m_error.group(1))
+        result["success"] = proc.returncode == 0
+    except subprocess.TimeoutExpired:
+        result["returncode"] = -2
+    except Exception:
+        pass
+    return result
+
+
 def has_yaml_key(yaml_path: Path, key_path: list[str]) -> Optional[str]:
     """yaml に key_path (ネストキー) が存在するか確認。存在すれば該当行を返す。"""
     if not yaml_path.exists():
@@ -1240,80 +1383,116 @@ def _score_f11_vwap(files: dict[str, Path]) -> CriteriaScore:
 
 
 def _score_f12_cumulative_delta(files: dict[str, Path]) -> CriteriaScore:
-    """F12: Cumulative Delta"""
+    """F12: Cumulative Delta (C4修正: AST解析+import確認+実テスト実行を追加)"""
     evidences = []
     score = 0
+    cd_file = files.get("chronos_cumulative_delta.py", Path("/nonexistent"))
+    codebase_path = cd_file.parent if cd_file.exists() else None
 
-    # 1. CumulativeDelta クラス実装 (chronos_cumulative_delta.py)
-    cd_class = grep_codebase(
-        r"class\s+CumulativeDelta|CumulativeDelta",
-        list(files.values()),
-        max_results=5,
+    # 1. CumulativeDelta クラスをAST解析で確認 (C4修正: grep-only廃止)
+    ast_result = ast_check_class_implemented(
+        cd_file,
+        class_name="CumulativeDelta",
+        required_methods=["update", "update_from_bar", "daily_reset", "get_current_delta"],
     )
-    if cd_class:
+    if ast_result["found"] and not ast_result["is_stub"] and len(ast_result["methods_implemented"]) >= 3:
         score += 1
-        evidences.extend(cd_class[:1])
+        evidences.append(Evidence(
+            file="chronos_cumulative_delta.py",
+            line=0,
+            snippet=(
+                f"[AST] CumulativeDelta found: methods_implemented={ast_result['methods_implemented']}"
+            ),
+        ))
+    elif ast_result["found"] and ast_result["is_stub"]:
+        evidences.append(Evidence(
+            file="chronos_cumulative_delta.py",
+            line=0,
+            snippet="[AST] CumulativeDelta found but STUB (empty methods) → score=0",
+        ))
 
-    # 2. Bid/Ask volume 比率 (代替プロキシ: calc_bid_ask_delta / calc_volume_ratio)
-    bid_ask = grep_codebase(
-        r"bid_volume|ask_volume|bid_ask_ratio|calc_bid_ask_delta|delta_volume",
-        list(files.values()),
-        max_results=5,
+    # 2. import確認 (C4修正: 実際にimportが通るか)
+    import_ok = try_import_module("chronos_cumulative_delta", codebase_path)
+    if import_ok:
+        score += 1
+        evidences.append(Evidence(
+            file="chronos_cumulative_delta.py",
+            line=0,
+            snippet="[IMPORT] chronos_cumulative_delta import: OK",
+        ))
+    else:
+        evidences.append(Evidence(
+            file="chronos_cumulative_delta.py",
+            line=0,
+            snippet="[IMPORT] chronos_cumulative_delta import: FAILED",
+        ))
+
+    # 3. 実テスト実行 (C4修正: pytest連動)
+    test_file = BASE / "tests" / "test_f12_f13_critical_fixes_20260419.py"
+    if not test_file.exists():
+        test_file = BASE / "tests" / "test_f12_f13_implementation_20260419.py"
+    pytest_result = run_pytest_and_get_result(test_file)
+    if pytest_result["success"] and pytest_result["passed"] >= 5:
+        score += 1
+        evidences.append(Evidence(
+            file=str(test_file.name),
+            line=0,
+            snippet=(
+                f"[PYTEST] F12 tests: passed={pytest_result['passed']} "
+                f"failed={pytest_result['failed']}"
+            ),
+        ))
+
+    # 4. 日次 reset + C3修正: chronos_bot での daily_reset 呼び出し確認
+    daily_reset_in_bot = grep_codebase(
+        r"cumulative_delta\.daily_reset|cumulative_delta.*daily_reset",
+        [files.get("chronos_bot.py", Path("/nonexistent"))],
+        max_results=3,
     )
-    if bid_ask:
+    if daily_reset_in_bot:
         score += 1
-        evidences.extend(bid_ask[:1])
+        evidences.extend(daily_reset_in_bot[:1])
+    else:
+        # フォールバック: ファイル内の daily_reset 実装確認
+        daily_reset_check = grep_codebase(
+            r"def daily_reset|_flush_bucket|BucketDelta",
+            [cd_file],
+            max_results=3,
+        )
+        if daily_reset_check:
+            score += 1
+            evidences.extend(daily_reset_check[:1])
 
-    # 3. 方向性プロキシ / 乖離検出 (detect_divergence / volume_ratio)
-    proxy = grep_codebase(
-        r"detect_divergence|volume_ratio|buy_sell_ratio|delta_sign|calc_volume_ratio",
-        list(files.values()),
-        max_results=5,
-    )
-    if proxy:
-        score += 1
-        evidences.extend(proxy[:1])
-
-    # 4. 日次 reset / バケット集計 (daily_reset / bucket_minutes)
-    daily_reset_check = grep_codebase(
-        r"daily_reset|bucket_minutes|_flush_bucket|BucketDelta",
-        list(files.values()),
-        max_results=5,
-    )
-    if daily_reset_check:
-        score += 1
-        evidences.extend(daily_reset_check[:1])
-
-    # 5. 戦略統合 (chronos_rules.yaml: cumulative_delta セクション + strategy_selector 統合)
-    yaml_path = files.get("chronos_rules.yaml", Path("/nonexistent"))
-    yaml_section = has_yaml_key(yaml_path, ["cumulative_delta"])
+    # 5. 戦略統合 (cumulative_delta_bias + strategy_selector 統合)
     selector_integration = grep_codebase(
         r"cumulative_delta_bias|_CUMULATIVE_DELTA_AVAILABLE",
         list(files.values()),
         max_results=3,
     )
-    if yaml_section is not None or selector_integration:
+    yaml_path = files.get("chronos_rules.yaml", Path("/nonexistent"))
+    yaml_section = has_yaml_key(yaml_path, ["cumulative_delta"])
+    if selector_integration or yaml_section is not None:
         score += 1
         if selector_integration:
             evidences.extend(selector_integration[:1])
 
     rationale = (
-        "Cumulative Delta 完全実装: CumulativeDelta クラス / bid_ask delta / 乖離検出 / 日次reset / yaml+selector統合"
+        "Cumulative Delta 完全実装: AST確認済みCumulativeDelta / import成功 / テスト合格 / bot daily_reset連動 / selector統合"
         if score >= 5 else
         "Cumulative Delta 高度実装 (4/5 要素)"
         if score >= 4 else
         "Cumulative Delta 実装あり (3/5 要素)"
         if score >= 3 else
-        "Cumulative Delta 部分実装 (プロキシのみ)"
+        "Cumulative Delta 部分実装"
         if score > 0 else
-        "Cumulative Delta 未実装"
+        "Cumulative Delta 未実装 または STUB"
     )
 
     improvement = (
         ""
         if score >= 5 else
-        "Tradovate MD WebSocket の DOM 経由で bid/ask volume をリアルタイム取得して "
-        "CumulativeDelta.update() に渡す実装を追加 (dom_proxy_enabled: true)。"
+        "AST解析で空クラス/stubの場合はスコア0。"
+        "chronos_bot.py の _daily_reset() で cumulative_delta.daily_reset() を呼ぶ実装が必要。"
     )
 
     return CriteriaScore(
@@ -1327,68 +1506,101 @@ def _score_f12_cumulative_delta(files: dict[str, Path]) -> CriteriaScore:
 
 
 def _score_f13_liquidity_sweep(files: dict[str, Path]) -> CriteriaScore:
-    """F13: Liquidity Sweep認識"""
+    """F13: Liquidity Sweep認識 (C4修正: AST解析+import確認+実テスト実行を追加)"""
     evidences = []
     score = 0
+    sweep_file = files.get("chronos_liquidity_sweep.py", Path("/nonexistent"))
+    codebase_path = sweep_file.parent if sweep_file.exists() else None
 
-    # 1. LiquiditySweepDetector クラス実装 (chronos_liquidity_sweep.py)
-    sweep_class = grep_codebase(
-        r"class\s+LiquiditySweepDetector|LiquiditySweepDetector|liquidity_sweep",
-        list(files.values()),
-        max_results=5,
+    # 1. LiquiditySweepDetector クラスをAST解析で確認 (C4修正: 空クラスは0点)
+    ast_result = ast_check_class_implemented(
+        sweep_file,
+        class_name="LiquiditySweepDetector",
+        required_methods=["check_sweep", "is_reversal_confirmed", "get_entry_signal"],
     )
-    if sweep_class:
+    if ast_result["found"] and not ast_result["is_stub"] and len(ast_result["methods_implemented"]) >= 2:
         score += 2
-        evidences.extend(sweep_class[:1])
+        evidences.append(Evidence(
+            file="chronos_liquidity_sweep.py",
+            line=0,
+            snippet=(
+                f"[AST] LiquiditySweepDetector found: "
+                f"methods_implemented={ast_result['methods_implemented']}"
+            ),
+        ))
+    elif ast_result["found"] and ast_result["is_stub"]:
+        evidences.append(Evidence(
+            file="chronos_liquidity_sweep.py",
+            line=0,
+            snippet="[AST] LiquiditySweepDetector found but STUB → score=0",
+        ))
 
-    # 2. 前日高安 / IB端 sweep検知 (prev_high / prev_low / ib_high / ib_low)
-    prev_high_low = grep_codebase(
-        r"prev_high|prev_low|ib_high|ib_low|sweep_high|sweep_low",
-        list(files.values()),
-        max_results=5,
-    )
-    if prev_high_low:
+    # 2. import確認 (C4修正)
+    import_ok = try_import_module("chronos_liquidity_sweep", codebase_path)
+    if import_ok:
         score += 1
-        evidences.extend(prev_high_low[:1])
+        evidences.append(Evidence(
+            file="chronos_liquidity_sweep.py",
+            line=0,
+            snippet="[IMPORT] chronos_liquidity_sweep import: OK",
+        ))
 
-    # 3. 出来高フィルタ + ATR 反転確認
-    volume_atr = grep_codebase(
-        r"volume_multiplier|volume_ratio.*sweep|reversal_atr|atr_breach",
-        list(files.values()),
+    # 3. C5修正確認: ATR フィルタ恒真式が修正されているか (atr_breach > 0.0)
+    atr_filter_fixed = grep_codebase(
+        r"atr_breach\s*>\s*0\.0|atr_breach\s*>=\s*self\.reversal_atr_mult",
+        [sweep_file],
         max_results=3,
     )
-    if volume_atr:
+    if atr_filter_fixed:
         score += 1
-        evidences.extend(volume_atr[:1])
+        evidences.extend(atr_filter_fixed[:1])
+    else:
+        # 恒真式がまだ残っているか確認
+        always_true = grep_codebase(
+            r"atr_breach\s*>=\s*0\.0",
+            [sweep_file],
+            max_results=2,
+        )
+        if always_true:
+            evidences.append(Evidence(
+                file="chronos_liquidity_sweep.py",
+                line=0,
+                snippet="[C5 BUG] atr_breach >= 0.0 still present (恒真式)",
+            ))
 
-    # 4. Reversal エントリー + 戦略統合 (is_reversal_confirmed / get_entry_signal / yaml統合)
-    reversal_integration = grep_codebase(
-        r"is_reversal_confirmed|get_entry_signal|liquidity_sweep_reversal|_LIQUIDITY_SWEEP_AVAILABLE",
-        list(files.values()),
-        max_results=3,
-    )
-    if reversal_integration:
+    # 4. 実テスト実行 (C4修正)
+    test_file = BASE / "tests" / "test_f12_f13_critical_fixes_20260419.py"
+    if not test_file.exists():
+        test_file = BASE / "tests" / "test_f12_f13_implementation_20260419.py"
+    pytest_result = run_pytest_and_get_result(test_file)
+    if pytest_result["success"] and pytest_result["passed"] >= 5:
         score += 1
-        evidences.extend(reversal_integration[:1])
+        evidences.append(Evidence(
+            file=str(test_file.name),
+            line=0,
+            snippet=(
+                f"[PYTEST] F13 tests: passed={pytest_result['passed']} "
+                f"failed={pytest_result['failed']}"
+            ),
+        ))
 
     rationale = (
-        "Liquidity Sweep 完全実装: LiquiditySweepDetector / prev_high/low + IB端 / 出来高+ATRフィルタ / reversal統合"
+        "Liquidity Sweep 完全実装: AST確認済みLiquiditySweepDetector / import成功 / C5 ATRフィルタ修正 / テスト合格"
         if score >= 5 else
         "Liquidity Sweep 高度実装 (4/5 要素)"
         if score >= 4 else
-        "Liquidity Sweep 実装あり (sweep クラス + 部分統合)"
+        "Liquidity Sweep 実装あり (3/5 要素)"
         if score >= 3 else
         "Liquidity Sweep 部分実装"
         if score > 0 else
-        "Liquidity Sweep 未実装"
+        "Liquidity Sweep 未実装 または STUB"
     )
 
     improvement = (
         ""
         if score >= 5 else
-        "chronos_liquidity_sweep.py の LiquiditySweepDetector と "
-        "chronos_strategy_selector.py の F13 統合を完成させる。"
-        "yaml: liquidity_sweep セクションの全パラメータを設定する。"
+        "AST解析で空クラス/stubの場合はスコア0。"
+        "C5: atr_breach >= 0.0 (恒真式) を >= reversal_atr_mult に修正が必要。"
     )
 
     return CriteriaScore(

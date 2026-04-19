@@ -38,6 +38,7 @@ class Tick:
     price: float
     volume: float
     aggressor_side: str  # "buy" | "sell" | "unknown"
+    timestamp: Optional[int] = None  # C1修正: Unix timestamp (seconds)。バケット境界判定に使用
 
 
 @dataclass
@@ -117,6 +118,7 @@ class CumulativeDelta:
         Tradovate tick stream からのリアルタイム更新。
 
         aggressor_side が "unknown" の場合は volume を 0.5/0.5 で按分する。
+        tick.timestamp が設定されている場合、バケット境界を判定してflushする (C1修正)。
         """
         if tick.aggressor_side == "buy":
             buy_vol  = tick.volume
@@ -128,6 +130,11 @@ class CumulativeDelta:
             # unknown: 按分
             buy_vol  = tick.volume * 0.5
             sell_vol = tick.volume * 0.5
+
+        # C1修正(改): C2と同じ順序に統一
+        # 先にバケット境界判定→flush → その後加算（先に加算するとflush時に混入する）
+        if tick.timestamp is not None:
+            self._maybe_flush_bucket(tick.timestamp)
 
         self._current_buy_vol  += buy_vol
         self._current_sell_vol += sell_vol
@@ -178,7 +185,9 @@ class CumulativeDelta:
         buy_vol  = bar.volume * buy_ratio
         sell_vol = bar.volume * sell_ratio
 
-        tick = Tick(price=bar.close, volume=bar.volume, aggressor_side="unknown")
+        # C2修正: 先に境界判定→flush → そのあと新バー加算（逆転で二重計上を防ぐ）
+        self._maybe_flush_bucket(bar.timestamp)
+
         # 内部ボリュームを直接加算（aggressor side の按分をスキップ）
         self._current_buy_vol  += buy_vol
         self._current_sell_vol += sell_vol
@@ -188,9 +197,6 @@ class CumulativeDelta:
             f"O={bar.open:.2f} C={bar.close:.2f} vol={bar.volume:.0f} "
             f"buy={buy_vol:.0f} sell={sell_vol:.0f}"
         )
-
-        # バーのタイムスタンプでバケット境界を判定
-        self._maybe_flush_bucket(bar.timestamp)
 
     def _maybe_flush_bucket(self, current_ts: int) -> None:
         """
@@ -256,6 +262,7 @@ class CumulativeDelta:
         現在の確定済み日次 Cumulative Delta を返す。
 
         現在バケット (未確定分) は含まない。
+        未確定分も含む合計は get_total_delta() を使う。
 
         Returns:
             float: 日次累積 delta。リセット直後は 0.0
@@ -265,6 +272,18 @@ class CumulativeDelta:
     def get_current_bucket_delta(self) -> float:
         """現在バケット (未確定) の暫定 delta を返す。"""
         return self._current_buy_vol - self._current_sell_vol
+
+    def get_total_delta(self) -> float:
+        """
+        HIGH-1修正: 確定済み日次 delta + 現在バケット (未確定) delta の合算を返す。
+
+        strategy_selector や判断ロジックでは確定済みのみでなく
+        現在進行中のバケットも考慮すべきため、このメソッドを使う。
+
+        Returns:
+            float: 確定済み + 未確定合算 delta
+        """
+        return self._daily_cumulative + (self._current_buy_vol - self._current_sell_vol)
 
     def get_bucket_delta(self, minutes: int) -> float:
         """
@@ -340,18 +359,29 @@ class CumulativeDelta:
         if price_abs < 1e-8 or delta_abs < 1e-8:
             return "aligned"  # 変化なし → 乖離なし
 
+        # HIGH-2修正: threshold を実際に使用（正規化差分比較）
+        # 価格変化率・delta変化率を正規化して差分を計算
+        price_norm = price_change / price_series[0] if price_series[0] != 0 else price_change
+        delta_ref = delta_series[0] if abs(delta_series[0]) > 1e-8 else 1.0
+        delta_norm = delta_change / abs(delta_ref)
+
         # 方向性: +1 = 上昇, -1 = 下落
         price_dir = 1 if price_change > 0 else -1
         delta_dir = 1 if delta_change > 0 else -1
 
         if price_dir == delta_dir:
+            # 方向一致でも、乖離が threshold を超える場合は"aligned_weak"とする余地あり
+            # 現バージョンは方向一致=aligned で統一
             divergence = "aligned"
         elif price_dir < 0 and delta_dir > 0:
             # 価格下落 + Delta 上昇 → 買い圧が隠れている
-            divergence = "bullish_divergence"
+            # threshold チェック: 価格・delta変化率の絶対差が threshold 以上の時のみ divergence
+            diff = abs(price_norm - delta_norm)
+            divergence = "bullish_divergence" if diff >= threshold else "aligned"
         else:
             # 価格上昇 + Delta 下落 → 売り圧が隠れている
-            divergence = "bearish_divergence"
+            diff = abs(price_norm - delta_norm)
+            divergence = "bearish_divergence" if diff >= threshold else "aligned"
 
         log.info(
             f"[CumulativeDelta] divergence: "

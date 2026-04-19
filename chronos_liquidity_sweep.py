@@ -52,7 +52,13 @@ class SweepSignal:
     @property
     def is_valid(self) -> bool:
         """有効なシグナルか (出来高・突破幅フィルタ適用)。"""
-        return self.volume_ratio >= 2.0 and self.atr_breach >= 0.0
+        # C5修正: atr_breach >= 0.0 は常にTrue（恒真式）だった。
+        # reversal_atr_mult (default=0.5) との比較に修正。
+        # SweepSignalはreversal_atr_multを保持しないため、
+        # is_valid では volume_ratio のみチェックし、
+        # ATRフィルタは check_sweep / _check_level_sweep 内で適用する設計とする。
+        # ただし atr_breach > 0 (ゼロより大きい実際の突破) は必須条件として残す。
+        return self.volume_ratio >= 2.0 and self.atr_breach > 0.0
 
 
 @dataclass
@@ -246,6 +252,14 @@ class LiquiditySweepDetector:
         if current_bar.high > level_price and current_bar.close < level_price:
             breach = current_bar.high - level_price
             atr_breach = breach / atr if atr > 0 else 0.0
+            # C5修正: ATRフィルタを check_sweep 内でも適用。
+            # atr_breach >= reversal_atr_mult でなければ無効とする。
+            if atr_breach < self.reversal_atr_mult:
+                log.debug(
+                    f"[LiquiditySweepDetector] high sweep rejected: "
+                    f"atr_breach={atr_breach:.3f} < reversal_atr_mult={self.reversal_atr_mult}"
+                )
+                return None
             return SweepSignal(
                 level_type   = level_type,
                 level_price  = level_price,
@@ -266,6 +280,13 @@ class LiquiditySweepDetector:
         if current_bar.low < level_price and current_bar.close > level_price:
             breach = level_price - current_bar.low
             atr_breach = breach / atr if atr > 0 else 0.0
+            # C5修正: ATRフィルタを check_sweep 内でも適用。
+            if atr_breach < self.reversal_atr_mult:
+                log.debug(
+                    f"[LiquiditySweepDetector] low sweep rejected: "
+                    f"atr_breach={atr_breach:.3f} < reversal_atr_mult={self.reversal_atr_mult}"
+                )
+                return None
             return SweepSignal(
                 level_type   = level_type,
                 level_price  = level_price,
@@ -395,7 +416,15 @@ class LiquiditySweepDetector:
         else:
             signal_dir = "long"
 
-        # 信頼度: 出来高比率と ATR 突破量から算出
+        # HIGH-6修正: confidence係数の根拠を明記（暫定値）
+        # 計算式: 0.5 + (volume_ratio - 2.0) * 0.1 + atr_breach * 0.1 (最大0.90)
+        # 根拠:
+        #   - ベース 0.5: 最低信頼度 (min_confidence=0.60 を通過するための下限から逆算)
+        #   - volume_ratio係数 0.1: 出来高2x→0.1, 3x→0.2 の線形増加 (暫定値)
+        #     参考: ICT Liquidity Sweep研究では出来高3x超で有効性が高まる傾向 (未検証)
+        #   - atr_breach係数 0.1: ATR突破幅が大きいほど信頼度増加 (暫定値)
+        #     参考: ICTフレームワークで ATR 0.5倍以上が有効フィルタとされる (chronos_rules.yaml)
+        # TODO: バックテスト実績でこれら係数を検証・更新する (data/boundary_test_results.md)
         confidence = min(
             0.5 + (sweep.volume_ratio - 2.0) * 0.1 + sweep.atr_breach * 0.1,
             0.90,

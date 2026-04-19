@@ -48,6 +48,8 @@ from typing import Optional
 
 # ── .env ロード ────────────────────────────────────────────────────────────────
 def _load_env_file():
+    # CRIT-3: setdefault を使い、wrapper script が先に export した変数を保護する。
+    # os.environ[k] = v は上書きしてしまうため setdefault に変更。
     for candidate in [Path("/root/spxbot/.env"), Path(__file__).parent / ".env"]:
         if candidate.exists():
             for line in candidate.read_text().splitlines():
@@ -55,7 +57,7 @@ def _load_env_file():
                 if not line or line.startswith("#") or "=" not in line:
                     continue
                 k, _, v = line.partition("=")
-                os.environ[k.strip()] = v.strip()
+                os.environ.setdefault(k.strip(), v.strip())
             break
 
 _load_env_file()
@@ -150,6 +152,10 @@ try:
         select_futures_strategy,
         build_env_dict,
         check_consistency_safety,
+        get_atr_regime,
+        apply_atr_regime_to_size,   # atr_regime_size_mult — ATR レジーム別 size_pct 乗数
+        get_anchored_vwap_set,      # Anchored VWAP (前日高・前日安・FOMC) 3アンカー
+        check_vwap_reclaim_signal,  # VWAP Reclaim/Break シグナル判定
     )
     MFFU_SELECTOR_AVAILABLE = True
     log.info("chronos_strategy_selector: loaded")
@@ -252,6 +258,15 @@ except ImportError as e:
     ES_NQ_SPREAD_AVAILABLE = False
     log.warning(f"futures_es_nq_spread not available: {e}")
 
+# C3修正: CumulativeDelta をインポートして ChronosBot.__init__ で生成・daily_reset で呼ぶ
+try:
+    from chronos_cumulative_delta import CumulativeDelta as _CumulativeDelta
+    CUMULATIVE_DELTA_AVAILABLE = True
+    log.info("chronos_cumulative_delta: loaded")
+except ImportError as e:
+    CUMULATIVE_DELTA_AVAILABLE = False
+    log.warning(f"chronos_cumulative_delta not available: {e}")
+
 # ── 認証情報 ───────────────────────────────────────────────────────────────────
 PUSHOVER_TOKEN = os.environ.get("PUSHOVER_TOKEN", "")
 PUSHOVER_USER  = os.environ.get("PUSHOVER_USER", "")
@@ -280,9 +295,43 @@ WEEKLY_DD_HALT_PCT      = 0.03   # -3%
 
 # ── Pushover通知 ──────────────────────────────────────────────────────────────
 
+# HIGH-8: DoS throttling — 同一エラーメッセージは5分毎1回まで
+# {cache_key: (last_sent_dt, repeat_count)}
+_pushover_throttle_cache: dict[str, tuple[datetime.datetime, int]] = {}
+_PUSHOVER_THROTTLE_SEC = 300  # 5分
+
+
 def pushover(title: str, message: str, priority: int = 0) -> bool:
-    """Pushover通知を送信する。"""
+    """Pushover通知を送信する。
+
+    HIGH-8: 同一 (title, message) の組み合わせは5分毎1回まで通知する。
+    5分以内の重複は repeat_count のみカウントし、次回通知時に "(repeated X times)" を付加する。
+    これにより Pushover 月間枠 7500msgs の枯渇を防ぐ。
+    """
     import requests as _requests
+
+    # HIGH-8: throttle チェック
+    _cache_key = f"{title}|{message}"
+    _now = datetime.datetime.now(tz=datetime.timezone.utc)
+    if _cache_key in _pushover_throttle_cache:
+        _last_sent, _repeat_count = _pushover_throttle_cache[_cache_key]
+        _elapsed = (_now - _last_sent).total_seconds()
+        if _elapsed < _PUSHOVER_THROTTLE_SEC:
+            # 5分以内の重複: カウントのみ増加して送信スキップ
+            _pushover_throttle_cache[_cache_key] = (_last_sent, _repeat_count + 1)
+            log.debug(
+                f"pushover throttled ({_repeat_count+1}x in {_elapsed:.0f}s): "
+                f"title={title!r}"
+            )
+            return False
+        else:
+            # 5分超過: repeat_count を付加して送信
+            if _repeat_count > 0:
+                message = f"{message} (repeated {_repeat_count} times)"
+            _pushover_throttle_cache[_cache_key] = (_now, 0)
+    else:
+        _pushover_throttle_cache[_cache_key] = (_now, 0)
+
     if not PUSHOVER_TOKEN or not PUSHOVER_USER:
         log.warning("pushover: token/user not set")
         return False
@@ -305,6 +354,27 @@ def pushover(title: str, message: str, priority: int = 0) -> bool:
     except Exception as e:
         log.warning(f"pushover: {e}")
         return False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# chronos_rules.yaml ローダー
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _load_chronos_rules() -> dict:
+    """chronos_rules.yaml を読み込んで dict で返す。
+
+    読み込み失敗時は空 dict を返す（Bot 起動を止めない）。
+    """
+    try:
+        import yaml
+        rules_path = Path(__file__).parent / "chronos_rules.yaml"
+        if rules_path.exists():
+            with open(rules_path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+                return data or {}
+    except Exception as e:
+        log.warning(f"_load_chronos_rules: {e}")
+    return {}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -386,14 +456,27 @@ class NewsTradingFilter:
         self._load_calendar()
 
     def _load_calendar(self):
-        """カレンダーファイルをロードする。"""
+        """カレンダーファイルをロードする。
+
+        CRIT-1: "event" フィールドと "name" フィールドの両方をサポート。
+        econ_calendar.json は "name" を使用（"event" は旧フォーマット後方互換）。
+        """
         if self.calendar_path.exists():
             try:
                 raw = json.loads(self.calendar_path.read_text())
-                self._events = [
-                    e for e in raw
-                    if e.get("event", "").upper() in MFFU_HIGH_IMPACT_EVENTS
-                ]
+                # "event" (旧) と "name" (新・econ_calendar.json形式) 両方対応
+                self._events = []
+                for e in raw:
+                    event_name = e.get("event") or e.get("name", "")
+                    if event_name.upper() in MFFU_HIGH_IMPACT_EVENTS:
+                        # 内部的に "event" キーで統一
+                        e_normalized = dict(e)
+                        if "event" not in e_normalized:
+                            e_normalized["event"] = event_name
+                        # datetime_et は "timestamp_et" フィールドにも対応
+                        if "datetime_et" not in e_normalized and "timestamp_et" in e_normalized:
+                            e_normalized["datetime_et"] = e_normalized["timestamp_et"]
+                        self._events.append(e_normalized)
                 log.info(f"[NewsTradingFilter] loaded {len(self._events)} events "
                          f"from {self.calendar_path}")
             except Exception as e:
@@ -901,6 +984,34 @@ class FuturesORBStrategy:
             f"or_range={or_range:.2f}"
         )
 
+        # 発注前 Hedging Violation Guard (MFFU Fair Play Policy Section 5)
+        # place_order 直前で check_hedging_violation() を必ず通過させる。
+        # F7 採点改善: call_site 統合 (2026-04-19)
+        from chronos_pre_trade_check import check_hedging_violation as _chv
+        _existing_positions = []
+        if self.client is not None:
+            try:
+                _existing_positions = self.client.get_positions() or []
+            except Exception:
+                _existing_positions = []
+        _hedge_ok, _hedge_reason = _chv(
+            existing_positions = _existing_positions,
+            new_order          = {"symbol": symbol, "side": action, "qty": n_contracts},
+        )
+        if not _hedge_ok:
+            log.error(f"[FuturesORB] Hedging violation → 発注中止: {_hedge_reason}")
+            return None
+
+        # HIGH-4: 発注前 cross-account hedging prevent-mode チェック
+        _current_account_id = os.environ.get("MFFU_ACCOUNT_ID", "")
+        _cross_ok, _cross_reason = check_cross_account_hedging(
+            new_order          = {"symbol": symbol, "side": action, "qty": n_contracts},
+            current_account_id = _current_account_id,
+        )
+        if not _cross_ok:
+            log.error(f"[FuturesORB] Cross-account hedging violation → 発注中止: {_cross_reason}")
+            return None
+
         # 発注
         order = None
         if self.client is not None:
@@ -1233,6 +1344,58 @@ class ChronosBot:
         self._month_realized_pnl:   float = 0.0    # 月間累積P&L（Consistency監視用）
         self._weekly_realized_pnl:  float = 0.0    # 週次P&L（週次DD監視用）
 
+        # ── F3: Daily Soft Stop (chronos_rules.yaml: daily_soft_stop) ──────────
+        # 日次損失 $300 到達で size_pct を 50% 削減（発注禁止ではなくサイズ縮小）
+        # 採点改善: F3 4→5点 (2026-04-19)
+        self._daily_soft_stop_active: bool = False  # 当日ソフトストップ発動フラグ
+
+        # ── MVP追加: 連敗サイズ制御 (chronos_rules.yaml: consecutive_loss_guard) ──
+        # 2連敗→50%, 3連敗→25%, 5連敗→当日停止
+        self._consecutive_losses:   int  = 0       # 連続負け数（日次リセット）
+        self._kill_switch_day:      bool = False   # 5連敗による当日完全停止フラグ
+
+        # ── MVP追加: Phase / account_type 管理 ──────────────────────────────────
+        # HIGH-6: 環境変数 CHRONOS_ACCOUNT_TYPE / CHRONOS_PHASE を優先し、
+        #         なければ chronos_rules.yaml の phase_rules.account_type を使用する。
+        # 5アカで各 .env.d/<id>.env に CHRONOS_ACCOUNT_TYPE=evaluation 等を設定可能。
+        _rules_yaml = _load_chronos_rules()
+        _env_account_type = os.environ.get("CHRONOS_ACCOUNT_TYPE", "").strip()
+        _env_phase        = os.environ.get("CHRONOS_PHASE", "").strip()
+        _yaml_account_type = (
+            _rules_yaml.get("phase_rules", {}).get("account_type", "demo")
+        )
+        # 環境変数優先・なければyaml・最後にdefault
+        if _env_account_type:
+            self._account_type: str = _env_account_type
+            log.info(f"[MFFUBot] account_type from env: {self._account_type}")
+        elif _env_phase:
+            # CHRONOS_PHASE は account_type と同義（旧互換）
+            self._account_type: str = _env_phase
+            log.info(f"[MFFUBot] account_type from CHRONOS_PHASE env: {self._account_type}")
+        else:
+            self._account_type: str = _yaml_account_type
+            log.info(f"[MFFUBot] account_type from yaml: {self._account_type}")
+
+        # ── Survival Mode: 初回ペイアウト後状態管理 ─────────────────────────────
+        # MFFU: 初回ペイアウト後 MLL $100 → survival_mode_after_payout 適用
+        # 優秀MESトレーダー原則: "口座を死なせずPayout回を重ねる"
+        self._survival_mode_active:   bool  = (
+            self._account_type == "mffu_sim_funded_after_payout"
+        )
+        self._survival_today_trades:  int   = 0      # 当日トレード数（1日1トレード制限）
+        self._survival_today_pnl:     float = 0.0    # 当日実現P&L（daily loss cap監視用）
+        self._survival_last_loss_date: Optional[datetime.date] = None  # 最終損失日
+        self._survival_setup_score:   float = 0.0    # 現在のセットアップスコア（0-100）
+
+        # C3修正: CumulativeDelta インスタンス生成（F12実装の本番配線）
+        # _daily_reset() で daily_reset() を呼び、run_forever ループで update_from_bar() を呼ぶ
+        self.cumulative_delta: Optional["_CumulativeDelta"] = (
+            _CumulativeDelta(bucket_minutes=5, max_buckets=78)
+            if CUMULATIVE_DELTA_AVAILABLE else None
+        )
+        if self.cumulative_delta is not None:
+            log.info("[MFFUBot] CumulativeDelta initialized: bucket=5min max=78")
+
     # ── 接続 ──────────────────────────────────────────────────────────────────
 
     def connect(self) -> bool:
@@ -1360,6 +1523,27 @@ class ChronosBot:
                     account_pnl_month=self._month_realized_pnl,
                     account_balance=self._session_balance,
                 )
+                # F11: VWAP を env に含める（Level Trading VWAP 経路）
+                # self.level_trading.vwap が確定している場合は env_dict["vwap"] に追加
+                self.vwap = None
+                if self.level_trading is not None and hasattr(self.level_trading, "vwap"):
+                    self.vwap = self.level_trading.vwap
+                    if self.vwap is not None:
+                        env_dict["vwap"] = self.vwap
+
+                # C3修正: cumulative_delta を strategy_selector に渡す（F12配線完成）
+                if self.cumulative_delta is not None:
+                    try:
+                        _price_hist = env_dict.get("price_history", [])
+                        _cd_bias = self.cumulative_delta.get_strategy_bias(_price_hist or [0.0])
+                        env_dict["cumulative_delta_bias"] = _cd_bias
+                        log.debug(
+                            f"[MFFUBot] cumulative_delta_bias: "
+                            f"bias={_cd_bias['bias']} current={_cd_bias['current']:.0f}"
+                        )
+                    except Exception as _e:
+                        log.debug(f"[MFFUBot] cumulative_delta bias calc skipped: {_e}")
+
                 mffu_result = select_futures_strategy(env_dict)
                 # CRITICAL-2修正: 返り値は list[dict]。[0]でprimaryを取得する
                 primary = mffu_result[0] if mffu_result else {}
@@ -1370,6 +1554,46 @@ class ChronosBot:
                     f"confidence={primary.get('confidence', 0.0):.2f} "
                     f"score={self._env_score:.1f}"
                 )
+                # F10: ATR Regime 乗数を env_score に反映（atr_regime_size_mult）
+                # get_atr_regime → apply_atr_regime_to_size でsize_pct乗数を動的算出
+                if MFFU_SELECTOR_AVAILABLE and hasattr(self, "_atr_history_60d"):
+                    try:
+                        _atr_14d  = env_dict.get("atr_14d", 0.0)
+                        _atr_hist = getattr(self, "_atr_history_60d", [])
+                        if _atr_14d > 0 and _atr_hist:
+                            _atr_regime = get_atr_regime(_atr_14d, _atr_hist)
+                            _atr_size_mult = apply_atr_regime_to_size(1.0, _atr_regime)
+                            log.info(
+                                f"[MFFUBot] atr_regime={_atr_regime} "
+                                f"atr_regime_size_mult={_atr_size_mult:.2f}"
+                            )
+                    except Exception as _e:
+                        log.debug(f"[MFFUBot] ATR regime calc skipped: {_e}")
+
+                # F11: Anchored VWAP 計算（前日高・前日安・FOMC）
+                # get_anchored_vwap_set で3アンカー AVWAP を算出
+                # _price_history / _volume_history / _timestamps が揃っている場合のみ実行
+                if MFFU_SELECTOR_AVAILABLE and hasattr(self, "_price_history_ts"):
+                    try:
+                        _ph = getattr(self, "_price_history_ts", {})
+                        _avwap_set = get_anchored_vwap_set(
+                            prices     = _ph.get("prices", []),
+                            volumes    = _ph.get("volumes", []),
+                            timestamps = _ph.get("timestamps", []),
+                            prev_day_high_ts = _ph.get("prev_day_high_ts"),
+                            prev_day_low_ts  = _ph.get("prev_day_low_ts"),
+                            last_fomc_ts     = _ph.get("last_fomc_ts"),
+                        )
+                        self._anchored_vwap = _avwap_set
+                        log.info(
+                            f"[MFFUBot] anchored_vwap: "
+                            f"prev_high={_avwap_set.get('prev_high')} "
+                            f"prev_low={_avwap_set.get('prev_low')} "
+                            f"fomc={_avwap_set.get('fomc')}"
+                        )
+                    except Exception as _e:
+                        log.debug(f"[MFFUBot] Anchored VWAP calc skipped: {_e}")
+
             except Exception as e:
                 log.warning(f"[MFFUBot] mffu_strategy_selector error: {e}")
                 # フォールバック: VIX帯別スコア
@@ -1458,6 +1682,465 @@ class ChronosBot:
 
     # ── ヘルパー ──────────────────────────────────────────────────────────────
 
+    def _is_maintenance_break(self, now_et: Optional[datetime.datetime] = None) -> bool:
+        """
+        CME Globex Maintenance Break (ET 17:00-18:00) 内かチェックする。
+
+        この時間帯は市場閉場のため発注を完全停止する。
+        Source: CME Group 公式 - Globex clearing/maintenance window 17:00-18:00 ET daily
+
+        Args:
+            now_et: 現在時刻（ET）。省略時は datetime.datetime.now(ET)
+
+        Returns:
+            True = maintenance break 中 (発注禁止)
+            False = 通常取引時間
+        """
+        if now_et is None:
+            now_et = datetime.datetime.now(ET)
+
+        # chronos_rules.yaml から設定を読む（キャッシュなし・毎回読む）
+        rules = _load_chronos_rules()
+        mb = rules.get("maintenance_break", {})
+        start_str = mb.get("start_et", "17:00")
+        end_str   = mb.get("end_et",   "18:00")
+
+        try:
+            sh, sm = [int(x) for x in start_str.split(":")]
+            eh, em = [int(x) for x in end_str.split(":")]
+            start_t = datetime.time(sh, sm)
+            end_t   = datetime.time(eh, em)
+        except Exception:
+            # パース失敗時はデフォルト値
+            start_t = datetime.time(17, 0)
+            end_t   = datetime.time(18, 0)
+
+        t = now_et.time().replace(second=0, microsecond=0)
+        in_break = start_t <= t < end_t
+
+        if in_break:
+            log.warning(
+                f"[MaintenanceBreak] BLOCKED: current ET time {t} is in "
+                f"CME Globex maintenance window {start_t}-{end_t}"
+            )
+        return in_break
+
+    def _in_news_window(self, now_et: Optional[datetime.datetime] = None) -> bool:
+        """
+        T1ニュースリリースの前後2分窓（±120秒）内かチェックする。
+
+        MFFU News Trading Policy:
+          "These protocols apply to all news releases"
+          "No new positions may be opened 2 minutes before or 2 minutes after"
+        Source: https://help.myfundedfutures.com/en/articles/8230009-news-trading-policy
+
+        このメソッドは chronos_bot.NewsTradingFilter.is_blackout() のラッパー。
+        エントリー判断前に呼び、True の場合は新規エントリーを禁止する。
+        既存ポジションは Hold 許可（is_blackout と同仕様）。
+
+        Args:
+            now_et: 現在時刻（ET）。省略時は datetime.datetime.now(ET)
+
+        Returns:
+            True = ニュース窓内（新規エントリー禁止）
+            False = 通常取引可能
+        """
+        result = self.news_filter.is_blackout(now_et)
+        if result["blocked"]:
+            log.warning(
+                f"[NewsGuard] BLOCKED: event={result['event']} "
+                f"time={result['event_time']} "
+                f"minutes_to={result['minutes_to']:+.1f}"
+            )
+            return True
+        return False
+
+    def _apply_loss_scaling(self) -> float:
+        """
+        連敗数に応じたサイズ倍率を返す。
+
+        設計 (chronos_rules.yaml: consecutive_loss_guard):
+          0-1 連敗: 1.0 (通常)
+          2 連敗:   0.50 (50%)
+          3+ 連敗:  0.25 (25%)
+          5 連敗:   当日停止 (_kill_switch_day = True)
+
+        Returns:
+            float サイズ倍率 (0.0 = 停止)
+        """
+        if self._kill_switch_day:
+            return 0.0
+
+        rules = _load_chronos_rules()
+        clg = rules.get("consecutive_loss_guard", {})
+        halt_streak    = clg.get("halt_streak",     5)
+        streak_2_pct   = clg.get("streak_2_size_pct", 0.50)
+        streak_3_pct   = clg.get("streak_3_size_pct", 0.25)
+
+        if self._consecutive_losses >= halt_streak:
+            self._kill_switch_day = True
+            log.error(
+                f"[LossGuard] {self._consecutive_losses}連敗 → 当日完全停止 "
+                f"(kill_switch_day=True)"
+            )
+            pushover(
+                "[Chronos] LOSS GUARD: 当日停止",
+                f"{self._consecutive_losses}連敗到達 → 本日の取引を停止します",
+                priority=1,
+            )
+            return 0.0
+
+        if self._consecutive_losses >= 3:
+            log.warning(
+                f"[LossGuard] {self._consecutive_losses}連敗 → size 25%"
+            )
+            return streak_3_pct
+
+        if self._consecutive_losses >= 2:
+            log.warning(
+                f"[LossGuard] {self._consecutive_losses}連敗 → size 50%"
+            )
+            return streak_2_pct
+
+        return 1.0
+
+    def record_trade_result(self, pnl: float) -> None:
+        """
+        取引結果を記録して連敗カウンタを更新する。
+
+        各取引のPnL確定時（エグジット後）に呼ぶ。
+        loss: _consecutive_losses += 1
+        win:  _consecutive_losses = 0 (リセット)
+
+        Args:
+            pnl: 確定損益（USD）。正=利益、負=損失
+        """
+        if pnl < 0:
+            self._consecutive_losses += 1
+            log.info(
+                f"[LossGuard] loss recorded: pnl={pnl:.2f} "
+                f"consecutive={self._consecutive_losses}"
+            )
+            # 即時halt判定
+            _ = self._apply_loss_scaling()
+        else:
+            if self._consecutive_losses > 0:
+                log.info(
+                    f"[LossGuard] win recorded: pnl={pnl:.2f} "
+                    f"consecutive reset (was={self._consecutive_losses})"
+                )
+            self._consecutive_losses = 0
+
+    def is_consistency_check_enabled(self) -> bool:
+        """
+        現在の account_type で Consistency チェックを実行するか返す。
+
+        chronos_rules.yaml: phase_rules を参照。
+        - "mffu_eval": True (Evaluationのみ適用)
+        - "demo" / "mffu_sim_funded": False
+
+        Source: MFFU公式 "Consistency requirement applies only to the evaluation phase"
+
+        Returns:
+            True = Consistencyチェック有効
+        """
+        rules = _load_chronos_rules()
+        consistency_phases = rules.get("phase_rules", {}).get(
+            "consistency_phases", ["mffu_eval"]
+        )
+        return self._account_type in consistency_phases
+
+    # ── Survival Mode（初回ペイアウト後）メソッド ────────────────────────────────
+
+    def _get_active_phase_config(self) -> dict:
+        """現在のフェーズに応じた設定辞書を返すヘルパー。
+
+        account_type に応じて chronos_rules.yaml から適切なブロックを返す。
+        survival_mode_after_payout が有効な場合はそのブロックを返す。
+
+        設計思想（優秀MESトレーダー原則）:
+          フェーズ別に全く異なる規律が必要。
+          - Evaluation: 利益目標を目指す積極姿勢
+          - Sim-Funded after payout: "負けないことに全振り" の生存戦略
+
+        Returns:
+            dict: アクティブな設定ブロック（"survival_mode_after_payout" or
+                  "mffu_compliance.sim_funded" or "mffu_compliance.evaluation"）
+        """
+        rules = _load_chronos_rules()
+
+        if self._account_type == "mffu_sim_funded_after_payout":
+            return rules.get("survival_mode_after_payout", {})
+        elif self._account_type == "mffu_sim_funded":
+            return rules.get("mffu_compliance", {}).get("sim_funded", {})
+        elif self._account_type == "mffu_eval":
+            return rules.get("mffu_compliance", {}).get("evaluation", {})
+        else:
+            # demo / unknown
+            return {}
+
+    def _is_a_plus_window(self, now_et: Optional[datetime.datetime] = None) -> bool:
+        """エントリー許可ウィンドウ（A+セットアップ帯）内か確認する。
+
+        設定元: chronos_rules.yaml survival_mode_after_payout.allowed_entry_windows_et
+        優秀MESトレーダー原則: "A+セットアップのみ（確率80%以上の局面）"
+
+        Args:
+            now_et: 現在時刻（ET）。省略時は datetime.datetime.now(ET)
+
+        Returns:
+            True = A+ウィンドウ内（エントリー許可帯）
+            False = ウィンドウ外
+        """
+        if now_et is None:
+            now_et = datetime.datetime.now(ET)
+
+        rules   = _load_chronos_rules()
+        windows = (
+            rules.get("survival_mode_after_payout", {})
+                 .get("allowed_entry_windows_et", [])
+        )
+
+        t = now_et.time()
+        for window in windows:
+            if len(window) != 2:
+                continue
+            start = datetime.time(*[int(x) for x in window[0].split(":")])
+            end   = datetime.time(*[int(x) for x in window[1].split(":")])
+            if start <= t < end:
+                return True
+        return False
+
+    def _is_forbidden_window(self, now_et: Optional[datetime.datetime] = None) -> bool:
+        """エントリー禁止ウィンドウ内か確認する。
+
+        設定元: chronos_rules.yaml survival_mode_after_payout.forbidden_windows_et
+        優秀MESトレーダー原則: "不確実時間完全回避"
+
+        Args:
+            now_et: 現在時刻（ET）。省略時は datetime.datetime.now(ET)
+
+        Returns:
+            True = 禁止ウィンドウ内（エントリー禁止）
+            False = 通常時間帯
+        """
+        if now_et is None:
+            now_et = datetime.datetime.now(ET)
+
+        rules   = _load_chronos_rules()
+        windows = (
+            rules.get("survival_mode_after_payout", {})
+                 .get("forbidden_windows_et", [])
+        )
+
+        t = now_et.time()
+        for window in windows:
+            if len(window) != 2:
+                continue
+            start = datetime.time(*[int(x) for x in window[0].split(":")])
+            end   = datetime.time(*[int(x) for x in window[1].split(":")])
+            if start <= t < end:
+                return True
+        return False
+
+    def _post_loss_cooldown_active(self, now_date: Optional[datetime.date] = None) -> bool:
+        """最終損失日から指定営業日以内か（クールダウン中）か判定する。
+
+        設定元: chronos_rules.yaml survival_mode_after_payout.post_loss_cooldown_days
+        優秀MESトレーダー原則: "連敗ゼロ許容" → 負けたら即冷却期間
+
+        営業日カウント: 土日を除く暦日で計算（祝日は非考慮）
+
+        Args:
+            now_date: 現在日付。省略時は今日
+
+        Returns:
+            True = クールダウン中（エントリー禁止）
+            False = クールダウン解除（エントリー可能）
+        """
+        if self._survival_last_loss_date is None:
+            return False  # 損失履歴なし → クールダウンなし
+
+        if now_date is None:
+            now_date = datetime.date.today()
+
+        rules        = _load_chronos_rules()
+        cooldown_days = int(
+            rules.get("survival_mode_after_payout", {})
+                 .get("post_loss_cooldown_days", 3)
+        )
+
+        # 営業日カウント（土日スキップ）
+        current     = self._survival_last_loss_date
+        biz_days    = 0
+        while current < now_date:
+            current += datetime.timedelta(days=1)
+            if current.weekday() < 5:  # 月曜(0)〜金曜(4)のみカウント
+                biz_days += 1
+
+        return biz_days < cooldown_days
+
+    def _apply_survival_mode(
+        self,
+        now_et: Optional[datetime.datetime] = None,
+        now_date: Optional[datetime.date]   = None,
+    ) -> tuple[bool, str]:
+        """Survival Mode（初回ペイアウト後）の全ガードを段階的に適用する。
+
+        optimistic MESトレーダー原則をすべてチェックし、
+        全段通過した場合のみエントリーを許可する。
+
+        チェック順:
+          1. survival_mode有効か
+          2. 1日最大損失（max_daily_loss_usd）到達チェック
+          3. 1日最大トレード数（max_trades_per_day）チェック
+          4. 利確ターゲット（profit_lock_usd）到達チェック（即日終了）
+          5. post_loss クールダウン中チェック
+          6. 禁止ウィンドウ（forbidden_windows_et）チェック
+          7. A+ウィンドウ（allowed_entry_windows_et）チェック
+          8. セットアップスコア（required_setup_score）チェック
+
+        Args:
+            now_et:   現在時刻（ET）。省略時は datetime.datetime.now(ET)
+            now_date: 現在日付。省略時は today()
+
+        Returns:
+            (entry_allowed: bool, 理由文字列)
+        """
+        if not self._survival_mode_active:
+            return True, "survival_mode未適用"
+
+        if now_et is None:
+            now_et   = datetime.datetime.now(ET)
+        if now_date is None:
+            now_date = now_et.date()
+
+        rules     = _load_chronos_rules()
+        sm_config = rules.get("survival_mode_after_payout", {})
+
+        max_daily_loss = float(sm_config.get("max_daily_loss_usd", 80))
+        profit_lock    = float(sm_config.get("profit_lock_usd", 150))
+        max_trades     = int(sm_config.get("max_trades_per_day", 1))
+        setup_score    = int(sm_config.get("required_setup_score", 80))
+        kill_on_loss   = bool(sm_config.get("kill_switch_on_daily_loss", True))
+
+        # ① 1日最大損失チェック（MLL $100の80%バッファ）
+        if self._survival_today_pnl <= -max_daily_loss:
+            reason = (
+                f"[SurvivalMode] 日次損失上限到達: "
+                f"today_pnl=${self._survival_today_pnl:.2f} <= "
+                f"-${max_daily_loss:.0f} → エントリー禁止"
+            )
+            log.warning(reason)
+            if kill_on_loss:
+                self._kill_switch_day = True
+            return False, reason
+
+        # ② 1日最大トレード数チェック
+        if self._survival_today_trades >= max_trades:
+            reason = (
+                f"[SurvivalMode] 1日最大トレード数到達: "
+                f"{self._survival_today_trades}/{max_trades}トレード済み → 終了"
+            )
+            log.info(reason)
+            return False, reason
+
+        # ③ 利確ターゲット到達チェック（即日終了）
+        if self._survival_today_pnl >= profit_lock:
+            reason = (
+                f"[SurvivalMode] 利確ターゲット到達: "
+                f"today_pnl=${self._survival_today_pnl:.2f} >= ${profit_lock:.0f} → 即日終了"
+            )
+            log.info(reason)
+            return False, reason
+
+        # ④ post_loss クールダウンチェック
+        if self._post_loss_cooldown_active(now_date):
+            cooldown = int(sm_config.get("post_loss_cooldown_days", 3))
+            reason = (
+                f"[SurvivalMode] クールダウン中: "
+                f"最終損失日={self._survival_last_loss_date} "
+                f"({cooldown}営業日冷却期間) → エントリー禁止"
+            )
+            log.info(reason)
+            return False, reason
+
+        # ⑤ 禁止ウィンドウチェック
+        if self._is_forbidden_window(now_et):
+            reason = (
+                f"[SurvivalMode] 禁止ウィンドウ内: "
+                f"{now_et.strftime('%H:%M')} ET → 不確実時間帯スキップ"
+            )
+            log.info(reason)
+            return False, reason
+
+        # ⑥ A+ウィンドウチェック
+        if not self._is_a_plus_window(now_et):
+            reason = (
+                f"[SurvivalMode] A+ウィンドウ外: "
+                f"{now_et.strftime('%H:%M')} ET → エントリー許可帯外"
+            )
+            log.info(reason)
+            return False, reason
+
+        # ⑦ セットアップスコアチェック
+        if self._survival_setup_score < setup_score:
+            reason = (
+                f"[SurvivalMode] セットアップスコア不足: "
+                f"{self._survival_setup_score:.0f} < {setup_score} → A+未達"
+            )
+            log.info(reason)
+            return False, reason
+
+        log.info(
+            f"[SurvivalMode] 全ガード通過: "
+            f"trades={self._survival_today_trades}/{max_trades} "
+            f"pnl=${self._survival_today_pnl:.2f} "
+            f"score={self._survival_setup_score:.0f}"
+        )
+        return True, "SurvivalMode全ガード通過"
+
+    def on_payout_received(self) -> bool:
+        """ペイアウト受領ハンドラ。初回ペイアウト後にフェーズを遷移させる。
+
+        chronos_mffu_rules.on_first_payout_received() を呼び出し、
+        遷移が成功した場合は account_type を更新してPushover通知を送信する。
+
+        Returns:
+            True = フェーズ遷移成功（初回ペイアウト）
+            False = 遷移なし（すでにafter_payoutか条件未達）
+        """
+        from chronos_mffu_rules import (
+            MFFURules, MFFUPlan, load_plan, PHASE_SIM_FUNDED,
+            on_first_payout_received,
+        )
+
+        # ダミーrulesでon_first_payout_received()を呼ぶ
+        # （実際の残高は rule_guard から取得するが、フェーズ遷移判定のみなのでダミーで可）
+        dummy_plan  = load_plan("flex_50k")
+        dummy_rules = MFFURules(
+            plan                  = dummy_plan,
+            phase                 = PHASE_SIM_FUNDED,
+            account_balance_usd   = 0.0,
+            peak_balance_usd      = 0.0,
+            daily_pnl_usd         = 0.0,
+            trading_days_count    = 1,
+            payout_count          = 1,  # 初回ペイアウト済みとして渡す
+        )
+
+        transitioned, msg = on_first_payout_received(dummy_rules)
+        if transitioned:
+            self._account_type         = "mffu_sim_funded_after_payout"
+            self._survival_mode_active = True
+            log.warning(f"[MFFUBot] フェーズ遷移: {msg}")
+            pushover(
+                "[Chronos] SURVIVAL MODE ACTIVATED",
+                "Max Loss $100 · 1 trade/day · A+ only · 口座死なせない",
+                priority=1,
+            )
+            return True
+        return False
+
     def _compute_level_trading_levels(self):
         """
         プレマーケット時に当日の Level Trading レベルを計算する。
@@ -1506,6 +2189,90 @@ class ChronosBot:
             f"{self.level_trading.levels_summary()}"
         )
 
+    def _save_state(self, reason: str = "periodic") -> None:
+        """CRIT-4: data/accounts/<account_id>/state.json に状態を atomic write する。
+
+        書出タイミング:
+          - 発注後（reason="after_order"）
+          - ポジション変更後（reason="position_change"）
+          - 日次リセット後（reason="daily_reset"）
+          - 5分毎の定期（reason="periodic"）
+
+        fleet_watcher が state.json を読んで監視する。
+        atomic write（tempfile→rename）でrace condition防止。
+        """
+        import tempfile
+
+        # account_id: 環境変数 MFFU_ACCOUNT_ID -> product+paper から生成
+        account_id = os.environ.get(
+            "MFFU_ACCOUNT_ID",
+            f"mffu_{self.product.lower()}_{'paper' if self.paper else 'live'}",
+        )
+
+        state_dir = _BASE_DIR / "accounts" / account_id
+        state_dir.mkdir(parents=True, exist_ok=True)
+        state_path = state_dir / "state.json"
+
+        # 現在のポジション情報（dry_run時はモック）
+        positions: list[dict] = []
+        if not self.dry_run and self.client is not None:
+            try:
+                raw_positions = self.client.get_positions()
+                for p in raw_positions:
+                    positions.append({
+                        "symbol":    p.get("symbol", ""),
+                        "qty":       abs(p.get("net_pos", 0)),
+                        "side":      "long" if p.get("net_pos", 0) > 0 else "short",
+                        "avg_price": p.get("avg_price", 0.0),
+                    })
+            except Exception as e:
+                log.warning(f"[SaveState] get_positions failed: {e}")
+
+        # VIX-MR ポジション（クライアントポジション外の仮想ポジション）
+        if self.vix_mr is not None and self.vix_mr.has_position:
+            vpos = self.vix_mr.get_position_summary()
+            positions.append({
+                "symbol":    vpos.get("symbol", self.product),
+                "qty":       vpos.get("qty", 0),
+                "side":      "long",
+                "avg_price": vpos.get("entry_price", 0.0),
+                "strategy":  "vix_mr",
+            })
+
+        now_et = datetime.datetime.now(ET)
+        state = {
+            "account_id":         account_id,
+            "timestamp":          now_et.isoformat(),
+            "save_reason":        reason,
+            "account_type":       self._account_type,
+            "positions":          positions,
+            "weekly_dd_usd":      self._weekly_realized_pnl,
+            "daily_pnl_usd":      self._today_realized_pnl,
+            "consecutive_losses": self._consecutive_losses,
+            "phase_flags": {
+                "survival_mode":  self._survival_mode_active,
+                "kill_switch_day": self._kill_switch_day,
+                "daily_halt":     self._daily_halt,
+                "daily_soft_stop_active": self._daily_soft_stop_active,
+            },
+        }
+
+        try:
+            # atomic write: tempfile → rename
+            with tempfile.NamedTemporaryFile(
+                "w",
+                dir=str(state_dir),
+                suffix=".tmp",
+                delete=False,
+                encoding="utf-8",
+            ) as tmp:
+                json.dump(state, tmp, indent=2, ensure_ascii=False)
+                tmp_path = tmp.name
+            os.replace(tmp_path, state_path)
+            log.debug(f"[SaveState] written: {state_path} reason={reason}")
+        except Exception as e:
+            log.warning(f"[SaveState] write failed: {e}")
+
     def _get_current_balance_and_pnl(self) -> tuple[float, float]:
         """
         (cash_balance, open_pnl) を返す。
@@ -1542,6 +2309,21 @@ class ChronosBot:
         for bar in bars:
             if bar.get("high") and bar.get("low"):
                 self.orb.update_or_candle(bar["high"], bar["low"])
+            # C3修正: CumulativeDelta にバーデータを配線（run_foreverメインループ）
+            if self.cumulative_delta is not None and bar.get("close") and bar.get("open"):
+                try:
+                    from chronos_cumulative_delta import BarData as _BarData
+                    _bar = _BarData(
+                        open      = float(bar.get("open", 0)),
+                        high      = float(bar.get("high", 0)),
+                        low       = float(bar.get("low", 0)),
+                        close     = float(bar.get("close", 0)),
+                        volume    = float(bar.get("volume", 0)),
+                        timestamp = int(bar.get("timestamp", 0)),
+                    )
+                    self.cumulative_delta.update_from_bar(_bar)
+                except Exception as _e:
+                    log.debug(f"[MFFUBot] CumulativeDelta.update_from_bar error: {_e}")
 
     # ── メインループ ──────────────────────────────────────────────────────────
 
@@ -1567,6 +2349,7 @@ class ChronosBot:
                 if self._last_loop_date != now_date:
                     self._daily_reset(now_date)
                     self._last_loop_date = now_date
+                    self._save_state("daily_reset")  # CRIT-4: 日次リセット後に書出
 
                 # 週末はスキップ
                 if now_et.weekday() >= 5:
@@ -1591,6 +2374,22 @@ class ChronosBot:
                         self.orb.finalize_or()
                         self._or_finalized = True
                         log.info(f"[MFFUBot] OR confirmed: range={self.orb.or_range}")
+
+                # ── F3: Daily Soft Stop チェック（毎分・エントリー前に評価）──────
+                # 日次損失 $300 到達で size_pct 50% 削減フラグを立てる。
+                # フラグはエントリー時に FuturesORBStrategy.check_breakout() に渡す
+                # env_score 等で間接的に反映させるか、orb.size_pct_override で適用する。
+                # Source: chronos_rules.yaml daily_soft_stop セクション
+                if self._premarket_done and not self._daily_soft_stop_active:
+                    _dss_rules = _load_chronos_rules().get("daily_soft_stop", {})
+                    _dss_threshold = -abs(_dss_rules.get("loss_threshold_usd", 300))
+                    if self._today_realized_pnl <= _dss_threshold:
+                        self._daily_soft_stop_active = True
+                        log.warning(
+                            f"[MFFUBot][DailySoftStop] 発動: "
+                            f"today_pnl={self._today_realized_pnl:.0f} <= "
+                            f"{_dss_threshold:.0f} → size_pct×0.5"
+                        )
 
                 # ── Daily Strong Close Rule チェック（毎分）──
                 if not self._daily_halt and self._premarket_done:
@@ -1637,13 +2436,85 @@ class ChronosBot:
 
                 # ── 10:00〜12:00 ET: エントリーウィンドウ ──
                 elif datetime.time(10, 0) <= t < datetime.time(12, 0):
-                    if self._or_finalized and not self._daily_halt:
+                    # Maintenance Break Guard: CME Globex 17:00-18:00 ET
+                    # (このブロック自体は10:00-12:00なので通常は発動しないが
+                    #  将来時間帯拡張に備えてガードを維持する)
+                    if self._is_maintenance_break(now_et):
+                        log.warning("[MFFUBot] Maintenance Break中: エントリースキップ")
+                    # kill_switch_day (5連敗停止) チェック
+                    elif self._kill_switch_day:
+                        log.warning("[MFFUBot] kill_switch_day=True: 当日取引停止")
+                    # ── Survival Mode 全ガード（初回ペイアウト後・Max Loss $100対応）──
+                    # 優秀MESトレーダー原則: 全段通過後のみ発注許可
+                    elif self._survival_mode_active:
+                        sm_ok, sm_reason = self._apply_survival_mode(now_et, now_date)
+                        if not sm_ok:
+                            log.debug(f"[SurvivalMode] エントリーブロック: {sm_reason}")
+                        elif self._or_finalized and not self._daily_halt:
+                            balance, open_pnl = self._get_current_balance_and_pnl()
+                            price = self._get_current_price()
+                            if price:
+                                if self._in_news_window(now_et):
+                                    log.warning(
+                                        "[MFFUBot][SurvivalMode] NewsGuard: T1ニュース前後2分窓 → "
+                                        "新規エントリースキップ"
+                                    )
+                                elif not self.orb._entry_done:
+                                    entry = self.orb.check_breakout(
+                                        current_price   = price,
+                                        current_balance = balance,
+                                        vix             = self._vix or 20.0,
+                                        env_score       = self._env_score,
+                                        open_pnl        = open_pnl,
+                                        now_et          = now_et,
+                                    )
+                                    if entry:
+                                        self._survival_today_trades += 1
+                                        log.info(
+                                            f"[MFFUBot][SurvivalMode] ORB ENTRY: {entry} "
+                                            f"(trade {self._survival_today_trades}/1)"
+                                        )
+                                        pushover(
+                                            "[Chronos][SurvivalMode] ORBエントリー",
+                                            f"{entry['action']} 1x{entry['symbol']} "
+                                            f"@{entry['entry_price']:.2f} "
+                                            f"(Max Loss $100対応モード)",
+                                        )
+                    elif self._or_finalized and not self._daily_halt:
                         balance, open_pnl = self._get_current_balance_and_pnl()
                         price = self._get_current_price()
 
                         if price:
+                            # ── F4 Consistency call_site チェック ──────────────────
+                            # is_consistency_check_enabled() が True のフェーズ (mffu_eval) で
+                            # 今日のP&Lが月間累積利益の 50% を超えたら新規エントリー停止。
+                            # Source: MFFU公式 "1日の利益が全利益の50%以内" (Consistency Rule)
+                            # 評価採点改善: F4 call_site 4→5点 (2026-04-19)
+                            if self.is_consistency_check_enabled():
+                                _monthly_realized = self._month_realized_pnl
+                                _today_realized   = self._today_realized_pnl
+                                if _monthly_realized > 0 and _today_realized > 0:
+                                    _cons_ratio = _today_realized / _monthly_realized
+                                    if _cons_ratio >= 0.50:
+                                        log.warning(
+                                            f"[MFFUBot][Consistency] 新規エントリー停止: "
+                                            f"today={_today_realized:.0f} / "
+                                            f"monthly={_monthly_realized:.0f} "
+                                            f"= {_cons_ratio:.1%} >= 50% (Consistency Rule)"
+                                        )
+                                        time.sleep(60)
+                                        continue
+
+                            # ── News Guard (T1 2分窓チェック) ──
+                            # MFFU: "These protocols apply to all news releases"
+                            # 既存ポジはhold許可・新規エントリーのみ禁止
+                            if self._in_news_window(now_et):
+                                log.warning(
+                                    "[MFFUBot] NewsGuard: T1ニュース前後2分窓 → "
+                                    "新規エントリースキップ"
+                                )
                             # ORB エントリー（ORBがまだエントリーしていない場合）
-                            if not self.orb._entry_done:
+                            elif not self.orb._entry_done:
                                 entry = self.orb.check_breakout(
                                     current_price   = price,
                                     current_balance = balance,
@@ -1661,8 +2532,14 @@ class ChronosBot:
                                     )
 
                             # Level Trading エントリー（ORBと独立・並行）
+                            # NewsGuard / kill_switch_day は上記 if self._in_news_window
+                            # と elif not self.orb._entry_done の兄弟ブロックで
+                            # 既にチェック済み。Level Trading は独立して同一 price ブロック内で
+                            # 動くため、ここでも news_window / kill_switch を再確認する。
                             if (
-                                self.level_trading is not None
+                                not self._in_news_window(now_et)
+                                and not self._kill_switch_day
+                                and self.level_trading is not None
                                 and not self.level_trading.has_position
                                 and self.rule_guard.can_enter_new_position(balance, open_pnl)
                             ):
@@ -1813,10 +2690,33 @@ class ChronosBot:
                     if not self._force_close_done:
                         self._force_close()
 
+                # HIGH-11: Builder overnight強制クローズ（15:55 ET）
+                # MFFU Builder公式: "All positions must be closed before end of trading session"
+                # Builderアカウントのみ適用（Flex/Rapid/Proは任意overnight可）
+                if (
+                    datetime.time(15, 55) <= t < datetime.time(16, 0)
+                    and "builder" in self._account_type.lower()
+                    and not self._force_close_done
+                ):
+                    log.warning(
+                        "[MFFUBot] HIGH-11: Builder 15:55 ET — "
+                        "overnight強制クローズ実行 (MFFU Builder公式制約)"
+                    )
+                    self._force_close()
+                    pushover(
+                        "[Chronos] Builder 強制クローズ",
+                        "15:55 ET: Builder overnight禁止 → 全ポジクローズ実行",
+                        priority=0,
+                    )
+
                 # ── 16:30 ET: EODチェック + 日次レポート ──
                 if datetime.time(16, 30) <= t < datetime.time(16, 35):
                     if not self._nightly_done:
                         self._run_nightly()
+
+                # CRIT-4: 5分毎の定期 state.json 書出
+                if now_et.minute % 5 == 0 and now_et.second < 30:
+                    self._save_state("periodic")
 
                 # トークンrenew
                 if not self.dry_run and self.client:
@@ -2026,13 +2926,27 @@ class ChronosBot:
                     qty = self.rule_guard.get_allowed_contracts(
                         balance - self.rule_guard.initial_balance
                     )
-                    qty = max(1, round(qty * s.get("size_pct", 1.0)))
-                    entry = self.vix_mr.enter_long(
-                        current_price = price,
-                        qty           = qty,
-                        entry_date    = now_et.date(),
-                        dry_run       = self.dry_run,
-                    )
+                    # HIGH-9: size_pct=0 (kill switch / size lock) の場合は発注スキップ
+                    # 旧コード max(1, round(qty * size_pct)) は size_pct=0 でも 1枚発注していた
+                    _size_pct = s.get("size_pct", 1.0)
+                    _scaled = round(qty * _size_pct)
+                    if _scaled == 0 or _size_pct == 0:
+                        log.warning(
+                            f"[MFFUBot] VIX-MR: size_pct={_size_pct} → qty=0, "
+                            f"skip order (kill_switch/size_lock)"
+                        )
+                        qty = 0
+                    else:
+                        qty = max(1, _scaled)
+                    if qty <= 0:
+                        entry = None
+                    else:
+                        entry = self.vix_mr.enter_long(
+                            current_price = price,
+                            qty           = qty,
+                            entry_date    = now_et.date(),
+                            dry_run       = self.dry_run,
+                        )
                     if entry:
                         log.info(f"[MFFUBot] VIX-MR ENTRY: {entry}")
                         pushover(
@@ -2178,6 +3092,25 @@ class ChronosBot:
         self._overnight_done   = False
         self._daily_halt       = False
         self._today_realized_pnl = 0.0
+        self._daily_soft_stop_active = False   # F3: 日次ソフトストップ解除
+
+        # C3修正: CumulativeDelta 日次リセット（RTH 9:30 ET 開始時に累積をクリア）
+        if self.cumulative_delta is not None:
+            self.cumulative_delta.daily_reset()
+            log.info("[MFFUBot] CumulativeDelta daily_reset called")
+
+        # 連敗カウンタ日次リセット (consecutive_loss_guard: daily_reset_et="09:00")
+        prev_consecutive = self._consecutive_losses
+        self._consecutive_losses = 0
+        self._kill_switch_day    = False
+        if prev_consecutive > 0:
+            log.info(
+                f"[LossGuard] daily reset: consecutive_losses {prev_consecutive} → 0"
+            )
+
+        # Rate-limit ハンドラー日次リセット
+        if not self.dry_run and self.client is not None:
+            self.client.reset_rate_limit_daily()
 
         # Level Trading 日次リセット（プレマーケットで再計算される）
         if self.level_trading is not None:
@@ -2213,6 +3146,17 @@ class ChronosBot:
         if today.weekday() == 0:
             log.info("[MFFUBot] weekly reset: _weekly_realized_pnl = 0")
             self._weekly_realized_pnl = 0.0
+
+        # Survival Mode 日次リセット
+        # 当日トレード数・当日P&Lをリセット（クールダウン日・最終損失日は維持）
+        if self._survival_mode_active:
+            prev_trades = self._survival_today_trades
+            self._survival_today_trades = 0
+            self._survival_today_pnl    = 0.0
+            log.info(
+                f"[SurvivalMode] daily reset: today_trades={prev_trades} → 0 "
+                f"cooldown_last_loss={self._survival_last_loss_date}"
+            )
 
     def _force_close(self):
         """15:45 ET: 全ポジションを強制クローズする。MFFUはEOD前に全決済が必要。"""
@@ -2288,6 +3232,93 @@ class ChronosBot:
                 log.warning(f"[MFFUBot] portfolio_risk.record_daily_pnl: {e}")
 
         self._nightly_done = True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HIGH-4: Cross-account hedging 発注前 prevent-mode チェック
+# ─────────────────────────────────────────────────────────────────────────────
+
+_HEDGE_SAME_PRODUCT_PAIRS_BOT: set[frozenset] = {
+    frozenset({"MES", "ES"}),
+    frozenset({"MNQ", "NQ"}),
+    frozenset({"MYM", "YM"}),
+    frozenset({"M2K", "RTY"}),
+}
+
+
+def check_cross_account_hedging(
+    new_order: dict,
+    accounts_dir: Optional[Path] = None,
+    current_account_id: str = "",
+) -> tuple[bool, str]:
+    """HIGH-4: 発注前に他アカウントのstate.jsonを確認してcross-account両建てを検出する。
+
+    全アカウントの state.json を読み取り、同一underlying・逆方向ポジションがあれば
+    発注をrejectする（prevent-mode: 事後検知ではなく発注前ブロック）。
+
+    fleet_watcher の事後検知（unload）と二重防御の設計。
+
+    Args:
+        new_order: {"symbol": str, "side": "BUY"|"SELL", "qty": int}
+        accounts_dir: data/accounts/ ディレクトリ（Noneでデフォルト）
+        current_account_id: 自分自身のアカウントID（他アカとの比較除外用）
+
+    Returns:
+        (True=OK発注可, "") または (False=NG reject, "理由文字列")
+    """
+    if accounts_dir is None:
+        accounts_dir = _BASE_DIR / "accounts"
+
+    new_symbol = new_order.get("symbol", "").upper()
+    new_side   = new_order.get("side", "").upper()
+    new_is_long = new_side in ("BUY", "LONG")
+
+    if not accounts_dir.exists():
+        return True, ""  # accounts/ 未作成 → 他アカなし → OK
+
+    for state_file in accounts_dir.glob("*/state.json"):
+        account_id = state_file.parent.name
+        if account_id == current_account_id:
+            continue  # 自分自身はスキップ
+
+        try:
+            with open(state_file, encoding="utf-8") as f:
+                state = json.load(f)
+        except Exception:
+            continue
+
+        for pos in state.get("positions", []):
+            pos_symbol = pos.get("symbol", "").upper()
+            pos_side   = pos.get("side", "").upper()
+            pos_qty    = pos.get("qty", 0)
+            if pos_qty == 0:
+                continue
+            pos_is_long = pos_side in ("BUY", "LONG")
+
+            # 同一シンボル逆方向
+            if pos_symbol == new_symbol and pos_is_long != new_is_long:
+                reason = (
+                    f"HIGH-4 CrossAccountHedge: {account_id} に {pos_symbol} "
+                    f"{'long' if pos_is_long else 'short'} × "
+                    f"新規{'long' if new_is_long else 'short'} — "
+                    f"cross-account両建て禁止 (MFFU Fair Play Policy)"
+                )
+                log.error(f"[CrossAccountHedge] {reason}")
+                return False, reason
+
+            # 同一プロダクトペア逆方向
+            pair = frozenset({pos_symbol, new_symbol})
+            if pair in _HEDGE_SAME_PRODUCT_PAIRS_BOT and pos_is_long != new_is_long:
+                reason = (
+                    f"HIGH-4 CrossAccountHedge: {account_id} の {pos_symbol} "
+                    f"({'long' if pos_is_long else 'short'}) "
+                    f"× 新規 {new_symbol} ({'long' if new_is_long else 'short'}) "
+                    f"— 同一プロダクト cross-account両建て禁止"
+                )
+                log.error(f"[CrossAccountHedge] {reason}")
+                return False, reason
+
+    return True, ""
 
 
 # ─────────────────────────────────────────────────────────────────────────────

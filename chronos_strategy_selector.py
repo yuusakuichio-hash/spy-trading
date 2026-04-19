@@ -633,6 +633,11 @@ def select_futures_strategy(env: dict) -> list[dict]:
     is_overnight_window = _is_overnight_entry_window(time_et)
 
     # ── ORB（09:35-11:00 ET）───────────────────────────────────────────────────
+    # HIGH-3修正: ORBにdirectionフィールドを追加（bullish固定から env["orb_direction"] 参照へ）
+    # env["orb_direction"] は FuturesORBStrategy.check_breakout() が "Buy"/"Sell" を返した後
+    # chronos_bot.py 側で "long"/"short" に変換して env に入れる。
+    # env["orb_direction"] がない場合は "both"（ブレイクアウト方向依存）として扱う。
+    _orb_direction = env.get("orb_direction", "both")  # "long" | "short" | "both"
     if is_orb_window:
         if vix_band == "panic":
             # panic帯: 2/3サイズで稼働（大波乱対応）
@@ -641,10 +646,12 @@ def select_futures_strategy(env: dict) -> list[dict]:
             atr_size  = apply_atr_regime_to_size(tod_size, atr_regime)
             strategies.append({
                 "strategy":   "orb",
+                "direction":  _orb_direction,  # HIGH-3修正
                 "size_pct":   atr_size,
                 "confidence": 0.80,
                 "reason":     (
                     f"VIX={vix:.1f}({vix_band}) ORB panic帯 "
+                    f"dir={_orb_direction} "
                     f"size={atr_size:.2f} (TOD={tod_size:.2f} ATR={atr_regime})"
                 ),
             })
@@ -655,10 +662,12 @@ def select_futures_strategy(env: dict) -> list[dict]:
             atr_size  = apply_atr_regime_to_size(tod_size, atr_regime)
             strategies.append({
                 "strategy":   "orb",
+                "direction":  _orb_direction,  # HIGH-3修正
                 "size_pct":   atr_size,
                 "confidence": 0.85,
                 "reason":     (
                     f"VIX={vix:.1f}({vix_band}) ORB最優秀帯 "
+                    f"dir={_orb_direction} "
                     f"size={atr_size:.2f} (TOD={tod_size:.2f} ATR={atr_regime})"
                 ),
             })
@@ -669,10 +678,12 @@ def select_futures_strategy(env: dict) -> list[dict]:
             atr_size  = apply_atr_regime_to_size(tod_size, atr_regime)
             strategies.append({
                 "strategy":   "orb",
+                "direction":  _orb_direction,  # HIGH-3修正
                 "size_pct":   atr_size,
                 "confidence": 0.55,
                 "reason":     (
                     f"VIX={vix:.1f}({vix_band}) ORB準備枠 "
+                    f"dir={_orb_direction} "
                     f"size={atr_size:.2f} (TOD={tod_size:.2f} ATR={atr_regime})"
                 ),
             })
@@ -977,18 +988,52 @@ def select_futures_strategy(env: dict) -> list[dict]:
             bias_dir = cd_bias.get("bias", "neutral")
             divergence = cd_bias.get("divergence", "aligned")
 
-            # バイアスと一致しない戦術のサイズを縮小
+            # HIGH-4修正: ホワイトリスト → ブラックリスト方式に変換
+            # 方向が定まらない中立戦術（ブラックリスト）を定義し、
+            # それ以外は direction フィールドから判断する。
+            # direction なし戦術のデフォルトは "both"（neutral扱い・サイズ調整なし）
+            _NO_DIRECTION_STRATEGIES = {
+                "no_trade", "session_based",
+                # 方向特定不可・複合戦術
+            }
+
             for s in strategies:
-                if s["strategy"] == "no_trade":
+                if s["strategy"] in _NO_DIRECTION_STRATEGIES:
                     continue
+
+                strat_name = s["strategy"]
                 strat_dir = None
-                if s["strategy"] in ("orb", "vix_mr_long", "level_trading",
-                                     "volume_profile_long", "econ_event_long",
-                                     "range_break_long"):
+
+                # HIGH-4修正: strategy.direction フィールドを優先参照
+                _strat_direction = s.get("direction", "")
+
+                if _strat_direction == "long":
                     strat_dir = "bullish"
-                elif s["strategy"] in ("volume_profile_short", "econ_event_short",
-                                       "range_break_short"):
+                elif _strat_direction == "short":
                     strat_dir = "bearish"
+                elif _strat_direction in ("both", ""):
+                    # directionなし/both: 戦術名サフィックスで判断（後方互換）
+                    if strat_name.endswith("_long") or strat_name in (
+                        "vix_mr_long", "level_trading", "volume_profile_long",
+                        "econ_event_long", "range_break_long", "asia_range_fade",
+                        "gap_fill_advanced",
+                    ):
+                        strat_dir = "bullish"
+                    elif strat_name.endswith("_short") or strat_name in (
+                        "volume_profile_short", "econ_event_short", "range_break_short",
+                    ):
+                        strat_dir = "bearish"
+                    # HIGH-4修正: trend_follow/vix_term_structure/asia_range_fade/gap_fill/es_nq_spread追加
+                    elif strat_name in ("trend_follow", "vix_term_structure"):
+                        # trend_follow は env["trend_direction"] から参照
+                        _td = env.get("trend_direction", "neutral")
+                        strat_dir = "bullish" if _td == "up" else ("bearish" if _td == "down" else None)
+                    elif strat_name == "es_nq_spread":
+                        # ES-NQ Spread は方向中立（ペアトレード）
+                        strat_dir = None
+                    # "orb" は direction フィールドが "both" の場合は中立扱い
+                    elif strat_name == "orb":
+                        strat_dir = None
 
                 if strat_dir and bias_dir not in ("neutral",):
                     if strat_dir != bias_dir:
@@ -1035,8 +1080,12 @@ def select_futures_strategy(env: dict) -> list[dict]:
 
             if sig_dir in ("long", "short") and sig_conf >= min_conf:
                 sweep_strat_name = f"liquidity_sweep_reversal_{sig_dir}"
-                # sweep reversal は保守的サイズ (0.5)
-                sweep_size = min(sig_conf * 0.7, 0.5)
+                # HIGH-7修正: size_pct 0.5固定 → Kelly分率・口座フェーズ乗数を反映
+                # Kelly分率: env["kelly_fraction"] があれば使用 (デフォルト0.5)
+                # phase_multiplier: env["phase_size_mult"] があれば使用 (デフォルト1.0)
+                _kelly_frac  = min(env.get("kelly_fraction", 0.5), 1.0)
+                _phase_mult  = min(env.get("phase_size_mult", 1.0), 1.0)
+                sweep_size   = min(sig_conf * 0.7 * _kelly_frac * _phase_mult, 0.5)
 
                 # prev_high_sweep / prev_low_sweep をログで確認できるように
                 if level_type in ("prev_high", "ib_high"):
@@ -1044,8 +1093,25 @@ def select_futures_strategy(env: dict) -> list[dict]:
                 else:
                     liq_level_tag = "prev_low_sweep"
 
+                # HIGH-8修正: F13 sweep に F12 bias補正を適用（順序依存解消）
+                # F12 cumulative_delta_bias が env にある場合、sweep方向と一致チェック
+                _sweep_cd_bias = env.get("cumulative_delta_bias", None)
+                if _sweep_cd_bias is not None and _CUMULATIVE_DELTA_AVAILABLE:
+                    _sweep_bias_dir = _sweep_cd_bias.get("bias", "neutral")
+                    _sweep_strat_dir = "bullish" if sig_dir == "long" else "bearish"
+                    if _sweep_bias_dir not in ("neutral",) and _sweep_strat_dir != _sweep_bias_dir:
+                        # 方向不一致: size を 10% 縮小（F12と同じ係数）
+                        orig_sweep_size = sweep_size
+                        sweep_size = max(0.0, sweep_size * 0.9)
+                        log.info(
+                            f"[F12→F13 HIGH-8] sweep size adjusted: "
+                            f"bias={_sweep_bias_dir} sweep_dir={sig_dir} "
+                            f"size {orig_sweep_size:.2f}→{sweep_size:.2f}"
+                        )
+
                 strategies.append({
                     "strategy":   sweep_strat_name,
+                    "direction":  sig_dir,  # HIGH-3: direction フィールド付与
                     "size_pct":   sweep_size,
                     "confidence": sig_conf,
                     "reason":     (
