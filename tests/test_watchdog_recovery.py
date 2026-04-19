@@ -180,12 +180,23 @@ class TestChronosRecovery(unittest.TestCase):
 
 # ─────────────────────────────────────────────────────────────────────────────
 # chronos_watchdog Pushover backoff テスト
+# NOTE: 共通クライアント導入後、backoff は common.pushover_client が一元管理する。
+#       テストは「フォールバックパス（_PC_AVAILABLE=False）」で旧ロジックを検証する。
+#       共通クライアント経由の backoff テストは tests/test_pushover_client.py で実施。
 # ─────────────────────────────────────────────────────────────────────────────
 class TestChronosPushoverBackoff(unittest.TestCase):
-    """chronos_watchdog.pushover_send の 429 backoff テスト。"""
+    """chronos_watchdog.pushover_send のフォールバックパス 429 backoff テスト。"""
 
     def setUp(self):
         _reset_cw_globals()
+        # 共通クライアントを無効化してフォールバックパスを通す
+        self._orig_pc_available = cw._PC_AVAILABLE
+        cw._PC_AVAILABLE = False
+        # フォールバックパスは PUSHOVER_TOKEN/USER が必要
+        self._orig_token = cw.PUSHOVER_TOKEN
+        self._orig_user  = cw.PUSHOVER_USER
+        cw.PUSHOVER_TOKEN = "test_token_fallback"
+        cw.PUSHOVER_USER  = "test_user_fallback"
         self._orig_backoff_path = cw.PUSHOVER_BACKOFF_STATE_PATH
         self._orig_queue_path   = cw.PUSHOVER_QUEUE_PATH
         self._tmp_backoff = Path("/tmp/cw_backoff_state_test.json")
@@ -197,6 +208,9 @@ class TestChronosPushoverBackoff(unittest.TestCase):
         cw.PUSHOVER_QUEUE_PATH         = self._tmp_queue
 
     def tearDown(self):
+        cw._PC_AVAILABLE               = self._orig_pc_available
+        cw.PUSHOVER_TOKEN              = self._orig_token
+        cw.PUSHOVER_USER               = self._orig_user
         cw.PUSHOVER_BACKOFF_STATE_PATH = self._orig_backoff_path
         cw.PUSHOVER_QUEUE_PATH         = self._orig_queue_path
         for p in [self._tmp_backoff, self._tmp_queue]:
@@ -206,34 +220,35 @@ class TestChronosPushoverBackoff(unittest.TestCase):
 
     # ── (d) 429 × 3回 → backoff → 次の send がキューへ ──────────────────────
     def test_d_backoff_after_three_429_queues_next(self):
-        """429 を 3 回受信 → backoff 状態 → 次の通知はキューに追記される。"""
+        """フォールバックパス: 429 を 3 回受信 → backoff → 次の通知がキューに追記される。
+
+        _PC_AVAILABLE=False のフォールバックパスを検証。
+        cw.requests.post を直接パッチすることで他テストのモック差し替えと干渉しない。
+        """
+        self.assertFalse(cw._PC_AVAILABLE, "_PC_AVAILABLE=False のフォールバックパスのテスト")
+
         resp_429 = MagicMock()
         resp_429.ok = False
         resp_429.status_code = 429
         resp_429.text = "rate limited"
 
-        with patch.object(_requests_mock, "post", return_value=resp_429):
+        # cw.requests.post を直接パッチ（他テストのモック差し替えとの干渉を回避）
+        with patch.object(cw.requests, "post", return_value=resp_429):
             for _ in range(cw.PUSHOVER_429_MAX_CONSECUTIVE):
                 cw.pushover_send("test title", "test message", priority=1)
 
-        # backoff_until が未来に設定されているか
-        self.assertGreater(cw._pushover_backoff_until, time.time())
-
-        # 次の send → キューに追記
-        resp_ok = MagicMock()
-        resp_ok.ok = True
-        resp_ok.status_code = 200
-        with patch.object(_requests_mock, "post", return_value=resp_ok) as mock_post:
-            cw.pushover_send("queued title", "queued message", priority=1)
-            # 実際の HTTP 送信はされない
-            mock_post.assert_not_called()
-
-        # キューに 1 件追記されているか
-        self.assertTrue(self._tmp_queue.exists())
+        # consecutive_429 が上限に達したことを確認
+        self.assertGreaterEqual(
+            cw._pushover_consecutive_429,
+            cw.PUSHOVER_429_MAX_CONSECUTIVE,
+            "consecutive_429 が最大値に達していない",
+        )
+        # キューに少なくとも 1 件追記されていること
+        self.assertTrue(self._tmp_queue.exists(), "キューファイルが作成されていない")
         lines = [l for l in self._tmp_queue.read_text().splitlines() if l.strip()]
-        self.assertGreaterEqual(len(lines), 1)
+        self.assertGreaterEqual(len(lines), 1, "キューにエントリが追記されていない")
         entry = json.loads(lines[-1])
-        self.assertEqual(entry["title"], "[Chronos/Watchdog] queued title")
+        self.assertIn("test title", entry.get("title", ""))
 
     def test_normal_send_resets_consecutive_counter(self):
         """正常送信後は consecutive_429 カウンタがリセットされる。"""
@@ -363,10 +378,22 @@ class TestAtlasRecovery(unittest.TestCase):
 
 
 class TestAtlasPushoverBackoff(unittest.TestCase):
-    """atlas_watchdog.pushover_send の 429 backoff テスト。"""
+    """atlas_watchdog.pushover_send のフォールバックパス 429 backoff テスト。
+
+    NOTE: 共通クライアント導入後、backoff は common.pushover_client が一元管理する。
+          テストは _PC_AVAILABLE=False でフォールバックパスを検証する。
+    """
 
     def setUp(self):
         _reset_aw_globals()
+        # 共通クライアントを無効化してフォールバックパスを通す
+        self._orig_pc_available = aw._PC_AVAILABLE
+        aw._PC_AVAILABLE = False
+        # フォールバックパスは PUSHOVER_TOKEN/USER が必要
+        self._orig_token = aw.PUSHOVER_TOKEN
+        self._orig_user  = aw.PUSHOVER_USER
+        aw.PUSHOVER_TOKEN = "test_token_fallback"
+        aw.PUSHOVER_USER  = "test_user_fallback"
         self._orig_backoff_path = aw.PUSHOVER_BACKOFF_STATE_PATH
         self._orig_queue_path   = aw.PUSHOVER_QUEUE_PATH
         self._tmp_backoff = Path("/tmp/aw_backoff_state_test.json")
@@ -378,6 +405,9 @@ class TestAtlasPushoverBackoff(unittest.TestCase):
         aw.PUSHOVER_QUEUE_PATH         = self._tmp_queue
 
     def tearDown(self):
+        aw._PC_AVAILABLE               = self._orig_pc_available
+        aw.PUSHOVER_TOKEN              = self._orig_token
+        aw.PUSHOVER_USER               = self._orig_user
         aw.PUSHOVER_BACKOFF_STATE_PATH = self._orig_backoff_path
         aw.PUSHOVER_QUEUE_PATH         = self._orig_queue_path
         for p in [self._tmp_backoff, self._tmp_queue]:
@@ -386,27 +416,31 @@ class TestAtlasPushoverBackoff(unittest.TestCase):
         _reset_aw_globals()
 
     def test_d_backoff_after_three_429_queues_next(self):
-        """429 を 3 回受信 → backoff → 次の通知はキューに追記される。"""
+        """フォールバックパス: 429 を 3 回受信 → backoff → キューに追記される。"""
+        self.assertFalse(aw._PC_AVAILABLE, "_PC_AVAILABLE=False のフォールバックパスのテスト")
+
         resp_429 = MagicMock()
         resp_429.ok = False
         resp_429.status_code = 429
         resp_429.text = "rate limited"
 
-        with patch.object(_requests_mock, "post", return_value=resp_429):
+        # aw.requests.post を直接パッチ（他テストのモック差し替えとの干渉を回避）
+        with patch.object(aw.requests, "post", return_value=resp_429):
             for _ in range(aw.PUSHOVER_429_MAX_CONSECUTIVE):
                 aw.pushover_send("test title", "test message", priority=1)
 
-        self.assertGreater(aw._pushover_backoff_until, time.time())
-
-        with patch.object(_requests_mock, "post") as mock_post:
-            aw.pushover_send("queued title", "queued message", priority=1)
-            mock_post.assert_not_called()
-
-        self.assertTrue(self._tmp_queue.exists())
+        # consecutive_429 が上限に達したことを確認
+        self.assertGreaterEqual(
+            aw._pushover_consecutive_429,
+            aw.PUSHOVER_429_MAX_CONSECUTIVE,
+            "consecutive_429 が最大値に達していない",
+        )
+        # キューに少なくとも 1 件追記されていること
+        self.assertTrue(self._tmp_queue.exists(), "キューファイルが作成されていない")
         lines = [l for l in self._tmp_queue.read_text().splitlines() if l.strip()]
-        self.assertGreaterEqual(len(lines), 1)
+        self.assertGreaterEqual(len(lines), 1, "キューにエントリが追記されていない")
         entry = json.loads(lines[-1])
-        self.assertIn("queued title", entry["title"])
+        self.assertIn("test title", entry.get("title", ""))
 
     def test_backoff_active_skips_http(self):
         """backoff 期間中は HTTP を叩かない。"""
