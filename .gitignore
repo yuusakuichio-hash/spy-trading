@@ -3,6 +3,9 @@
 *.env
 .env.*
 
+# Claude skills (含む認証情報・VPSトークン) — NEVER commit (C6修正)
+.claude/skills/
+
 # Gmail OAuth2 credentials — NEVER commit
 credentials.json
 gmail_token.json

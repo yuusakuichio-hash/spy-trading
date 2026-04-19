@@ -332,9 +332,14 @@ autofix:
   # Pushover 応答待ちを挟む。タイムアウト後は自動実行しない（安全側）。
   two_man_rule:
     enabled: true
-    min_level: 3              # Level3 以上は承認必須
+    min_level: 2              # C7修正: Level2以上は承認必須（旧: Level3以上）
+    level2_approval_required: true  # Level2専用フラグ
     approval_timeout_sec: 300 # 5分応答なしで実行キャンセル（自動実行しない）
     pushover_priority: 1      # 承認要求は priority=1 (high)
+    # 緊急モード例外: market crash検知時のみ Level2 即実行を許可
+    emergency_bypass_conditions:
+      - "crisis_regime_detected"
+      - "kill_switch_activated"
 
   # GitHub Issue作成時のリポジトリ
   github_repo: yuusakuichio-hash/spy-trading

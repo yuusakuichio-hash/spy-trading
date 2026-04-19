@@ -1118,27 +1118,44 @@ except ImportError as _e:
 def _reason_to_exit_type(reason: str, allow_expiry: bool = False) -> str:
     """close reason文字列から FINRA PDT exit_type を判定する。
 
+    [B-1修正 2026-04-18] FINRA違反パターン排除:
+      - expired_worthless は「ブローカーが自動処理した満期消滅」のみ。
+        Bot が place_order(close) を発注した場合は sale 行為 → 必ず manual_close。
+      - time_stop / force_close_eod / force_close_time / cutoff は
+        Bot発注クローズであるため allow_expiry=True でも manual_close を返す。
+      - allow_expiry フラグを維持するのは将来の拡張用途のためだが、
+        Bot発注クローズは常に manual_close とする。
+
     Args:
-        reason:       close理由（例: "force_close_eod", "profit_target", "expired_worthless"）
-        allow_expiry: True = このエンジンはallow_expiry_pass_through（満期放置OK）
-                      True + タイムストップ系reason → "expired_worthless"
-                      False → 常に "manual_close"
+        reason:       close理由（例: "force_close_eod", "profit_target",
+                      "broker_auto_expired", "expired_worthless"）
+        allow_expiry: 廃止予定のフラグ。現在は動作に影響しない（安全側に倒す）。
 
     Returns:
         "manual_close" | "expired_worthless" | "assigned" | "cash_settled"
+
+    expired_worthless を返す条件（厳格化）:
+        - reason == "expired_worthless": broker 自動処理済みマーカー
+        - reason == "broker_auto_expired": 同上の別名
+        この2つのみ。Bot発注クローズ由来のreasonは絶対に expired_worthless にしない。
     """
-    if reason in ("expired_worthless", "assigned", "cash_settled"):
-        return reason
-    if "cash_settle" in reason or "cash_settled" in reason:
+    # ── 現金決済（SPX等 exchange=cash_settlement）──────────────────────────────
+    if reason in ("cash_settled",) or "cash_settle" in reason:
         return "cash_settled"
-    if "assigned" in reason or "auto_exercise" in reason:
+
+    # ── ブローカー自動行使（broker notification 受信時のみ）─────────────────────
+    if reason in ("assigned",) or "assigned" in reason or "auto_exercise" in reason:
         return "assigned"
-    # 満期放置前提エンジン + EOD強制クローズ → 満期消滅として記録
-    if allow_expiry and any(kw in reason for kw in (
-        "expired_worthless", "expired", "time_stop", "force_close_eod",
-        "force_close_time", "eod", "cutoff",
-    )):
+
+    # ── ブローカー自動満期消滅（broker_auto処理のみ・Bot発注クローズは対象外）──
+    # "expired_worthless" / "broker_auto_expired" の2種のみ許可。
+    # time_stop / force_close_eod / force_close_time / cutoff 等は
+    # Bot が place_order(close) を発注している = sale行為 = FINRA day_trade対象。
+    # allow_expiry=True でも manual_close を返す（B-1修正の核心）。
+    if reason in ("expired_worthless", "broker_auto_expired"):
         return "expired_worthless"
+
+    # ── 上記以外は全て Bot発注によるクローズ = manual_close ──────────────────
     return "manual_close"
 
 
@@ -6369,14 +6386,63 @@ class IntradayMonitor:
                 if delta_abs < unwind:
                     log.info(
                         f"[DeltaHedge] UNWIND: |total_delta|={delta_abs:.4f} < {unwind:.2f}"
-                        f" → ヘッジ解除"
+                        f" → ヘッジ解除発注"
                     )
-                    self._delta_hedge_active = False
-                    self._delta_hedge_codes = []
-                    pushover(
-                        "DeltaHedge解除",
-                        f"total_delta={total_delta:+.4f} < ±{unwind:.2f} → ヘッジ解除",
-                    )
+                    # C1修正: フラグだけ落とすのではなく、記録されたhedge_codeを実売却する
+                    _unwind_codes = list(self._delta_hedge_codes)
+                    _unwind_ok = True
+                    for _uw_code in _unwind_codes:
+                        try:
+                            if self.eng and not getattr(self.bot, "dry_test", False):
+                                import futu as _futu_uw
+                                _uw_order_id, _uw_fill = self.eng._place_single_leg(
+                                    _uw_code, _futu_uw.TrdSide.SELL, 1,
+                                    "delta_hedge_unwind",
+                                    init_price=None,
+                                    use_limit=False,
+                                )
+                                if not _uw_order_id or _uw_fill == "failed":
+                                    log.error(
+                                        f"[DeltaHedge] UNWIND発注失敗: code={_uw_code}"
+                                        f" fill_method={_uw_fill}"
+                                    )
+                                    _unwind_ok = False
+                                    pushover(
+                                        "[Atlas] DeltaHedge UNWIND失敗",
+                                        f"手動決済が必要: {_uw_code}\n"
+                                        f"total_delta={total_delta:+.4f}",
+                                        priority=2,
+                                    )
+                                else:
+                                    log.info(
+                                        f"[DeltaHedge] UNWIND発注成功: {_uw_code}"
+                                        f" order_id={_uw_order_id}"
+                                    )
+                            elif getattr(self.bot, "dry_test", False):
+                                log.info(
+                                    f"[DeltaHedge] UNWIND dry-test: {_uw_code} → スキップ"
+                                )
+                        except Exception as _uw_ex:
+                            log.error(f"[DeltaHedge] UNWIND例外: {_uw_ex}")
+                            _unwind_ok = False
+                            pushover(
+                                "[Atlas] DeltaHedge UNWIND例外",
+                                f"手動決済が必要: {_uw_code}\n例外: {_uw_ex}",
+                                priority=2,
+                            )
+                    # 発注成功確認後にフラグ変更
+                    if _unwind_ok:
+                        self._delta_hedge_active = False
+                        self._delta_hedge_codes = []
+                        pushover(
+                            "[Atlas] DeltaHedge解除",
+                            f"total_delta={total_delta:+.4f} < ±{unwind:.2f} → ヘッジ解除完了",
+                        )
+                    else:
+                        # 部分失敗: 失敗したコードを除いたものだけリストを保持
+                        log.warning(
+                            "[DeltaHedge] UNWIND部分失敗 → フラグ維持・手動対応待ち"
+                        )
                 else:
                     log.debug(
                         f"[DeltaHedge] ヘッジ継続中: total_delta={total_delta:+.4f}"
@@ -6532,11 +6598,19 @@ class IntradayMonitor:
                     # ATMオプションの保守的な価格推定: underlying_price * 1% (0DTE ATMの目安下限)
                     # これはpre_trade_gateのmargin超過検知に使うための推定値（成行発注は維持）
                     _hedge_est_price = underlying_price * 0.01
+                    # C3修正: delta_hedge にもsignal_id付与
+                    _dh_signal_id = (
+                        f"delta_hedge_{hedge_direction}_"
+                        f"{_hedge_ticker}_"
+                        f"{datetime.datetime.now(ET).strftime('%Y%m%d%H%M%S')}_"
+                        f"{str(uuid.uuid4())[:8]}"
+                    )
                     order_id, fill_method = self.eng._place_single_leg(
                         hedge_code, _futu_dh.TrdSide.BUY, hedge_qty,
                         f"delta_hedge_{hedge_direction}",
                         init_price=_hedge_est_price,  # margin check有効化（use_limit=Falseで成行維持）
                         use_limit=False,
+                        signal_id=_dh_signal_id,
                     )
                     if order_id and fill_method != "failed":
                         self._delta_hedge_active = True
@@ -7766,18 +7840,20 @@ class ORBEngine:
         return self._get_underlying_price()
 
     # ── Phase 4: エントリー実行 ────────────────────────────────────────────
-    def execute_entry(self, direction: str) -> Optional[ORBPosition]:
+    def execute_entry(self, direction: str, signal_id: Optional[str] = None) -> Optional[ORBPosition]:
         """ブレイクアウト確認後にATM 0DTE オプションを買い注文する。
 
         [P0 BUG修正 2026/04/17] Symbol mismatch対策:
         _execute_entry_impl を呼び出し、underlying_code を必ず SPY に統一してから
         チェーン取得・発注を行う。終了時に元のunderlying_codeを復元する。
+
+        signal_id: C3修正 - 冪等性キー付与。Noneの場合はentry内で自動生成。
         """
         # 元のunderlying_codeを退避
         _orb_orig_underlying = (self.mkt.underlying_code if self.mkt
                                  else UNDERLYING_CODE)
         try:
-            return self._execute_entry_impl(direction)
+            return self._execute_entry_impl(direction, signal_id=signal_id)
         finally:
             # underlying_codeを必ず復元
             if self.mkt and self.mkt.underlying_code != _orb_orig_underlying:
@@ -7787,7 +7863,7 @@ class ORBEngine:
                 )
                 self.mkt.underlying_code = _orb_orig_underlying
 
-    def _execute_entry_impl(self, direction: str) -> Optional[ORBPosition]:
+    def _execute_entry_impl(self, direction: str, signal_id: Optional[str] = None) -> Optional[ORBPosition]:
         """execute_entry の実装本体。underlying_code復元は呼び出し側で管理。"""
         # H-T1: 15:30 ET エントリーカットオフ（全エンジン共通）
         if _is_past_entry_cutoff(dry_test=self.dry_test):
@@ -7986,6 +8062,17 @@ class ORBEngine:
                  f"delta={opt.get('delta', 0):.3f} price=${option_price:.2f} qty={qty}")
 
         # 発注
+        # C3修正: signal_id未指定時は自動生成してidempotency keyを付与
+        if not signal_id:
+            _orb_ticker_for_id = (self.mkt.underlying_code.replace("US.", "")
+                                   if self.mkt else "SPY")
+            signal_id = (
+                f"orb_{_orb_ticker_for_id}_"
+                f"{datetime.datetime.now(ET).strftime('%Y%m%d%H%M%S')}_"
+                f"{str(uuid.uuid4())[:8]}"
+            )
+            log.debug(f"[ORB] auto signal_id={signal_id}")
+
         order_id = None
         if FUTU_AVAILABLE and self.eng and self.eng.trade_ctx:
             high_vix   = vix > 30
@@ -7995,6 +8082,7 @@ class ORBEngine:
                 label=f"ORB_{direction}",
                 init_price=mid_price if use_limit else None,
                 use_limit=use_limit,
+                signal_id=signal_id,
             )
             if order_id is None:
                 log.error("[ORB] 発注失敗")
@@ -8011,7 +8099,7 @@ class ORBEngine:
                          "code": option_code, "strike": option_strike,
                          "qty": qty, "entry_price": option_price,
                          "orb_high": self.orb_high, "orb_low": self.orb_low,
-                         "vix": vix})
+                         "vix": vix, "signal_id": signal_id})
 
         if _PORTFOLIO_RISK_AVAILABLE:
             try:
@@ -8069,12 +8157,18 @@ class ORBEngine:
 
         pos = self.position
         now_et_time = datetime.datetime.now(ET).time()
-        time_stop   = datetime.time(ORB_EXIT_TIME_H, ORB_EXIT_TIME_M)
+        # C4修正: 早期クローズ日は time_stop を 12:30 ET に前倒し
+        if is_early_close_today():
+            time_stop = datetime.time(EARLY_CLOSE_EXIT_H, EARLY_CLOSE_EXIT_M)
+            _ts_label = f"{EARLY_CLOSE_EXIT_H}:{EARLY_CLOSE_EXIT_M:02d}(半日)"
+        else:
+            time_stop = datetime.time(ORB_EXIT_TIME_H, ORB_EXIT_TIME_M)
+            _ts_label = f"{ORB_EXIT_TIME_H}:{ORB_EXIT_TIME_M:02d}"
 
         # タイムストップ
         if not self.dry_test and now_et_time >= time_stop:
             exit_price = self._get_option_price(pos) or pos.entry_price * 0.3
-            log.info("[ORB] 15:30 タイムストップ")
+            log.info(f"[ORB] {_ts_label} ETタイムストップ")
             return self._close_position(pos, exit_price, "time_stop")
 
         current_price = self._get_option_price(pos)
@@ -8473,9 +8567,10 @@ class CalendarEngine:
         return opt
 
     # ── エントリー実行 ────────────────────────────────────────────────────────
-    def execute_entry(self, spy_price: float, vix: float) -> Optional[CalendarPosition]:
+    def execute_entry(self, spy_price: float, vix: float, signal_id: Optional[str] = None) -> Optional[CalendarPosition]:
         """カレンダースプレッドを発注する。
 
+        signal_id: C3修正 - 冪等性キー付与。Noneの場合はentry内で自動生成。
         (1) 0DTE(front)のATMオプションを売り
         (2) 7DTE(back)のATMオプションを買い
         (3) CalendarPositionを返す
@@ -8582,11 +8677,22 @@ class CalendarEngine:
             f"debit={net_debit:.2f} qty={qty}"
         )
 
+        # C3修正: signal_id未指定時は自動生成してidempotency keyを付与
+        if not signal_id:
+            _cal_sym = (self.symbol or "").replace("US.", "").replace(".", "") or "SPY"
+            signal_id = (
+                f"calendar_{_cal_sym}_"
+                f"{datetime.datetime.now(ET).strftime('%Y%m%d%H%M%S')}_"
+                f"{str(uuid.uuid4())[:8]}"
+            )
+            log.debug(f"[Calendar] auto signal_id={signal_id}")
+
         # 発注: front売り → back買い
         import futu as ft
         front_order_id, _ = self.eng._place_single_leg(
             front_code, ft.TrdSide.SELL, qty, "calendar_front",
             init_price=front_mid, use_limit=ENABLE_LIMIT_ENTRY,
+            signal_id=signal_id + "_front",
         )
         if front_order_id is None:
             log.warning("[Calendar] frontレッグ発注失敗")
@@ -8596,6 +8702,7 @@ class CalendarEngine:
         back_order_id, _ = self.eng._place_single_leg(
             back_code, ft.TrdSide.BUY, qty, "calendar_back",
             init_price=back_mid, use_limit=ENABLE_LIMIT_ENTRY,
+            signal_id=signal_id + "_back",
         )
         if back_order_id is None:
             # backが失敗 → frontを巻き戻す
@@ -11611,8 +11718,50 @@ class IronCondorSellEngine:
             vix=vix,
         )
         if not call_ok:
-            log.error("[IC_SELL] CALL CS 発注失敗 -- PUT脚は発注済み -> 片脚状態で監視継続")
-            pushover("[Atlas][IC_SELL] 警告", "CALL CS発注失敗 -> 片側CSで監視継続", priority=1)
+            log.error("[IC_SELL] CALL CS 発注失敗 -- PUT脚巻き戻しを試みる")
+            # C2修正: PUT脚（発注済み）を即巻き戻す。片脚放置はリスク
+            _put_unwind_ok = False
+            try:
+                if self.eng and not self.dry_test:
+                    import futu as _ft_mod_ic
+                    # PUT CS は SELL/BUY のペア → 逆方向で巻き戻す
+                    _rev1_id, _rev1_f = self.eng._place_single_leg(
+                        put_sell_opt["code"], _ft_mod_ic.TrdSide.BUY, qty,
+                        "ic_put_sell_reverse", init_price=None, use_limit=False,
+                    )
+                    _rev2_id, _rev2_f = self.eng._place_single_leg(
+                        put_buy_opt["code"], _ft_mod_ic.TrdSide.SELL, qty,
+                        "ic_put_buy_reverse", init_price=None, use_limit=False,
+                    )
+                    _put_unwind_ok = (
+                        _rev1_id and _rev1_f != "failed" and
+                        _rev2_id and _rev2_f != "failed"
+                    )
+                else:
+                    _put_unwind_ok = True  # dry_test は成功扱い
+            except Exception as _ic_roll_ex:
+                log.error(f"[IC_SELL] PUT脚巻き戻し例外: {_ic_roll_ex}")
+                _put_unwind_ok = False
+
+            if _put_unwind_ok:
+                log.info("[IC_SELL] PUT脚巻き戻し成功 → IC全体キャンセル")
+                pushover(
+                    "[Atlas][IC_SELL] CALL失敗→PUT巻戻完了",
+                    f"CALL CS発注失敗 → PUT CS巻き戻し成功\n"
+                    f"PUT {put_sell_strike:.0f}/{put_buy_opt['strike_price']:.0f} 解消済み",
+                    priority=1,
+                )
+            else:
+                log.error("[IC_SELL] PUT脚巻き戻し失敗 → 手動決済が必要")
+                pushover(
+                    "[Atlas][IC_SELL] 手動決済要",
+                    f"CALL CS失敗+PUT巻き戻し失敗\n"
+                    f"手動決済が必要:\n"
+                    f"PUT SELL {put_sell_opt['code']}\n"
+                    f"PUT BUY  {put_buy_opt['code']}\n"
+                    f"各{qty}枚を手動で決済してください",
+                    priority=2,
+                )
             return None
 
         pos = IronCondorSellPosition(
@@ -11682,7 +11831,8 @@ class IronCondorSellEngine:
         pos    = self.position
         now_et = datetime.datetime.now(ET)
 
-        if (now_et.hour, now_et.minute) >= (IC_SELL_FORCE_CLOSE_H, IC_SELL_FORCE_CLOSE_M):
+        if (not self.dry_test and
+                (now_et.hour, now_et.minute) >= (IC_SELL_FORCE_CLOSE_H, IC_SELL_FORCE_CLOSE_M)):
             log.info("[IC_SELL] タイムストップ: 15:45 ET -> 強制決済")
             return self._close_position(pos, reason="force_close_eod")
 
@@ -12400,6 +12550,13 @@ class ButterflyEngine:
             return False
 
         trade_id = str(uuid.uuid4())[:8]
+        # C3修正: Butterfly にもsignal_id付与してidempotency保証
+        _bf_sym_short = symbol.replace("US.", "").replace(".", "") or "SPY"
+        _bf_signal_id = (
+            f"butterfly_{_bf_sym_short}_"
+            f"{datetime.datetime.now(ET).strftime('%Y%m%d%H%M%S')}_"
+            f"{str(uuid.uuid4())[:8]}"
+        )
         log.info(
             f"[Butterfly] 発注: {symbol} {wing_type} "
             f"lower={lower_st:.1f}x{qty} ATM={atm_strike:.1f}x{qty*2}(short) "
@@ -12415,13 +12572,14 @@ class ButterflyEngine:
             trd_sell = None
 
         order_ok = True
-        for code, side, qty_n, label in [
+        for _bf_leg_idx, (code, side, qty_n, label) in enumerate([
             (lower_code, trd_buy,  qty,     "lower_buy"),
             (upper_code, trd_buy,  qty,     "upper_buy"),
             (atm_code,   trd_sell, qty * 2, "atm_sell_x2"),
-        ]:
+        ]):
             oid, fill_method = self.eng._place_single_leg(
-                code, side, qty_n, label, init_price=None, use_limit=False
+                code, side, qty_n, label, init_price=None, use_limit=False,
+                signal_id=f"{_bf_signal_id}_leg{_bf_leg_idx}",
             )
             if oid is None:
                 log.error(f"[Butterfly] {label} 発注失敗: code={code}")
@@ -14799,15 +14957,32 @@ class SPYCreditSpreadBot:
                         f"残存 {remaining}件"
                     )
                 else:
-                    # 3回目: 0DTE失効の可能性が高い。通知は状況報告のみ
+                    # 3回目: C5修正 - priority=2で手動決済要請 + 緊急ログ記録
                     log.warning(
-                        f"force close 3回未約定 残存 {remaining}件 → 0DTE失効の可能性（自動クリーンアップ対象）"
+                        f"force close 3回未約定 残存 {remaining}件 → 手動決済要請"
                     )
+                    # 緊急ログ記録
+                    _emergency_log_path = _BASE_DIR / "logs" / "emergency_manual_close_required.log"
+                    try:
+                        _emergency_log_path.parent.mkdir(parents=True, exist_ok=True)
+                        with open(_emergency_log_path, "a", encoding="utf-8") as _emf:
+                            _emf.write(
+                                f"[{datetime.datetime.now(ET).isoformat()}] "
+                                f"force_close 3回失敗 残存{remaining}件\n"
+                                f"positions: {[p.get('code','?') for p in positions]}\n"
+                                f"trade_id={_snap_trade_id} signal_id={_snap_signal_id}\n"
+                                "---\n"
+                            )
+                    except Exception as _emlog_ex:
+                        log.error(f"[ForceClose] 緊急ログ書き込み失敗: {_emlog_ex}")
+
                     pushover(
-                        "SPY CS",
-                        f"{_fc_label} 決済3回未約定 {remaining}件\n"
-                        f"0DTE失効の可能性が高い（次回ループで自動処理）",
-                        priority=0,
+                        "[Atlas] 手動決済要請",
+                        f"{_fc_label} 決済3回未約定 残存{remaining}件\n"
+                        f"【手動決済が必要です】\n"
+                        f"trade_id={_snap_trade_id}\n"
+                        f"moomooアプリで全ポジションを確認・決済してください",
+                        priority=2,
                     )
                     self._force_close_done = True
                     append_pnl_entry({

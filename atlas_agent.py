@@ -602,21 +602,50 @@ def dispatch(fired: dict, cfg: dict) -> dict:
             pushover(f"{header} AUTOFIX SKIP", "\n".join(body), priority=1)
             result["action"] = "skipped_precheck"
         else:
-            if atype == "restart_bot":
-                ar = action_restart_bot(cfg, rule, dry_run)
-            elif atype == "notify_only":
-                ar = {"type": "notify_only", "status": "OK"}
+            # C7修正: Level2 Two-Man Rule - ARMED + level2_approval_required の場合、
+            # Pushover承認待ちを挟む（緊急モードは除外）
+            tmr_cfg = cfg.get("autofix", {}).get("two_man_rule", {})
+            tmr_enabled = tmr_cfg.get("enabled", True) and not dry_run
+            l2_approval_required = tmr_cfg.get("level2_approval_required", False)
+            _emergency_bypass = any(
+                cond in matched for cond in tmr_cfg.get("emergency_bypass_conditions", [])
+            )
+            _tmr_min = tmr_cfg.get("min_level", 3)
+
+            if (tmr_enabled and l2_approval_required and
+                    _tmr_min <= 2 and not _emergency_bypass and
+                    atype not in ("notify_only",)):
+                # Level2 承認要求
+                _l2_approval_body = (
+                    f"[Two-Man Rule] Level2 AUTOFIX 承認要求\n"
+                    f"rule: {rid}\n"
+                    f"desc: {desc}\n"
+                    f"action: {atype}\n"
+                    f"\n実行するには GitHub Issue にコメント 'APPROVE {rid}' または\n"
+                    f"ntfy.sh/spxbot-hub-yuusaku2026 に 'APPROVE {rid}' を送信してください。\n"
+                    f"5分応答なしで実行キャンセル（安全側）。"
+                )
+                pushover(f"[Atlas] Level2 確認要 {rid}", _l2_approval_body,
+                         priority=1)
+                log(f"[Two-Man Rule] Level2 アクションをブロック: {rid} — 承認待ち (5分タイムアウト)")
+                result["action"] = {"type": "two_man_rule_blocked_l2",
+                                    "rule_id": rid, "status": "PENDING_APPROVAL"}
             else:
-                ar = {"type": atype, "status": "UNKNOWN_ACTION"}
-            body.append(f"action: {ar}")
-            tag = "AUTOFIX_DRY" if dry_run else "AUTOFIX"
-            pri = 1 if ar.get("status") in ("ERR",) else 0
-            pushover(f"[Atlas/{tag}] {rid}", "\n".join(body), priority=pri)
-            result["action"] = ar
-            # builder 自動起動: Level2 は必ず atlas_builder.yml を dispatch
-            bw = trigger_builder_workflow(cfg, rid, hypo, matched)
-            result["builder_workflow"] = bw
-            log(f"[dispatch] builder_workflow: {bw}")
+                if atype == "restart_bot":
+                    ar = action_restart_bot(cfg, rule, dry_run)
+                elif atype == "notify_only":
+                    ar = {"type": "notify_only", "status": "OK"}
+                else:
+                    ar = {"type": atype, "status": "UNKNOWN_ACTION"}
+                body.append(f"action: {ar}")
+                tag = "AUTOFIX_DRY" if dry_run else "AUTOFIX"
+                pri = 1 if ar.get("status") in ("ERR",) else 0
+                pushover(f"[Atlas/{tag}] {rid}", "\n".join(body), priority=pri)
+                result["action"] = ar
+                # builder 自動起動: Level2 は必ず atlas_builder.yml を dispatch
+                bw = trigger_builder_workflow(cfg, rid, hypo, matched)
+                result["builder_workflow"] = bw
+                log(f"[dispatch] builder_workflow: {bw}")
 
     elif level == 3:
         # Two-Man Rule: Level3 は Pushover 承認待ちに変更。タイムアウトでキャンセル。
