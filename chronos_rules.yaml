@@ -381,9 +381,10 @@ rate_limit_handler:
 # ── スケジュール ─────────────────────────────────────────────────────────────
 schedule:
   # LaunchAgent 起動時刻（JST）
-  # Atlas の LaunchAgent に合わせる（22:25 JST = ET オープン5分前）
-  launchagent_start_jst: "22:25"
-  launchagent_stop_jst: "05:05"
+  # Chronos (CME E-mini 先物) は月曜 07:00 JST 開場・土曜 06:00 JST 閉場
+  # 毎日 06:00-07:00 JST はデイリーメンテナンス休止
+  launchagent_start_jst: "07:00"   # 月曜 CME 開場
+  launchagent_stop_jst: "06:00"    # 土曜 CME 閉場
 
   # Bot自動停止時刻（ET）
   # RTH クローズ後 X 分で自動停止
@@ -411,10 +412,10 @@ agent:
   # 監視ループ間隔（秒）
   cycle_interval_sec: 30
 
-  # 市場時間窓（JST）
+  # 市場時間窓 — CME E-mini 先物 (MES/MNQ) は24H市場のため cme_futures モードを使用する。
+  # 旧: start/end 固定値は SPX オプション時間帯のコピペ誤り（2026-04-20 修正）
   market_window:
-    start: "22:25"
-    end: "05:05"
+    mode: "cme_futures"
 
 # ── Cumulative Delta 設定 (F12: 0→5点実装) ─────────────────────────────────────
 # 実装: chronos_cumulative_delta.py — CumulativeDelta クラス
