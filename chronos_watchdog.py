@@ -69,7 +69,12 @@ PUSHOVER_TOKEN = os.environ.get("PUSHOVER_OPS_TOKEN", os.environ.get("PUSHOVER_T
 RECOVERY_STATE_PATH = BASE_DIR / "data" / "chronos_watchdog_recovery_state.json"
 RECOVERY_COOLDOWN_SEC = 600          # 試行間隔 10分
 RECOVERY_MAX_ATTEMPTS = 3            # 3回失敗で人間介入要求
-LAUNCHCTL_SERVICE_ID = "com.chronos.agent"
+# 実在サービス名: launchctl list | grep soralab で確認済み (2026-04-20)
+# 旧値 "com.chronos.agent" は実在しない → 自己回復が100%失敗していた
+LAUNCHCTL_SERVICE_ID = "com.soralab.chronos_agent"
+LAUNCHCTL_PLIST_PATH = (
+    Path.home() / "Library" / "LaunchAgents" / "com.soralab.chronos_agent.plist"
+)
 
 # ── Pushover backoff 設定 ─────────────────────────────────────────────────────
 PUSHOVER_BACKOFF_STATE_PATH = BASE_DIR / "data" / "pushover_backoff_state.json"
@@ -231,10 +236,17 @@ def pushover_send(title: str, message: str, priority: int = 1) -> None:
             data=data,
             timeout=10,
         )
-        if resp.status_code == 429:
+        # banned 検知: 200 OK でも body に "banned" が含まれる場合がある
+        # 参考: chronos_agent.log に {"status":0,"ip":"banned"} の記録あり
+        _body_text = resp.text[:500] if hasattr(resp, "text") else ""
+        _is_banned = "banned" in _body_text.lower()
+
+        if resp.status_code == 429 or _is_banned:
+            if _is_banned and resp.status_code != 429:
+                log.warning("[BACKOFF] 200 OK but body contains 'banned': %s", _body_text[:200])
             _pushover_consecutive_429 += 1
             log.warning(
-                "[BACKOFF] 429 received (%d/%d)",
+                "[BACKOFF] 429/banned received (%d/%d)",
                 _pushover_consecutive_429, PUSHOVER_429_MAX_CONSECUTIVE,
             )
             if _pushover_consecutive_429 >= PUSHOVER_429_MAX_CONSECUTIVE:
@@ -337,9 +349,7 @@ def _attempt_self_recovery(issue_label: str) -> None:
         log.warning(
             "[RECOVERY] attempt=%d: launchctl bootstrap 再登録 %s", attempt, LAUNCHCTL_SERVICE_ID
         )
-        plist_path = (
-            Path.home() / "Library" / "LaunchAgents" / f"{LAUNCHCTL_SERVICE_ID}.plist"
-        )
+        plist_path = LAUNCHCTL_PLIST_PATH
         try:
             # bootstrap 前に bootout（存在しない場合は無視）
             subprocess.run(
@@ -359,6 +369,7 @@ def _attempt_self_recovery(issue_label: str) -> None:
                 (
                     f"更新停止({issue_label})継続\n"
                     f"launchctl bootstrap 再登録実行\n"
+                    f"plist={plist_path}\n"
                     f"returncode={result.returncode}"
                 ),
                 priority=1,
