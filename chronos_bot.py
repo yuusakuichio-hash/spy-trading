@@ -63,8 +63,15 @@ def _load_env_file():
 _load_env_file()
 
 # ── パス定数 ───────────────────────────────────────────────────────────────────
-_BASE_DIR = Path(os.environ.get("MFFU_DATA_DIR", Path(__file__).parent / "data"))
-LOG_DIR   = Path(os.environ.get("MFFU_LOG_DIR", _BASE_DIR / "logs"))
+# H1: _BASE_DIR を lazy 解決（モジュール import 時に環境変数を固定しないため）
+# テスト実行順序依存 flakiness 対策: patch.dict が import 時点より先に有効になるパターンに対応。
+def _get_base_dir() -> Path:
+    """MFFU_DATA_DIR 環境変数を呼び出し時点で読む（lazy解決）。"""
+    return Path(os.environ.get("MFFU_DATA_DIR", Path(__file__).parent / "data"))
+
+# 後方互換: モジュール直参照箇所のために _BASE_DIR を残す（既存 import 時点の値）
+_BASE_DIR = _get_base_dir()
+LOG_DIR   = Path(os.environ.get("MFFU_LOG_DIR", _get_base_dir() / "logs"))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(
@@ -383,7 +390,11 @@ def _to_timestamp(value) -> int:
     if value is None:
         return 0
     if isinstance(value, (int, float)):
-        return int(value)
+        v = int(value)
+        # B2: ミリ秒epoch判定（1e11 = 2001/11月頃の秒epoch。これを超える値はms扱い）
+        if v > 10**11:
+            return v // 1000
+        return v
     if not isinstance(value, str):
         try:
             return int(value)
@@ -2325,6 +2336,8 @@ class ChronosBot:
             f"mffu_{self.product.lower()}_{'paper' if self.paper else 'live'}",
         )
 
+        # H1: _BASE_DIR はモジュールレベル変数。patch.object(bot_module, "_BASE_DIR") で
+        # テストから上書き可能。lazy解決が必要な場合は _get_base_dir() を使う。
         state_dir = _BASE_DIR / "accounts" / account_id
         state_dir.mkdir(parents=True, exist_ok=True)
         state_path = state_dir / "state.json"
@@ -2378,7 +2391,37 @@ class ChronosBot:
             "total_profit_usd":           float(self._total_profit),
             "winning_days_count":         int(self._winning_days),
             "daily_trade_count":          int(self._daily_trade_count),
+            # M1: F12/F13 silent failure 検知用フィールド（chronos_agent Level4 参照）
+            "f12_cumulative_delta_bias":  None,
+            "f13_liquidity_sweep_signal": None,
+            "_prev_day_high":             self._prev_day_high,
+            "_prev_day_low":              self._prev_day_low,
+            "_prev_day_vwap":             self._prev_day_vwap,
         }
+
+        # M1: F12 cumulative_delta_bias 書出（get_strategy_bias が利用可能な場合）
+        if self.cumulative_delta is not None:
+            try:
+                _price_hist = list(self._price_history) if hasattr(self, "_price_history") else []
+                _bias_result = self.cumulative_delta.get_strategy_bias(_price_hist)
+                state["f12_cumulative_delta_bias"] = _bias_result.get("bias") if _bias_result else None
+            except Exception as _e:
+                log.debug(f"[SaveState] f12 bias error: {_e}")
+
+        # M1: F13 liquidity_sweep_signal 書出
+        if self.liquidity_sweep is not None:
+            try:
+                _signal = self.liquidity_sweep.get_entry_signal()
+                if _signal is not None:
+                    state["f13_liquidity_sweep_signal"] = {
+                        "direction": getattr(_signal, "direction", None),
+                        "confidence": getattr(_signal, "confidence", None),
+                        "level_price": getattr(_signal, "level_price", None),
+                    }
+                else:
+                    state["f13_liquidity_sweep_signal"] = None
+            except Exception as _e:
+                log.debug(f"[SaveState] f13 signal error: {_e}")
 
         try:
             # atomic write: tempfile → rename
@@ -2461,9 +2504,19 @@ class ChronosBot:
                 self._today_vwap_sum += _bar_close * _bar_volume
                 self._today_vwap_vol += _bar_volume
 
-            # B-5: price_history 配線（strategy_selector に渡す直近クローズ20本）
-            if _bar_close > 0:
+            # B1: price_history 重複汚染防止（CumulativeDelta の _processed_ts パターン準拠）
+            # 60秒ループで get_bars(count=5) を毎回呼ぶため同じバーが重複appended される。
+            # timestamp ベースで dedupe して deque の時系列情報を保護する。
+            _bar_ts = _to_timestamp(bar.get("timestamp", 0))
+            if not hasattr(self, "_price_history_processed_ts"):
+                from collections import deque as _deque_ph
+                self._price_history_processed_ts = _deque_ph(maxlen=50)
+            if _bar_ts > 0 and _bar_ts in self._price_history_processed_ts:
+                pass  # 同じバー重複スキップ
+            elif _bar_close > 0:
                 self._price_history.append(_bar_close)
+                if _bar_ts > 0:
+                    self._price_history_processed_ts.append(_bar_ts)
 
             # N-C1: LiquiditySweepDetector にバーデータを配線（F13本番配線）
             # 各 1分足バーで check_sweep を呼び、sweep 検知時は env_dict に signal を渡す。
@@ -3311,6 +3364,11 @@ class ChronosBot:
         self._daily_halt       = False
         self._today_realized_pnl = 0.0
         self._daily_soft_stop_active = False   # F3: 日次ソフトストップ解除
+
+        # B1: price_history 重複防止用 deque を日次リセット
+        if hasattr(self, "_price_history_processed_ts"):
+            self._price_history_processed_ts.clear()
+            log.debug("[MFFUBot] _price_history_processed_ts cleared on daily_reset")
 
         # C3修正: CumulativeDelta 日次リセット（RTH 9:30 ET 開始時に累積をクリア）
         if self.cumulative_delta is not None:

@@ -772,6 +772,65 @@ def check_level4_sim_funded_payout_mode(cfg: dict[str, Any]) -> list[dict[str, A
     return alerts
 
 
+def check_level4_f12_f13_silent_failure(cfg: dict[str, Any]) -> list[dict[str, Any]]:
+    """Level4: F12/F13 silent failure 検知（M1対応）。
+
+    state.json の f12_cumulative_delta_bias / f13_liquidity_sweep_signal フィールドを確認し、
+    save_reason が "periodic" または "daily_reset" で一定期間 None のままなら
+    F12/F13 が silent fail している可能性を報告する。
+    """
+    alerts = []
+    states = load_all_account_states()
+    for state in states:
+        account_id = state.get("account_id", state.get("_account_dir", "unknown"))
+        save_reason = state.get("save_reason", "unknown")
+
+        # "periodic" または "daily_reset" 以外は判定対象外（after_order等は短周期）
+        if save_reason not in ("periodic", "daily_reset"):
+            continue
+
+        # F12: cumulative_delta_bias が存在しない または None
+        f12_bias = state.get("f12_cumulative_delta_bias", "NOT_PRESENT")
+        if f12_bias == "NOT_PRESENT":
+            # 古い state.json（cycle5以前）はフィールドなし → スキップ
+            continue
+        if f12_bias is None:
+            key = f"f12_silent_failure_{account_id}"
+            if _should_notify(key):
+                log.warning("[L4/F12] cumulative_delta_bias = None: %s", account_id)
+                alerts.append({
+                    "level": 2,  # CRITICAL にしすぎず WARNING レベルで報告
+                    "key": key,
+                    "title": f"F12 Silent Failure疑い {account_id}",
+                    "message": (
+                        f"state.json の f12_cumulative_delta_bias が None です。\n"
+                        f"CumulativeDeltaが正常に動作していない可能性があります。\n"
+                        f"アカウント: {account_id}"
+                    ),
+                    "action": "notify_only",
+                })
+
+        # F13: liquidity_sweep_signal の存在確認（None は正常範囲なので除外、フィールド非存在のみ警告）
+        f13_signal = state.get("f13_liquidity_sweep_signal", "NOT_PRESENT")
+        if f13_signal == "NOT_PRESENT":
+            key = f"f13_missing_field_{account_id}"
+            if _should_notify(key):
+                log.warning("[L4/F13] f13_liquidity_sweep_signal フィールド欠如: %s", account_id)
+                alerts.append({
+                    "level": 2,
+                    "key": key,
+                    "title": f"F13 フィールド欠如 {account_id}",
+                    "message": (
+                        f"state.json に f13_liquidity_sweep_signal が存在しません。\n"
+                        f"LiquiditySweepDetectorが正常に初期化されていない可能性があります。\n"
+                        f"アカウント: {account_id}"
+                    ),
+                    "action": "notify_only",
+                })
+
+    return alerts
+
+
 # ── アラート dispatch ─────────────────────────────────────────────────────────
 def dispatch_alert(alert: dict[str, Any], cfg: dict[str, Any], dry_run: bool) -> None:
     """アラートをレベルに応じて対応する。"""
@@ -866,6 +925,8 @@ def monitor_cycle(cfg: dict[str, Any], dry_run: bool = True) -> list[dict[str, A
         fired_alerts += check_level4_news_window(cfg)
         fired_alerts += check_level4_hft(cfg)
         fired_alerts += check_level4_sim_funded_payout_mode(cfg)
+        # M1: F12/F13 silent failure 検知
+        fired_alerts += check_level4_f12_f13_silent_failure(cfg)
 
     for alert in fired_alerts:
         dispatch_alert(alert, cfg, dry_run)

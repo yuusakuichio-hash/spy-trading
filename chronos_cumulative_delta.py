@@ -411,41 +411,72 @@ class CumulativeDelta:
         price_change = price_series[-1] - price_series[0]
         delta_change = delta_series[-1] - delta_series[0]
 
-        # 正規化 (絶対値で比較するため)
-        price_abs = abs(price_change)
-        delta_abs = abs(delta_change)
+        # M3: 変化ゼロ判定（両方ゼロのみ aligned。片方ゼロは divergence 候補として継続）
+        # 旧: price_change=0 OR delta_change=0 → "aligned"（過剰短絡）
+        # 新: 両方ゼロのみ → "aligned"。価格無変動+delta大変化はdivergence候補として扱う。
+        if abs(price_change) < 1e-8 and abs(delta_change) < 1e-8:
+            return "aligned"  # 両方ゼロ → 変化なし → 乖離なし
+        # 価格のみゼロ: delta変化は bullish/bearish divergence の根拠になりうる
+        # delta のみゼロ: 価格変化のみ → aligned（delta確認なし）
+        if abs(delta_change) < 1e-8:
+            return "aligned"  # delta変化なし → 方向性判定不可 → aligned
+        # 価格変化がゼロ（価格停滞）+delta大変化: divergence 候補として判定継続
+        # price_change=0 の場合 price_dir は正の方向をデフォルトとし、
+        # delta_dir との組み合わせで divergence を検出する
 
-        if price_abs < 1e-8 or delta_abs < 1e-8:
-            return "aligned"  # 変化なし → 乖離なし
+        # NEW-H1: z-score 正規化（価格・デルタを同じスケールに統一）
+        # price_series と delta_series それぞれの標準偏差で割る。
+        # 標準偏差がゼロ（定数系列）の場合は絶対変化量をそのまま使用（安全フォールバック）。
+        import statistics as _stats
 
-        # HIGH-2修正: threshold を実際に使用（正規化差分比較）
-        # 価格変化率・delta変化率を正規化して差分を計算
-        price_norm = price_change / price_series[0] if price_series[0] != 0 else price_change
-        delta_ref = delta_series[0] if abs(delta_series[0]) > 1e-8 else 1.0
-        delta_norm = delta_change / abs(delta_ref)
+        def _zscore_change(series: list, change: float) -> float:
+            """系列の標準偏差でスケーリング。SD=0 なら change / abs_mean フォールバック。"""
+            if len(series) < 2:
+                return change
+            try:
+                sd = _stats.pstdev(series)
+                if sd > 1e-10:
+                    return change / sd
+                # SD ≈ 0 → 絶対変化を |mean| でスケール（定数系列では0を返す）
+                mean_abs = abs(sum(series) / len(series))
+                return (change / mean_abs) if mean_abs > 1e-10 else 0.0
+            except Exception:
+                return change
 
-        # 方向性: +1 = 上昇, -1 = 下落
-        price_dir = 1 if price_change > 0 else -1
-        delta_dir = 1 if delta_change > 0 else -1
+        price_z = _zscore_change(price_series, price_change)
+        delta_z = _zscore_change(delta_series, delta_change)
 
-        if price_dir == delta_dir:
-            # 方向一致でも、乖離が threshold を超える場合は"aligned_weak"とする余地あり
-            # 現バージョンは方向一致=aligned で統一
+        # 方向性: +1 = 上昇, -1 = 下落, 0 = 停滞（価格変化ゼロ）
+        # M3: price_change=0（価格停滞）は direction=0 として divergence 判定に組み込む
+        price_dir = 1 if price_change > 0 else (-1 if price_change < 0 else 0)
+        delta_dir = 1 if delta_change > 0 else (-1 if delta_change < 0 else 0)
+
+        if price_dir == delta_dir and price_dir != 0:
+            # 方向一致（停滞ゼロ以外）→ aligned
             divergence = "aligned"
+        elif price_dir == 0:
+            # M3: 価格停滞（price_change=0）+ delta 変化 → divergence 候補
+            # delta が上昇なら bullish divergence（価格が動かないのに買い圧増大）
+            # delta が下落なら bearish divergence（価格が動かないのに売り圧増大）
+            diff = abs(delta_z)  # price_z ≈ 0 なので delta_z の絶対値で判定
+            if delta_dir > 0:
+                divergence = "bullish_divergence" if diff >= threshold else "aligned"
+            else:
+                divergence = "bearish_divergence" if diff >= threshold else "aligned"
         elif price_dir < 0 and delta_dir > 0:
             # 価格下落 + Delta 上昇 → 買い圧が隠れている
-            # threshold チェック: 価格・delta変化率の絶対差が threshold 以上の時のみ divergence
-            diff = abs(price_norm - delta_norm)
+            diff = abs(price_z - delta_z)
             divergence = "bullish_divergence" if diff >= threshold else "aligned"
         else:
             # 価格上昇 + Delta 下落 → 売り圧が隠れている
-            diff = abs(price_norm - delta_norm)
+            diff = abs(price_z - delta_z)
             divergence = "bearish_divergence" if diff >= threshold else "aligned"
 
         log.info(
-            f"[CumulativeDelta] divergence: "
-            f"price_change={price_change:.2f}({price_dir:+}) "
-            f"delta_change={delta_change:.0f}({delta_dir:+}) "
+            f"[CumulativeDelta] divergence(zscore): "
+            f"price_z={price_z:.3f}({price_dir:+}) "
+            f"delta_z={delta_z:.3f}({delta_dir:+}) "
+            f"diff={abs(price_z-delta_z):.3f} threshold={threshold} "
             f"→ {divergence}"
         )
         return divergence

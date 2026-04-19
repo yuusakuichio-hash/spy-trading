@@ -468,14 +468,25 @@ class TestCumulativeDeltaGetStrategyBias:
         """current > 0 かつ recent_5m > 0 → bullish。"""
         cd = CumulativeDelta(bucket_minutes=5, max_buckets=20)
         # bucket 2本追加 (flush経由)
+        # bar1: ts=1000000 → bucket start = 999900
+        # bar2: ts=1000500 → bucket start = 1000500//300*300 = 1000200（異なるバケット）
+        # → bar1のバケットがflushされ buckets に1本追加 + bar2が現在バケットに入る
         bar1 = BarData(open=5000.0, high=5010.0, low=4998.0, close=5008.0, volume=1000.0, timestamp=1000000)
-        bar2 = BarData(open=5008.0, high=5020.0, low=5005.0, close=5018.0, volume=1000.0, timestamp=1000301)  # 5分超
+        bar2 = BarData(open=5008.0, high=5020.0, low=5005.0, close=5018.0, volume=1000.0, timestamp=1000500)  # バケット境界超え（+500秒）
+        bar3 = BarData(open=5018.0, high=5030.0, low=5015.0, close=5025.0, volume=1000.0, timestamp=1001000)  # さらに1バケット超え
         cd.update_from_bar(bar1)
         cd.update_from_bar(bar2)
-        # bucket が1本 flush されているはず
-        if len(cd.get_buckets()) >= 2:
-            result = cd.get_strategy_bias([5000.0, 5010.0, 5015.0, 5018.0])
-            assert result["bias"] in ("bullish", "neutral")  # flush 後の値次第
+        cd.update_from_bar(bar3)
+        # bar1→bar2でflush1回, bar2→bar3でflush1回 → buckets に2本蓄積
+        # H4: 条件付きアサートskip を撤廃 → 事前確認assertに変更（gaming防止）
+        assert len(cd.get_buckets()) >= 2, (
+            f"H4: bucket数が不足 (actual={len(cd.get_buckets())}). "
+            f"update_from_bar が正しくバーを追加していない可能性がある。"
+        )
+        result = cd.get_strategy_bias([5000.0, 5010.0, 5015.0, 5018.0, 5025.0])
+        assert result["bias"] == "bullish", (
+            f"expected bullish, got {result['bias']} (current={result.get('current')})"
+        )
 
 
 # =============================================================================

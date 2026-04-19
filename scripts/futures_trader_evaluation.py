@@ -412,6 +412,17 @@ def ast_check_class_implemented(file_path: Path, class_name: str, required_metho
             for s in body
         )
 
+    # H6: 特殊メソッド（__init__/__repr__/__str__/__eq__等）は stub 判定から除外する。
+    # __init__ が pass だけでも is_stub=True になる誤判定を防ぐ。
+    _DUNDER_EXCLUSIONS: set[str] = {
+        "__init__", "__repr__", "__str__", "__eq__", "__hash__",
+        "__len__", "__iter__", "__next__", "__enter__", "__exit__",
+        "__del__", "__call__", "__contains__", "__getitem__", "__setitem__",
+        "__delitem__", "__lt__", "__le__", "__gt__", "__ge__", "__ne__",
+        "__add__", "__sub__", "__mul__", "__truediv__", "__floordiv__",
+        "__mod__", "__pow__", "__and__", "__or__", "__xor__",
+    }
+
     for node in _ast.walk(tree):
         if isinstance(node, _ast.ClassDef) and node.name == class_name:
             result["found"] = True
@@ -420,12 +431,17 @@ def ast_check_class_implemented(file_path: Path, class_name: str, required_metho
                 if isinstance(item, _ast.FunctionDef):
                     method_name = item.name
                     result["methods_found"].append(method_name)
+                    # H6: 特殊メソッドは stub 判定対象外
+                    if method_name in _DUNDER_EXCLUSIONS:
+                        # 特殊メソッドは実装済み扱い（空でも stub カウントしない）
+                        result["methods_implemented"].append(method_name)
+                        continue
                     if _method_is_empty(item):
                         stub_method_count += 1
                     else:
                         result["methods_implemented"].append(method_name)
 
-            # N-C4: 1つでも空メソッドがあれば is_stub=True（全メソッドチェック）
+            # N-C4: 1つでも空メソッドがあれば is_stub=True（特殊メソッド除く）
             if stub_method_count > 0:
                 result["is_stub"] = True
             elif required_methods:
@@ -2133,6 +2149,21 @@ class DummyReal:
         print("hello")
 '''
 
+    # NEW-C2: 必須メソッドの半分が空・半分が実装のケース（gaming対策）
+    # 必須メソッド4つ中2つが pass のみ → is_stub=True でなければならない
+    _DUMMY_HALF_STUB_SRC = '''
+class DummyHalfStub:
+    def method_a(self):
+        x = 1 + 2
+        return x
+    def method_b(self):
+        print("hello")
+    def method_c(self):
+        pass
+    def method_d(self):
+        ...
+'''
+
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".py", delete=False, encoding="utf-8"
     ) as f:
@@ -2145,25 +2176,37 @@ class DummyReal:
         f.write(_DUMMY_REAL_SRC)
         real_path = Path(f.name)
 
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".py", delete=False, encoding="utf-8"
+    ) as f:
+        f.write(_DUMMY_HALF_STUB_SRC)
+        half_stub_path = Path(f.name)
+
     try:
-        stub_result = ast_check_class_implemented(stub_path, "DummyStub", ["method_a", "method_b"])
-        real_result = ast_check_class_implemented(real_path, "DummyReal", ["method_a", "method_b"])
+        stub_result      = ast_check_class_implemented(stub_path,      "DummyStub",     ["method_a", "method_b"])
+        real_result      = ast_check_class_implemented(real_path,      "DummyReal",     ["method_a", "method_b"])
+        half_stub_result = ast_check_class_implemented(half_stub_path, "DummyHalfStub", ["method_a", "method_b", "method_c", "method_d"])
 
-        stub_ok = stub_result["is_stub"] is True
-        real_ok = real_result["is_stub"] is False and len(real_result["methods_implemented"]) >= 2
+        stub_ok      = stub_result["is_stub"] is True
+        real_ok      = real_result["is_stub"] is False and len(real_result["methods_implemented"]) >= 2
+        # half_stub: method_c / method_d が空 → is_stub=True でなければならない
+        half_stub_ok = half_stub_result["is_stub"] is True
 
-        if stub_ok and real_ok:
-            print("[selftest] PASS: dummy stub → is_stub=True, dummy real → is_stub=False")
+        if stub_ok and real_ok and half_stub_ok:
+            print("[selftest] PASS: full stub → is_stub=True, real → is_stub=False, half_stub → is_stub=True")
             return True
         else:
             print(
-                f"[selftest] FAIL: stub_result={stub_result} real_result={real_result}",
+                f"[selftest] FAIL: stub_result={stub_result} "
+                f"real_result={real_result} "
+                f"half_stub_result={half_stub_result}",
                 file=sys.stderr,
             )
             return False
     finally:
         stub_path.unlink(missing_ok=True)
         real_path.unlink(missing_ok=True)
+        half_stub_path.unlink(missing_ok=True)
 
 
 def main() -> None:
