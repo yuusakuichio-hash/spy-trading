@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.sora.token_reset_trigger</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/yuusakuichio/trading/scripts/token_reset_trigger.sh</string>
+    </array>
+
+    <!-- 02:01 JST 固定時刻起動（KeepAlive=false / StartCalendarInterval のみ） -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>2</integer>
+        <key>Minute</key>
+        <integer>1</integer>
+    </dict>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/yuusakuichio/trading</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/yuusakuichio/trading/data/logs/token_reset_trigger.stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/yuusakuichio/trading/data/logs/token_reset_trigger.stderr.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PUSHOVER_USER</key>
+        <string>u2cevk8nktib3sr148rw2hs78ecvux</string>
+        <key>PUSHOVER_TOKEN</key>
+        <string>aj9f1fk3ae2o6azif17kjyn698remc</string>
+    </dict>
+</dict>
+</plist>
