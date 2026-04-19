@@ -34,6 +34,21 @@ from typing import Any
 
 import requests
 
+# ── Heartbeat pulse（能動監視）───────────────────────────────────────────────
+try:
+    from common.heartbeat import write_pulse as _write_pulse
+    _HEARTBEAT_OK = True
+except ImportError:
+    _HEARTBEAT_OK = False
+    def _write_pulse(*a, **kw): pass  # type: ignore[misc]
+
+# ── 共通 Pushover クライアント（SPOF解消・backoff/queue一元管理） ─────────────
+try:
+    from common import pushover_client as _pc
+    _PC_AVAILABLE = True
+except ImportError:
+    _PC_AVAILABLE = False
+
 # ── .env ロード ──────────────────────────────────────────────────────────────
 def _load_env_file():
     for candidate in [Path("/root/spxbot/.env"), Path(__file__).parent / ".env"]:
@@ -199,27 +214,34 @@ def _queue_pushover(title: str, message: str, priority: int) -> None:
 def pushover_send(title: str, message: str, priority: int = 1) -> None:
     """Pushover通知を送信する。[Chronos/Watchdog]タグを強制付与する。
 
-    HTTP 429 連続3回 → 30分沈黙。backoff中はローカルキューへ追記。
-    backoff 状態は data/pushover_backoff_state.json に永続化。
+    common.pushover_client 経由で送信することで backoff/queue を全スクリプト間で
+    共有し、429 連鎖 ban を防止する（SPOF解消）。
     project_pushover_tag_convention.md のタグ規約（[Chronos]プレフィックス）に準拠。
     """
-    global _pushover_consecutive_429, _pushover_backoff_until
-
     if not title.startswith("["):
         title = f"[Chronos/Watchdog] {title}"
 
-    # backoff 期間中はキューに積んで終了
+    if _PC_AVAILABLE:
+        _pc.send(
+            title,
+            message,
+            priority=priority,
+            token=PUSHOVER_TOKEN or None,
+            app_tag="Chronos/Watchdog",
+        )
+        return
+
+    # フォールバック: 共通クライアント import 失敗時は旧実装で送信
+    global _pushover_consecutive_429, _pushover_backoff_until
     now = time.time()
     if now < _pushover_backoff_until:
         remaining = _pushover_backoff_until - now
         log.info("[BACKOFF] active (%.0fs remaining) — queuing: %s", remaining, title)
         _queue_pushover(title, message, priority)
         return
-
     if not PUSHOVER_TOKEN or not PUSHOVER_USER:
         log.warning("[NOTIFY_SKIP] missing token/user. title=%s", title)
         return
-
     try:
         data: dict[str, Any] = {
             "token":    PUSHOVER_TOKEN,
@@ -236,14 +258,9 @@ def pushover_send(title: str, message: str, priority: int = 1) -> None:
             data=data,
             timeout=10,
         )
-        # banned 検知: 200 OK でも body に "banned" が含まれる場合がある
-        # 参考: chronos_agent.log に {"status":0,"ip":"banned"} の記録あり
         _body_text = resp.text[:500] if hasattr(resp, "text") else ""
         _is_banned = "banned" in _body_text.lower()
-
         if resp.status_code == 429 or _is_banned:
-            if _is_banned and resp.status_code != 429:
-                log.warning("[BACKOFF] 200 OK but body contains 'banned': %s", _body_text[:200])
             _pushover_consecutive_429 += 1
             log.warning(
                 "[BACKOFF] 429/banned received (%d/%d)",
@@ -257,7 +274,6 @@ def pushover_send(title: str, message: str, priority: int = 1) -> None:
                 _save_backoff_state()
                 _queue_pushover(title, message, priority)
         elif resp.ok:
-            # 成功 → 連続カウンタリセット
             if _pushover_consecutive_429 > 0:
                 _pushover_consecutive_429 = 0
                 _pushover_backoff_until = 0.0
@@ -581,6 +597,10 @@ def run() -> None:
     global _last_health_check
     _last_health_check = time.time()
 
+    # Heartbeat pulse（1分毎）
+    _last_pulse = 0.0
+    _PULSE_INTERVAL = 60
+
     while True:
         try:
             now = time.time()
@@ -611,6 +631,11 @@ def run() -> None:
                 run_health_check(watch_paths)
                 _last_health_check = now
 
+            # 能動 heartbeat pulse（1分毎）
+            if now - _last_pulse >= _PULSE_INTERVAL:
+                _write_pulse("chronos_watchdog", state="healthy", details={"watching": len(watch_paths)})
+                _last_pulse = now
+
             time.sleep(CHECK_INTERVAL_SEC)
 
         except KeyboardInterrupt:
@@ -618,6 +643,7 @@ def run() -> None:
             break
         except Exception as e:
             log.error("[WATCHDOG_ERR] %s", e)
+            _write_pulse("chronos_watchdog", state="degraded", details={"error": str(e)})
             time.sleep(10)
 
 

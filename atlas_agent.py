@@ -59,6 +59,14 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
+# ── Heartbeat pulse（能動監視）───────────────────────────────────────────────
+try:
+    from common.heartbeat import write_pulse as _write_pulse
+    _HEARTBEAT_OK = True
+except ImportError:
+    _HEARTBEAT_OK = False
+    def _write_pulse(*a, **kw): pass  # type: ignore[misc]
+
 try:
     import yaml  # type: ignore
 except ImportError:
@@ -106,6 +114,13 @@ PUSHOVER_ALERT_TOKEN = os.environ.get("PUSHOVER_ALERT_TOKEN", "")
 PUSHOVER_OPS_TOKEN   = os.environ.get("PUSHOVER_OPS_TOKEN", PUSHOVER_ALERT_TOKEN)
 GITHUB_TOKEN         = os.environ.get("GITHUB_TOKEN", "")
 
+# ── 共通 Pushover クライアント（SPOF解消・backoff/queue一元管理） ─────────────
+try:
+    from common import pushover_client as _pc
+    _PC_AVAILABLE = True
+except ImportError:
+    _PC_AVAILABLE = False
+
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 def log(msg: str):
@@ -132,7 +147,19 @@ def log_action(entry: dict):
 
 # ── Pushover ─────────────────────────────────────────────────────────────────
 def pushover(title: str, msg: str, priority: int = 0, token: str | None = None):
+    """Pushover通知を送信する。
+
+    common.pushover_client 経由で送信することで backoff/queue を全スクリプト間で
+    共有し、429 連鎖 ban を防止する（SPOF解消）。
+    既存呼び出し元のシグネチャ（title, msg, priority, token）を保持。
+    """
     tok = token or PUSHOVER_OPS_TOKEN or PUSHOVER_ALERT_TOKEN
+
+    if _PC_AVAILABLE:
+        _pc.send(title, msg, priority=priority, token=tok or None, app_tag="Atlas")
+        return
+
+    # フォールバック: 共通クライアント import 失敗時は旧実装で送信
     if not tok or not PUSHOVER_USER:
         log(f"[NOTIFY_SKIP] missing token/user. title={title}")
         return
@@ -808,6 +835,10 @@ def main():
     _dev_scan_interval = 300  # 5分
     _notified_surge_cats: set[str] = set()  # 既通知カテゴリ（重複抑制）
 
+    # Heartbeat pulse（1分毎）
+    _last_pulse = 0.0
+    _PULSE_INTERVAL = 60
+
     while True:
         try:
             now = time.time()
@@ -912,6 +943,11 @@ def main():
                     continue
                 dispatch(f, cfg)
 
+            # 能動 heartbeat pulse（1分毎）
+            if now - _last_pulse >= _PULSE_INTERVAL:
+                _write_pulse("atlas_agent", state="healthy", details={"fired": len(fired_list), "in_market": in_market, "dry_run": dry})
+                _last_pulse = now
+
             if once_mode:
                 log(f"--once complete: fired={len(fired_list)}")
                 break
@@ -922,6 +958,7 @@ def main():
             break
         except Exception as e:
             log(f"[LOOP_ERR] {e}")
+            _write_pulse("atlas_agent", state="degraded", details={"error": str(e)})
             time.sleep(10)
 
 

@@ -46,6 +46,14 @@ import zoneinfo
 from pathlib import Path
 from typing import Any
 
+# ── Heartbeat pulse（能動監視）───────────────────────────────────────────────
+try:
+    from common.heartbeat import write_pulse as _write_pulse
+    _HEARTBEAT_OK = True
+except ImportError:
+    _HEARTBEAT_OK = False
+    def _write_pulse(*a, **kw): pass  # type: ignore[misc]
+
 # ── .env ロード ──────────────────────────────────────────────────────────────
 def _load_env_file():
     for candidate in [Path("/root/spxbot/.env"), Path(__file__).parent / ".env"]:
@@ -59,6 +67,13 @@ def _load_env_file():
             break
 
 _load_env_file()
+
+# ── 共通 Pushover クライアント（SPOF解消・backoff/queue一元管理） ─────────────
+try:
+    from common import pushover_client as _pc
+    _PC_AVAILABLE = True
+except ImportError:
+    _PC_AVAILABLE = False
 
 # ── Atlas共通基盤（再利用） ──────────────────────────────────────────────────
 try:
@@ -147,10 +162,18 @@ _NOTIFY_COOLDOWN_SEC = 300  # 同一アラートを5分以内に再送しない
 def pushover(title: str, message: str, priority: int = 0) -> bool:
     """Pushover通知を送信する。[Chronos]タグを強制付与する。
 
+    common.pushover_client 経由で送信することで backoff/queue を全スクリプト間で
+    共有し、429 連鎖 ban を防止する（SPOF解消）。
     project_pushover_tag_convention.md のタグ規約（[Chronos]プレフィックス）に準拠。
     """
     if not title.startswith("[Chronos"):
         title = f"[Chronos] {title}"
+
+    if _PC_AVAILABLE:
+        tok = PUSHOVER_OPS_TOKEN or PUSHOVER_ALERT_TOKEN or None
+        return _pc.send(title, message, priority=priority, token=tok, app_tag="Chronos")
+
+    # フォールバック: 共通クライアント import 失敗時は旧実装で送信
     tok = PUSHOVER_OPS_TOKEN or PUSHOVER_ALERT_TOKEN
     if not tok or not PUSHOVER_USER:
         log.warning("[NOTIFY_SKIP] missing token/user. title=%s", title)
@@ -182,9 +205,19 @@ def pushover(title: str, message: str, priority: int = 0) -> bool:
 
 
 def pushover_alert(title: str, message: str, priority: int = 1) -> bool:
-    """Pushover緊急通知を送信する。ALERTトークン使用。"""
+    """Pushover緊急通知を送信する。ALERTトークン使用。
+
+    common.pushover_client 経由で送信することで backoff/queue を全スクリプト間で
+    共有し、429 連鎖 ban を防止する（SPOF解消）。
+    """
     if not title.startswith("[Chronos"):
         title = f"[Chronos/ALERT] {title}"
+
+    if _PC_AVAILABLE:
+        tok = PUSHOVER_ALERT_TOKEN or PUSHOVER_OPS_TOKEN or None
+        return _pc.send(title, message, priority=priority, token=tok, app_tag="Chronos/ALERT")
+
+    # フォールバック
     tok = PUSHOVER_ALERT_TOKEN or PUSHOVER_OPS_TOKEN
     if not tok or not PUSHOVER_USER:
         log.warning("[NOTIFY_SKIP] missing token/user. title=%s", title)
@@ -964,11 +997,20 @@ def run(dry_run: bool = True, armed: bool = False, once: bool = False) -> None:
         priority=0,
     )
 
+    _last_pulse = 0.0
+    _PULSE_INTERVAL = 60  # 1分毎に heartbeat を書き込む
+
     while True:
         try:
             fired = monitor_cycle(cfg, dry_run=dry_run)
             if fired:
                 log.info("[CYCLE] %d alerts fired", len(fired))
+
+            # 能動 heartbeat pulse（1分毎）
+            _now = time.time()
+            if _now - _last_pulse >= _PULSE_INTERVAL:
+                _write_pulse("chronos_agent", state="healthy", details={"fired": len(fired), "dry_run": dry_run})
+                _last_pulse = _now
 
             if once:
                 log.info("[Chronos Agent] --once 完了: fired=%d", len(fired))
@@ -981,6 +1023,7 @@ def run(dry_run: bool = True, armed: bool = False, once: bool = False) -> None:
             break
         except Exception as e:
             log.error("[LOOP_ERR] %s", e)
+            _write_pulse("chronos_agent", state="degraded", details={"error": str(e)})
             time.sleep(10)
 
 
