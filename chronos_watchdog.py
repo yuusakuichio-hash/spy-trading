@@ -1,22 +1,21 @@
 #!/usr/bin/env python3
 """
-atlas_watchdog.py — プロセス監視（最後の砦）(Sora Lab / Atlas)
+chronos_watchdog.py — プロセス監視（最後の砦）(Sora Lab / Chronos)
 
 役割:
-  - condor.log / atlas_agent.log の新規行を tail
-  - エラーパターン検知（ERROR/WARNING/strike不整合/gamma_early_exit）
+  - chronos_bot.py / chronos_agent.py ログの新規行を tail
+  - エラーパターン検知（Exception/Traceback/CRITICAL等）
   - 閾値超過時に Pushover priority=1 で即通知
   - 5分毎 health check（ファイルサイズ・プロセス確認）
-  - chronos_watchdog.py の Atlas 版ミラー
+  - atlas_watchdog.py の Chronos 版ミラー
 
 設計方針:
   - シンプル・軽量・「最後の砦」として常に動作
-  - 高機能自律対応は atlas_agent.py が担当
-  - 自己回復: 更新停止 → kickstart → bootstrap → 人間介入（3段階）
-  - Pushover backoff: 429 連続3回 → 30分沈黙 + ローカルキュー
+  - 高機能自律対応は chronos_agent.py が担当
+  - 役割分担: fleet_watcher=合算DD/hedging・agent=Bot生存・watchdog=ログパターン
 
 依存: requests, stdlib
-起動: LaunchAgent com.atlas.watchdog
+起動: LaunchAgent com.chronos.watchdog（Disabled=true・手動loadで有効化）
 """
 
 from __future__ import annotations
@@ -52,63 +51,102 @@ _load_env_file()
 # ── 定数 ─────────────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent.resolve()
 
-LOG_PATH     = BASE_DIR / "data" / "logs" / "condor.log"
-WATCHDOG_LOG = BASE_DIR / "data" / "logs" / "atlas_watchdog.log"
+CHRONOS_LOG_PATH = Path(
+    os.environ.get("CHRONOS_LOG_DIR", str(BASE_DIR / "data" / "logs"))
+) / "chronos.log"
+
+WATCHDOG_LOG_PATH = Path(
+    os.environ.get("CHRONOS_LOG_DIR", str(BASE_DIR / "data" / "logs"))
+) / "chronos_watchdog.log"
 
 HEALTH_CHECK_INTERVAL_SEC = 300   # 5分毎 health check
-CHECK_INTERVAL = 10                # ログ tail チェック間隔（秒）
+CHECK_INTERVAL_SEC = 10            # ログ tail チェック間隔（秒）
 
-PUSHOVER_TOKEN = os.environ.get("PUSHOVER_TOKEN", "a5rb9ipb3yrdanv3vk4n8x28qt7io9")
-PUSHOVER_USER  = os.environ.get("PUSHOVER_USER",  "u2cevk8nktib3sr148rw2hs78ecvux")
+PUSHOVER_USER  = os.environ.get("PUSHOVER_USER", "")
+PUSHOVER_TOKEN = os.environ.get("PUSHOVER_OPS_TOKEN", os.environ.get("PUSHOVER_TOKEN", ""))
 
 # ── 自己回復設定 ──────────────────────────────────────────────────────────────
-RECOVERY_STATE_PATH   = BASE_DIR / "data" / "atlas_watchdog_recovery_state.json"
+RECOVERY_STATE_PATH = BASE_DIR / "data" / "chronos_watchdog_recovery_state.json"
 RECOVERY_COOLDOWN_SEC = 600          # 試行間隔 10分
-LAUNCHCTL_SERVICE_ID  = "com.atlas.agent"
+RECOVERY_MAX_ATTEMPTS = 3            # 3回失敗で人間介入要求
+LAUNCHCTL_SERVICE_ID = "com.chronos.agent"
 
 # ── Pushover backoff 設定 ─────────────────────────────────────────────────────
-PUSHOVER_BACKOFF_STATE_PATH   = BASE_DIR / "data" / "atlas_pushover_backoff_state.json"
-PUSHOVER_QUEUE_PATH           = BASE_DIR / "data" / "atlas_pushover_queue.jsonl"
-PUSHOVER_429_MAX_CONSECUTIVE  = 3      # 連続この回数で沈黙
-PUSHOVER_BACKOFF_DURATION_SEC = 1800   # 30分
+PUSHOVER_BACKOFF_STATE_PATH = BASE_DIR / "data" / "pushover_backoff_state.json"
+PUSHOVER_QUEUE_PATH         = BASE_DIR / "data" / "pushover_queue.jsonl"
+PUSHOVER_429_MAX_CONSECUTIVE = 3     # 連続この回数で沈黙
+PUSHOVER_BACKOFF_DURATION_SEC = 1800 # 30分
 
 # ── モジュールレベル backoff 状態 ─────────────────────────────────────────────
 _pushover_consecutive_429: int = 0
 _pushover_backoff_until: float = 0.0
 
-# ── 検知パターン ──────────────────────────────────────────────────────────────
-ALERT_PATTERNS = [
-    (re.compile(r'\bERROR\b',    re.IGNORECASE), "ERROR"),
-    (re.compile(r'\bWARNING\b',  re.IGNORECASE), "WARNING"),
-    (re.compile(r'strike.*不整合|strike mismatch|invalid strike', re.IGNORECASE), "strike不整合"),
-    (re.compile(r'gamma_early_exit|early.?exit.*gamma|gamma.*early.?exit', re.IGNORECASE), "gamma_early_exit"),
+# ── アラートパターン定義 ─────────────────────────────────────────────────────
+# (pattern, label, priority)
+ALERT_PATTERNS: list[tuple[re.Pattern, str, int]] = [
+    # 即時priority=2（CRITICAL）
+    (re.compile(r"\bCRITICAL\b", re.IGNORECASE),                       "CRITICAL",             2),
+    # priority=1（ERROR/違反）
+    (re.compile(r"\bTraceback\b",                re.IGNORECASE),        "Traceback",            1),
+    (re.compile(r"Exception.*Error|Error.*Exception", re.IGNORECASE),   "Exception",            1),
+    (re.compile(r"\bERROR\b",                    re.IGNORECASE),        "ERROR",                1),
+    (re.compile(r"margin.*違反|margin.*violation", re.IGNORECASE),      "margin違反",           1),
+    (re.compile(r"safety.?buffer.*違反|safety.?buffer.*breach", re.IGNORECASE), "MFFU_Safety_Buffer", 1),
+    (re.compile(r"consistency.*違反|consistency.*breach", re.IGNORECASE), "MFFU_Consistency",   1),
+    (re.compile(r"daily.?loss.*limit|max.?loss.*limit", re.IGNORECASE),  "MFFU_MaxLoss",       1),
+    (re.compile(r"news.*window.*violation|T1.*violation", re.IGNORECASE), "MFFU_NewsWindow",    2),
+    (re.compile(r"hft.*violation|trade.*200.*day", re.IGNORECASE),        "MFFU_HFT",           1),
+    (re.compile(r"kill.?switch.*activated|kill.*switch.*active", re.IGNORECASE), "KillSwitch", 1),
+    (re.compile(r"Tradovate.*disconnect|connection.*lost|connection.*refused", re.IGNORECASE), "TradovateDisconnect", 1),
+    # priority=0（警告）
+    (re.compile(r"\bWARNING\b",                  re.IGNORECASE),        "WARNING",              0),
 ]
 
-WINDOW_SECONDS = 300  # 5分
-THRESHOLD      = 10   # 件数
-ALERT_COOLDOWN = 60   # 秒
-
-# パターン別タイムスタンプキュー
-pattern_times: dict[str, deque] = defaultdict(lambda: deque())
-last_alert_sent: dict[str, float] = {}
-
-# HealthCheck cooldown
-_last_health_check: float = 0.0
-_last_health_alert: float = 0.0
-HEALTH_ALERT_COOLDOWN_SEC = 3600  # 1時間に1回まで
+# ウィンドウ・閾値設定（パターン別）
+_PATTERN_CONFIG: dict[str, dict[str, int]] = {
+    "CRITICAL":          {"window_sec": 60,  "threshold": 1,  "cooldown_sec": 60},
+    "MFFU_NewsWindow":   {"window_sec": 60,  "threshold": 1,  "cooldown_sec": 60},
+    "KillSwitch":        {"window_sec": 60,  "threshold": 1,  "cooldown_sec": 120},
+    "TradovateDisconnect": {"window_sec": 120, "threshold": 3, "cooldown_sec": 300},
+    "Traceback":         {"window_sec": 300, "threshold": 1,  "cooldown_sec": 120},
+    "Exception":         {"window_sec": 300, "threshold": 3,  "cooldown_sec": 300},
+    "MFFU_Safety_Buffer":{"window_sec": 300, "threshold": 1,  "cooldown_sec": 300},
+    "MFFU_Consistency":  {"window_sec": 300, "threshold": 1,  "cooldown_sec": 300},
+    "MFFU_MaxLoss":      {"window_sec": 300, "threshold": 1,  "cooldown_sec": 300},
+    "MFFU_HFT":          {"window_sec": 300, "threshold": 1,  "cooldown_sec": 300},
+    "margin違反":         {"window_sec": 300, "threshold": 1,  "cooldown_sec": 300},
+    "ERROR":             {"window_sec": 300, "threshold": 10, "cooldown_sec": 60},
+    "WARNING":           {"window_sec": 300, "threshold": 10, "cooldown_sec": 60},
+}
+_DEFAULT_PATTERN_CFG = {"window_sec": 300, "threshold": 10, "cooldown_sec": 60}
 
 # ── ロギング設定 ─────────────────────────────────────────────────────────────
-WATCHDOG_LOG.parent.mkdir(parents=True, exist_ok=True)
+WATCHDOG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-log = logging.getLogger("atlas_watchdog")
+log = logging.getLogger("chronos_watchdog")
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler(str(WATCHDOG_LOG), encoding="utf-8"),
+        logging.FileHandler(str(WATCHDOG_LOG_PATH), encoding="utf-8"),
     ],
 )
+
+# ── パターン別タイムスタンプキュー（状態保持） ───────────────────────────────
+pattern_times: dict[str, deque] = defaultdict(deque)
+last_alert_sent: dict[str, float] = {}
+
+# 監視対象ログのポジション（ファイル名→バイト位置）
+log_positions: dict[str, int] = {}
+log_inodes: dict[str, int] = {}
+
+# 最後の health check 時刻
+_last_health_check: float = 0.0
+
+# HealthCheck Pushover 最終送信時刻（ban防止 1h cooldown）
+_last_health_alert: float = 0.0
+HEALTH_ALERT_COOLDOWN_SEC = 3600  # 1時間に1回まで
 
 
 # ── Pushover backoff ヘルパー ─────────────────────────────────────────────────
@@ -152,18 +190,18 @@ def _queue_pushover(title: str, message: str, priority: int) -> None:
         log.warning("[BACKOFF] queue write error: %s", e)
 
 
-# ── Pushover（[Atlas]タグ付き） ───────────────────────────────────────────────
+# ── Pushover（[Chronos]タグ付き） ────────────────────────────────────────────
 def pushover_send(title: str, message: str, priority: int = 1) -> None:
-    """Pushover通知を送信する。[Atlas/Watchdog]タグを強制付与する。
+    """Pushover通知を送信する。[Chronos/Watchdog]タグを強制付与する。
 
     HTTP 429 連続3回 → 30分沈黙。backoff中はローカルキューへ追記。
-    backoff 状態は data/atlas_pushover_backoff_state.json に永続化。
-    project_pushover_tag_convention.md のタグ規約（[Atlas]プレフィックス）に準拠。
+    backoff 状態は data/pushover_backoff_state.json に永続化。
+    project_pushover_tag_convention.md のタグ規約（[Chronos]プレフィックス）に準拠。
     """
     global _pushover_consecutive_429, _pushover_backoff_until
 
     if not title.startswith("["):
-        title = f"[Atlas/Watchdog] {title}"
+        title = f"[Chronos/Watchdog] {title}"
 
     # backoff 期間中はキューに積んで終了
     now = time.time()
@@ -186,7 +224,7 @@ def pushover_send(title: str, message: str, priority: int = 1) -> None:
             "priority": priority,
         }
         if priority >= 2:
-            data["retry"]  = 30
+            data["retry"] = 30
             data["expire"] = 3600
         resp = requests.post(
             "https://api.pushover.net/1/messages.json",
@@ -207,6 +245,7 @@ def pushover_send(title: str, message: str, priority: int = 1) -> None:
                 _save_backoff_state()
                 _queue_pushover(title, message, priority)
         elif resp.ok:
+            # 成功 → 連続カウンタリセット
             if _pushover_consecutive_429 > 0:
                 _pushover_consecutive_429 = 0
                 _pushover_backoff_until = 0.0
@@ -219,7 +258,7 @@ def pushover_send(title: str, message: str, priority: int = 1) -> None:
 
 # ── 自己回復ヘルパー ──────────────────────────────────────────────────────────
 def _load_recovery_state() -> dict:
-    """data/atlas_watchdog_recovery_state.json を読む。"""
+    """data/chronos_watchdog_recovery_state.json を読む。"""
     try:
         if RECOVERY_STATE_PATH.exists():
             return json.loads(RECOVERY_STATE_PATH.read_text())
@@ -255,6 +294,7 @@ def _attempt_self_recovery(issue_label: str) -> None:
     state = _load_recovery_state()
     now = time.time()
 
+    # クールダウン中はスキップ（1回目以降のみ）
     elapsed = now - state.get("last_attempt_ts", 0.0)
     if state.get("attempt", 0) > 0 and elapsed < RECOVERY_COOLDOWN_SEC:
         log.info(
@@ -282,7 +322,7 @@ def _attempt_self_recovery(issue_label: str) -> None:
                 result.returncode, result.stdout.strip(), result.stderr.strip(),
             )
             pushover_send(
-                "[Atlas/Watchdog] 自己回復 attempt=1",
+                "[Chronos/Watchdog] 自己回復 attempt=1",
                 (
                     f"更新停止({issue_label})検知\n"
                     f"launchctl kickstart 実行\n"
@@ -301,6 +341,7 @@ def _attempt_self_recovery(issue_label: str) -> None:
             Path.home() / "Library" / "LaunchAgents" / f"{LAUNCHCTL_SERVICE_ID}.plist"
         )
         try:
+            # bootstrap 前に bootout（存在しない場合は無視）
             subprocess.run(
                 ["launchctl", "bootout", f"gui/{os.getuid()}", str(plist_path)],
                 capture_output=True, text=True, timeout=30, shell=False,
@@ -314,7 +355,7 @@ def _attempt_self_recovery(issue_label: str) -> None:
                 result.returncode, result.stdout.strip(), result.stderr.strip(),
             )
             pushover_send(
-                "[Atlas/Watchdog] 自己回復 attempt=2",
+                "[Chronos/Watchdog] 自己回復 attempt=2",
                 (
                     f"更新停止({issue_label})継続\n"
                     f"launchctl bootstrap 再登録実行\n"
@@ -326,12 +367,13 @@ def _attempt_self_recovery(issue_label: str) -> None:
             log.warning("[RECOVERY] bootstrap error: %s", e)
 
     else:
+        # 3回目以降: 人間介入要求
         log.error(
             "[RECOVERY] attempt=%d: 回復不可 — 人間介入要求 service=%s",
             attempt, LAUNCHCTL_SERVICE_ID,
         )
         pushover_send(
-            "[Atlas/Watchdog] 回復不可・人間介入要",
+            "[Chronos/Watchdog] 回復不可・人間介入要",
             (
                 f"更新停止({issue_label})が {attempt} 回回復試行後も継続\n"
                 f"service: {LAUNCHCTL_SERVICE_ID}\n"
@@ -342,61 +384,99 @@ def _attempt_self_recovery(issue_label: str) -> None:
 
 
 # ── ログ tail ─────────────────────────────────────────────────────────────────
-def tail_new_lines(filepath: str, last_pos: int) -> tuple[list[str], int]:
-    """ファイルの追記分だけ読む。ログローテーション検知対応。"""
+def tail_new_lines(log_path: Path, last_pos: int) -> tuple[list[str], int]:
+    """ログファイルの新規行を読み取る。ローテーション検知対応。
+
+    atlas_watchdog.py の tail_new_lines() を移植・強化。
+
+    Returns:
+        (新規行のリスト, 次回の読み取り開始バイト位置)
+    """
+    path_str = str(log_path)
+    if not log_path.exists():
+        return [], last_pos
+
     try:
-        size = os.path.getsize(filepath)
-    except FileNotFoundError:
+        st = log_path.stat()
+        current_size = st.st_size
+        current_inode = st.st_ino
+
+        # ローテーション検知（inode変更またはサイズ縮小）
+        prev_inode = log_inodes.get(path_str)
+        if prev_inode is not None and (current_inode != prev_inode or current_size < last_pos):
+            log.info("[TAIL] log rotated: %s", log_path.name)
+            last_pos = 0
+
+        log_inodes[path_str] = current_inode
+
+        if current_size <= last_pos:
+            return [], last_pos
+
+        read_size = min(current_size - last_pos, 65536)  # 最大64KB/サイクル
+        with log_path.open("rb") as f:
+            f.seek(last_pos)
+            data = f.read(read_size)
+
+        new_pos = last_pos + len(data)
+
+        # 末尾の不完全行は次サイクルに繰り越し
+        text = data.decode("utf-8", errors="replace")
+        if "\n" in text:
+            last_nl = text.rfind("\n")
+            new_pos = last_pos + len(text[:last_nl + 1].encode("utf-8", errors="replace"))
+            text = text[:last_nl + 1]
+        else:
+            # 改行なし = 不完全行のみ → 次サイクル
+            return [], last_pos
+
+        lines = [ln for ln in text.splitlines() if ln.strip()]
+        return lines, new_pos
+
+    except Exception as e:
+        log.warning("[TAIL_ERR] %s: %s", log_path, e)
         return [], last_pos
 
-    if size < last_pos:
-        log.info("[TAIL] log rotated, resetting position: %s", filepath)
-        last_pos = 0
 
-    if size == last_pos:
-        return [], last_pos
+def check_pattern(line: str, now: float) -> list[tuple[str, int]]:
+    """1行に対してアラートパターンをマッチし、閾値超過したパターンのリストを返す。
 
-    with open(filepath, "r", errors="replace") as f:
-        f.seek(last_pos)
-        new_lines = f.readlines()
-        new_pos = f.tell()
+    atlas_watchdog.py の check_patterns() を関数型に移植。
 
-    return new_lines, new_pos
+    Returns:
+        [(pattern_label, priority), ...] — 閾値超過したパターンのみ
+    """
+    triggered: list[tuple[str, int]] = []
 
+    for regex, label, priority in ALERT_PATTERNS:
+        if not regex.search(line):
+            continue
 
-# ── パターン検知 ──────────────────────────────────────────────────────────────
-def check_patterns(lines: list[str]) -> None:
-    now = time.time()
+        q = pattern_times[label]
+        q.append(now)
 
-    for line in lines:
-        line = line.rstrip()
-        for pattern, label in ALERT_PATTERNS:
-            if pattern.search(line):
-                q = pattern_times[label]
-                q.append((now, line))
+        pcfg = _PATTERN_CONFIG.get(label, _DEFAULT_PATTERN_CFG)
+        window_sec = pcfg["window_sec"]
+        threshold = pcfg["threshold"]
+        cooldown_sec = pcfg["cooldown_sec"]
 
-                while q and now - q[0][0] > WINDOW_SECONDS:
-                    q.popleft()
+        # ウィンドウ外のエントリを削除
+        while q and now - q[0] > window_sec:
+            q.popleft()
 
-                count = len(q)
-                log.info("Pattern [%s] detected (%d/%d): %s", label, count, THRESHOLD, line[:120])
+        count = len(q)
 
-                if count >= THRESHOLD:
-                    last_sent = last_alert_sent.get(label, 0)
-                    if now - last_sent > ALERT_COOLDOWN:
-                        last_alert_sent[label] = now
-                        recent = [entry[1] for entry in list(q)[-5:]]
-                        excerpt = "\n".join(recent)
-                        msg = (
-                            f"パターン: {label}\n"
-                            f"5分以内に {count} 件検知\n\n"
-                            f"直近ログ:\n{excerpt[:800]}"
-                        )
-                        pushover_send(f"[Atlas/Watchdog] {label}", msg, priority=1)
+        if count >= threshold:
+            last_sent = last_alert_sent.get(label, 0.0)
+            if now - last_sent >= cooldown_sec:
+                last_alert_sent[label] = now
+                triggered.append((label, priority))
+                q.clear()  # 通知後はキューリセット（重複抑制）
+
+    return triggered
 
 
 # ── Health Check ─────────────────────────────────────────────────────────────
-def run_health_check(watch_paths: list[str]) -> None:
+def run_health_check(watch_paths: list[Path]) -> None:
     """5分毎のヘルスチェック: 監視対象ファイルの存在とサイズを確認する。
 
     更新停止を検知したとき、通知の前に自己回復を試みる。
@@ -406,25 +486,26 @@ def run_health_check(watch_paths: list[str]) -> None:
     issues: list[str] = []
     stale_detected = False
 
-    for filepath in watch_paths:
-        p = Path(filepath)
+    for p in watch_paths:
         if not p.exists():
             issues.append(f"不存在: {p.name}")
             continue
         try:
-            size  = p.stat().st_size
+            size = p.stat().st_size
             mtime = p.stat().st_mtime
-            age   = time.time() - mtime
+            age = time.time() - mtime
             if age > 600:  # 10分以上更新なし
                 label = f"更新停止({age:.0f}秒): {p.name}"
                 issues.append(label)
                 stale_detected = True
+                # 自己回復パスを先に実行し、通知は attempt>=3 のときだけ watchdog が送る
                 _attempt_self_recovery(label)
             else:
                 log.info("[HealthCheck] OK: %s size=%dB age=%.0fs", p.name, size, age)
         except Exception as e:
             issues.append(f"stat失敗 {p.name}: {e}")
 
+    # 更新停止以外の問題（不存在・stat失敗）は即通知
     non_stale_issues = [i for i in issues if "更新停止" not in i]
     if non_stale_issues:
         msg = "ヘルスチェック異常:\n" + "\n".join(non_stale_issues)
@@ -432,7 +513,7 @@ def run_health_check(watch_paths: list[str]) -> None:
         global _last_health_alert
         _now = time.time()
         if _now - _last_health_alert >= HEALTH_ALERT_COOLDOWN_SEC:
-            pushover_send("[Atlas/Watchdog] HealthCheck異常", msg, priority=1)
+            pushover_send("[Chronos/Watchdog] HealthCheck異常", msg, priority=1)
             _last_health_alert = _now
         else:
             log.info(
@@ -440,35 +521,48 @@ def run_health_check(watch_paths: list[str]) -> None:
                 HEALTH_ALERT_COOLDOWN_SEC - (_now - _last_health_alert),
             )
     elif not stale_detected:
+        # 全ファイル正常 → recovery state をリセット
         _reset_recovery_state()
         log.info("[HealthCheck] 完了: 全ファイル正常")
 
 
 # ── メインループ ──────────────────────────────────────────────────────────────
-def main():
-    log.info("=== atlas_watchdog started ===")
-    log.info("監視対象: %s", LOG_PATH)
-    log.info("チェック間隔: %d秒 / 閾値: %d秒で%d件", CHECK_INTERVAL, WINDOW_SECONDS, THRESHOLD)
+def run() -> None:
+    """Watchdogメインループ。"""
+    log.info("[Chronos Watchdog] 起動: %s 監視開始", CHRONOS_LOG_PATH)
 
+    # backoff 状態を起動時に復元
     _load_backoff_state()
 
-    watch_paths = [str(LOG_PATH)]
+    # 監視対象ファイルリスト
+    watch_paths: list[Path] = [
+        CHRONOS_LOG_PATH,
+        BASE_DIR / "data" / "logs" / "chronos_agent.log",
+    ]
 
-    # 初回は現在のファイル末尾位置から開始（過去ログはスキップ）
-    try:
-        last_pos = os.path.getsize(str(LOG_PATH))
-        log.info("初期ファイルサイズ: %d bytes (過去ログスキップ)", last_pos)
-    except FileNotFoundError:
-        last_pos = 0
-        log.info("ログファイル未存在。作成を待機: %s", LOG_PATH)
+    # 初期ポジション設定（起動前ログをスキップ）
+    for p in watch_paths:
+        path_str = str(p)
+        if p.exists():
+            try:
+                st = p.stat()
+                log_positions[path_str] = st.st_size
+                log_inodes[path_str] = st.st_ino
+                log.info("[Watchdog] 初期位置: %s %dB", p.name, st.st_size)
+            except Exception:
+                log_positions[path_str] = 0
+        else:
+            log_positions[path_str] = 0
+            log.info("[Watchdog] ファイル未存在（待機中）: %s", p)
 
+    # 起動通知
     pushover_send(
-        "[Atlas/Watchdog] 起動",
+        "[Chronos/Watchdog] 起動",
         (
-            f"atlas_watchdog.py 起動完了\n"
-            f"監視: {LOG_PATH}\n"
-            f"チェック間隔: {CHECK_INTERVAL}秒 / 閾値: {WINDOW_SECONDS}秒/{THRESHOLD}件\n"
-            f"自己回復: com.atlas.agent"
+            f"chronos_watchdog.py 起動完了\n"
+            f"監視: {', '.join(p.name for p in watch_paths)}\n"
+            f"チェック間隔: {CHECK_INTERVAL_SEC}秒\n"
+            f"HealthCheck: {HEALTH_CHECK_INTERVAL_SEC}秒毎"
         ),
         priority=0,
     )
@@ -477,17 +571,44 @@ def main():
     _last_health_check = time.time()
 
     while True:
-        new_lines, last_pos = tail_new_lines(str(LOG_PATH), last_pos)
-        if new_lines:
-            check_patterns(new_lines)
+        try:
+            now = time.time()
 
-        now = time.time()
-        if now - _last_health_check >= HEALTH_CHECK_INTERVAL_SEC:
-            run_health_check(watch_paths)
-            _last_health_check = now
+            # 各ログファイルを tail して新規行を取得
+            for p in watch_paths:
+                path_str = str(p)
+                last_pos = log_positions.get(path_str, 0)
+                new_lines, new_pos = tail_new_lines(p, last_pos)
+                log_positions[path_str] = new_pos
 
-        time.sleep(CHECK_INTERVAL)
+                for line in new_lines:
+                    triggered = check_pattern(line, now)
+                    for label, priority in triggered:
+                        log.warning(
+                            "[Watchdog] pattern=%s priority=%d line=%s",
+                            label, priority, line[:120],
+                        )
+                        excerpt = line[:400]
+                        pushover_send(
+                            f"[Chronos/Watchdog] {label}",
+                            f"パターン検知: {label}\n\nログ:\n{excerpt}",
+                            priority=priority,
+                        )
+
+            # 5分毎 Health Check
+            if now - _last_health_check >= HEALTH_CHECK_INTERVAL_SEC:
+                run_health_check(watch_paths)
+                _last_health_check = now
+
+            time.sleep(CHECK_INTERVAL_SEC)
+
+        except KeyboardInterrupt:
+            log.info("[Chronos Watchdog] KeyboardInterrupt → 終了")
+            break
+        except Exception as e:
+            log.error("[WATCHDOG_ERR] %s", e)
+            time.sleep(10)
 
 
 if __name__ == "__main__":
-    main()
+    run()
