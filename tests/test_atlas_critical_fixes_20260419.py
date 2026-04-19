@@ -571,8 +571,9 @@ class TestC7Level2TwoManRule(unittest.TestCase):
         source = self._get_agent_source()
         self.assertIn("two_man_rule_blocked_l2", source)
 
-    def test_c7_atlas_rules_min_level_is_2(self):
-        """atlas_rules.yaml の two_man_rule.min_level が2になっていること"""
+    def test_c7_atlas_rules_min_level_is_3(self):
+        """atlas_rules.yaml の two_man_rule.min_level が3であること
+        (C7-B1修正: 承認受付ループ未実装のため、運用継続性確保のためmin_level=3に戻す)"""
         import yaml
         rules_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -585,10 +586,13 @@ class TestC7Level2TwoManRule(unittest.TestCase):
             rules = yaml.safe_load(f)
 
         tmr = rules.get("autofix", {}).get("two_man_rule", {})
-        self.assertLessEqual(tmr.get("min_level", 3), 2)
+        # C7-B1: 承認受付ループ未実装のため min_level=3 (安全側)
+        self.assertEqual(tmr.get("min_level", 3), 3,
+                         "C7-B1: min_level=3である必要がある (承認受付ループ実装前)")
 
-    def test_c7_level2_approval_required_flag_set(self):
-        """atlas_rules.yaml に level2_approval_required が true であること"""
+    def test_c7_level2_approval_required_flag_false(self):
+        """atlas_rules.yaml に level2_approval_required が false であること
+        (C7-B1修正: 承認受付ループ未実装のため、運用ブロック防止のためFalseに変更)"""
         import yaml
         rules_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -601,7 +605,9 @@ class TestC7Level2TwoManRule(unittest.TestCase):
             rules = yaml.safe_load(f)
 
         tmr = rules.get("autofix", {}).get("two_man_rule", {})
-        self.assertTrue(tmr.get("level2_approval_required", False))
+        # C7-B1: 承認受付ループ未実装のため False (運用継続性確保)
+        self.assertFalse(tmr.get("level2_approval_required", True),
+                         "C7-B1: level2_approval_required=Falseである必要がある")
 
     def test_c7_level2_tmr_sends_pushover(self):
         """Level2 Two-Man Rule が Pushover送信をトリガーすること"""

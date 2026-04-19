@@ -484,8 +484,8 @@ EARLY_CLOSE_ENTRY_CUTOFF_M = 55
 EARLY_CLOSE_FORCE_H = 13
 EARLY_CLOSE_FORCE_M = 0
 # 半日取引日の graceful exit 時刻: クローズ30分後 (13:30 ET)
-EARLY_CLOSE_EXIT_H  = 13
-EARLY_CLOSE_EXIT_M  = 30
+EARLY_CLOSE_EXIT_H  = 12          # C4-B1修正: 市場クローズ13:00の10分前(12:50)に変更
+EARLY_CLOSE_EXIT_M  = 50          # 旧値: 13:30 (クローズ後30分) → 修正: 12:50 (クローズ前10分)
 
 
 def is_early_close_today() -> bool:
@@ -4784,7 +4784,7 @@ class TradeEngine:
                     self._reverse_leg(p_code, p_side, qty, p_label)
                 return False
         log.info(f"{direction} CS placed: qty={qty} fill_methods={fill_methods}")
-        # P0-1: 約定確認（失敗でもエントリー自体はTrueを返す＝ポジションは入っているはず）
+        # C2-B1修正: 約定確認で両legのfillをチェックし、未約定があれば False を返す
         # order_ids[0]=sell, order_ids[1]=buy の順（legs定義順）
         # use_limit=True の場合はポーリング上限を2倍に延長（指値調整時間を含むため）
         fill_map = self._confirm_fills(order_ids, direction, use_limit=use_limit)
@@ -4799,6 +4799,35 @@ class TradeEngine:
         }
         log.info(f"Entry fills: sell_avg={sell_fill} buy_avg={buy_fill} "
                  f"methods={fill_methods}")
+        # C2-B1: 片脚でも fill が None (未約定) なら片脚リスクありとして警告し巻き戻す
+        if sell_fill is None or buy_fill is None:
+            _missing = []
+            if sell_fill is None:
+                _missing.append(f"sell(order={order_ids[0] if order_ids else 'n/a'})")
+            if buy_fill is None:
+                _missing.append(f"buy(order={order_ids[1] if len(order_ids) > 1 else 'n/a'})")
+            log.error(
+                f"[CS] fill確認失敗 {_missing} → 片脚リスク回避で反転決済"
+            )
+            # 発注済みlegを反転して裸ポジション回避
+            for code, side, label in reversed(list(zip(
+                [sell_code, buy_code],
+                [self._legs_placed_sides[0] if hasattr(self, "_legs_placed_sides") else None,
+                 self._legs_placed_sides[1] if hasattr(self, "_legs_placed_sides") else None],
+                [f"{direction}_sell_unwind", f"{direction}_buy_unwind"],
+            ))):
+                if code and side is not None:
+                    try:
+                        self._reverse_leg(code, side, qty, label)
+                    except Exception as _rev_ex:
+                        log.error(f"[CS] 反転決済失敗 {code}: {_rev_ex}")
+            pushover(
+                "[Atlas] CS片脚未約定",
+                f"{direction} {fill_map}\nsell_fill={sell_fill} buy_fill={buy_fill}\n"
+                "片脚リスク回避で反転発注済み。ポジション確認が必要。",
+                priority=2,
+            )
+            return False
         return True
 
     def get_open_positions(self) -> list:
@@ -6388,19 +6417,46 @@ class IntradayMonitor:
                         f"[DeltaHedge] UNWIND: |total_delta|={delta_abs:.4f} < {unwind:.2f}"
                         f" → ヘッジ解除発注"
                     )
-                    # C1修正: フラグだけ落とすのではなく、記録されたhedge_codeを実売却する
+                    # C1-B1修正: UNWINDのqtyを _delta_hedge_codes のコードごとに動的取得
+                    # C1-B2修正: UNWIND成功分を即 _delta_hedge_codes から除去（部分成功を正確に追跡）
+                    # C1-B3修正: 指値を試みてから成行fallback
                     _unwind_codes = list(self._delta_hedge_codes)
                     _unwind_ok = True
                     for _uw_code in _unwind_codes:
                         try:
+                            # C1-B1: qtyは_delta_hedge_codesに記録された実qty(将来的に{code:qty}dict化)
+                            # 現在は1枚固定だが、dict形式への移行が容易なよう変数で抽出
+                            _uw_qty = self._delta_hedge_qty_map.get(_uw_code, 1) if hasattr(
+                                self, "_delta_hedge_qty_map") else 1
+
                             if self.eng and not getattr(self.bot, "dry_test", False):
                                 import futu as _futu_uw
-                                _uw_order_id, _uw_fill = self.eng._place_single_leg(
-                                    _uw_code, _futu_uw.TrdSide.SELL, 1,
-                                    "delta_hedge_unwind",
-                                    init_price=None,
-                                    use_limit=False,
-                                )
+                                # C1-B3: まず指値を試みて、失敗なら成行fallback
+                                _uw_order_id, _uw_fill = None, "failed"
+                                # 指値試行: bid値で発注（SELL指値はbid以下なら即約定見込み）
+                                try:
+                                    _uw_snapshot = (self.mkt.get_snapshot([_uw_code])
+                                                    if self.mkt else {})
+                                    _uw_bid = (_uw_snapshot.get(_uw_code, {}).get("bid_price")
+                                               or None)
+                                    if _uw_bid and _uw_bid > 0:
+                                        _uw_order_id, _uw_fill = self.eng._place_single_leg(
+                                            _uw_code, _futu_uw.TrdSide.SELL, _uw_qty,
+                                            "delta_hedge_unwind_limit",
+                                            init_price=_uw_bid,
+                                            use_limit=True,
+                                        )
+                                except Exception as _uw_limit_ex:
+                                    log.warning(f"[DeltaHedge] UNWIND指値試行失敗: {_uw_limit_ex}")
+                                # 指値失敗なら成行fallback
+                                if not _uw_order_id or _uw_fill == "failed":
+                                    log.info(f"[DeltaHedge] UNWIND指値失敗 → 成行fallback: {_uw_code}")
+                                    _uw_order_id, _uw_fill = self.eng._place_single_leg(
+                                        _uw_code, _futu_uw.TrdSide.SELL, _uw_qty,
+                                        "delta_hedge_unwind",
+                                        init_price=None,
+                                        use_limit=False,
+                                    )
                                 if not _uw_order_id or _uw_fill == "failed":
                                     log.error(
                                         f"[DeltaHedge] UNWIND発注失敗: code={_uw_code}"
@@ -6414,13 +6470,20 @@ class IntradayMonitor:
                                         priority=2,
                                     )
                                 else:
+                                    # C1-B2: 成功したコードを即リストから除去
+                                    if _uw_code in self._delta_hedge_codes:
+                                        self._delta_hedge_codes.remove(_uw_code)
                                     log.info(
                                         f"[DeltaHedge] UNWIND発注成功: {_uw_code}"
-                                        f" order_id={_uw_order_id}"
+                                        f" order_id={_uw_order_id} fill={_uw_fill}"
+                                        f" 残コード数={len(self._delta_hedge_codes)}"
                                     )
                             elif getattr(self.bot, "dry_test", False):
+                                # C1-B2: dry-testでも成功扱いでリストから除去
+                                if _uw_code in self._delta_hedge_codes:
+                                    self._delta_hedge_codes.remove(_uw_code)
                                 log.info(
-                                    f"[DeltaHedge] UNWIND dry-test: {_uw_code} → スキップ"
+                                    f"[DeltaHedge] UNWIND dry-test: {_uw_code} → スキップ(除去済)"
                                 )
                         except Exception as _uw_ex:
                             log.error(f"[DeltaHedge] UNWIND例外: {_uw_ex}")
@@ -6430,18 +6493,17 @@ class IntradayMonitor:
                                 f"手動決済が必要: {_uw_code}\n例外: {_uw_ex}",
                                 priority=2,
                             )
-                    # 発注成功確認後にフラグ変更
-                    if _unwind_ok:
+                    # 全コード除去済みならフラグ変更
+                    if not self._delta_hedge_codes:
                         self._delta_hedge_active = False
-                        self._delta_hedge_codes = []
                         pushover(
                             "[Atlas] DeltaHedge解除",
                             f"total_delta={total_delta:+.4f} < ±{unwind:.2f} → ヘッジ解除完了",
                         )
-                    else:
-                        # 部分失敗: 失敗したコードを除いたものだけリストを保持
+                    elif not _unwind_ok:
+                        # 部分失敗: 残存コードはリストに残ったまま（C1-B2で成功分は除去済み）
                         log.warning(
-                            "[DeltaHedge] UNWIND部分失敗 → フラグ維持・手動対応待ち"
+                            f"[DeltaHedge] UNWIND部分失敗 → 残存{len(self._delta_hedge_codes)}件 フラグ維持"
                         )
                 else:
                     log.debug(
@@ -6598,13 +6660,9 @@ class IntradayMonitor:
                     # ATMオプションの保守的な価格推定: underlying_price * 1% (0DTE ATMの目安下限)
                     # これはpre_trade_gateのmargin超過検知に使うための推定値（成行発注は維持）
                     _hedge_est_price = underlying_price * 0.01
-                    # C3修正: delta_hedge にもsignal_id付与
-                    _dh_signal_id = (
-                        f"delta_hedge_{hedge_direction}_"
-                        f"{_hedge_ticker}_"
-                        f"{datetime.datetime.now(ET).strftime('%Y%m%d%H%M%S')}_"
-                        f"{str(uuid.uuid4())[:8]}"
-                    )
+                    # C3-B1修正: delta_hedgeのsignal_idも決定的値に変更 (分単位でidempotency確保)
+                    _dh_bar_ts = datetime.datetime.now(ET).strftime('%Y%m%d%H%M')
+                    _dh_signal_id = f"delta_hedge_{hedge_direction}_{_hedge_ticker}_{_dh_bar_ts}"
                     order_id, fill_method = self.eng._place_single_leg(
                         hedge_code, _futu_dh.TrdSide.BUY, hedge_qty,
                         f"delta_hedge_{hedge_direction}",
@@ -8062,16 +8120,16 @@ class ORBEngine:
                  f"delta={opt.get('delta', 0):.3f} price=${option_price:.2f} qty={qty}")
 
         # 発注
-        # C3修正: signal_id未指定時は自動生成してidempotency keyを付与
+        # C3-B1修正: signal_idをブレイクアウトバー時刻+ticker+directionの決定的値に変更
+        # 再起動後も同一シグナルに同一keyが生成されidempotencyが機能する
         if not signal_id:
             _orb_ticker_for_id = (self.mkt.underlying_code.replace("US.", "")
                                    if self.mkt else "SPY")
-            signal_id = (
-                f"orb_{_orb_ticker_for_id}_"
-                f"{datetime.datetime.now(ET).strftime('%Y%m%d%H%M%S')}_"
-                f"{str(uuid.uuid4())[:8]}"
-            )
-            log.debug(f"[ORB] auto signal_id={signal_id}")
+            # 決定的key: breakout bar の時刻(分単位)まで + ticker + direction
+            # 分単位でグループ化することで数秒の再起動差を吸収しつつ一意性を保つ
+            _orb_bar_ts = datetime.datetime.now(ET).strftime('%Y%m%d%H%M')
+            signal_id = f"orb_{_orb_ticker_for_id}_{direction}_{_orb_bar_ts}"
+            log.debug(f"[ORB] deterministic signal_id={signal_id}")
 
         order_id = None
         if FUTU_AVAILABLE and self.eng and self.eng.trade_ctx:
@@ -8677,15 +8735,12 @@ class CalendarEngine:
             f"debit={net_debit:.2f} qty={qty}"
         )
 
-        # C3修正: signal_id未指定時は自動生成してidempotency keyを付与
+        # C3-B1修正: signal_idを決定的値に変更 (分単位+ticker+direction)
         if not signal_id:
             _cal_sym = (self.symbol or "").replace("US.", "").replace(".", "") or "SPY"
-            signal_id = (
-                f"calendar_{_cal_sym}_"
-                f"{datetime.datetime.now(ET).strftime('%Y%m%d%H%M%S')}_"
-                f"{str(uuid.uuid4())[:8]}"
-            )
-            log.debug(f"[Calendar] auto signal_id={signal_id}")
+            _cal_bar_ts = datetime.datetime.now(ET).strftime('%Y%m%d%H%M')
+            signal_id = f"calendar_{_cal_sym}_{direction}_{_cal_bar_ts}"
+            log.debug(f"[Calendar] deterministic signal_id={signal_id}")
 
         # 発注: front売り → back買い
         import futu as ft
@@ -11719,19 +11774,37 @@ class IronCondorSellEngine:
         )
         if not call_ok:
             log.error("[IC_SELL] CALL CS 発注失敗 -- PUT脚巻き戻しを試みる")
-            # C2修正: PUT脚（発注済み）を即巻き戻す。片脚放置はリスク
+            # C2-B2修正: PUT脚（発注済み）を即巻き戻す。指値試行→成行fallback
             _put_unwind_ok = False
             try:
                 if self.eng and not self.dry_test:
                     import futu as _ft_mod_ic
+
+                    def _ic_unwind_leg(code, side, label, bid_price=None):
+                        """指値試行→成行fallbackでleg巻き戻し"""
+                        _oid, _fm = None, "failed"
+                        if bid_price and bid_price > 0:
+                            _oid, _fm = self.eng._place_single_leg(
+                                code, side, qty, label + "_limit",
+                                init_price=bid_price, use_limit=True,
+                            )
+                        if not _oid or _fm == "failed":
+                            _oid, _fm = self.eng._place_single_leg(
+                                code, side, qty, label,
+                                init_price=None, use_limit=False,
+                            )
+                        return _oid, _fm
+
                     # PUT CS は SELL/BUY のペア → 逆方向で巻き戻す
-                    _rev1_id, _rev1_f = self.eng._place_single_leg(
-                        put_sell_opt["code"], _ft_mod_ic.TrdSide.BUY, qty,
-                        "ic_put_sell_reverse", init_price=None, use_limit=False,
+                    _rev1_id, _rev1_f = _ic_unwind_leg(
+                        put_sell_opt["code"], _ft_mod_ic.TrdSide.BUY,
+                        "ic_put_sell_reverse",
+                        bid_price=put_sell_opt.get("bid_price"),
                     )
-                    _rev2_id, _rev2_f = self.eng._place_single_leg(
-                        put_buy_opt["code"], _ft_mod_ic.TrdSide.SELL, qty,
-                        "ic_put_buy_reverse", init_price=None, use_limit=False,
+                    _rev2_id, _rev2_f = _ic_unwind_leg(
+                        put_buy_opt["code"], _ft_mod_ic.TrdSide.SELL,
+                        "ic_put_buy_reverse",
+                        bid_price=put_buy_opt.get("bid_price"),
                     )
                     _put_unwind_ok = (
                         _rev1_id and _rev1_f != "failed" and
@@ -14997,8 +15070,14 @@ class SPYCreditSpreadBot:
                         "signal_id": _snap_signal_id,
                     })
                     check_signal_divergence(_snap_signal_id)
-                    # 決済失敗 = 満期消滅の可能性が高い（0DTE失効）
-                    self._on_position_closed(force_pnl_usd, close_reason=_fc_reason + "_failed")
+                    # C5-B1修正: 決済失敗時は _on_position_closed を呼ばない
+                    # 理由: ポジションがまだ存在している可能性がある（幽霊ポジション防止）
+                    # _on_position_closed を呼ぶと PDTカウンタ/連続損失カウンタが不正更新される
+                    # 手動決済後は次回の監視ループでポジションゼロを検知して自然に状態リセットされる
+                    log.warning(
+                        f"[ForceClose] C5-B1: _on_position_closed 呼出スキップ "
+                        f"(ポジション存在の可能性あり → 幽霊ポジション防止)"
+                    )
             return
 
         # 動的ストップ倍率（IntradayMonitorが引き締めた場合はそちらを使用）

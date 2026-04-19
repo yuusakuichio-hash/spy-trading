@@ -332,11 +332,16 @@ autofix:
   # Pushover 応答待ちを挟む。タイムアウト後は自動実行しない（安全側）。
   two_man_rule:
     enabled: true
-    min_level: 2              # C7修正: Level2以上は承認必須（旧: Level3以上）
-    level2_approval_required: true  # Level2専用フラグ
+    min_level: 3              # C7-B1修正: Level2承認機構は未実装(承認受付ループなし)のため
+                              # min_level=3に戻して運用継続性を確保。
+                              # TODO(C7-B1): GitHub Issue経由の承認受付ループ実装後にmin_level=2に戻す
+                              # 実装方針: gh issue list --label approval-pending --json number,comments
+                              # でAPPROVE/DENYコメントを5分ポーリング→承認確認後にアクション実行
+    level2_approval_required: false  # C7-B1修正: 承認受付ループ未実装のため無効化
+                                     # (承認待ちのままブロックされると運用停止リスクがある)
     approval_timeout_sec: 300 # 5分応答なしで実行キャンセル（自動実行しない）
     pushover_priority: 1      # 承認要求は priority=1 (high)
-    # 緊急モード例外: market crash検知時のみ Level2 即実行を許可
+    # 緊急モード例外: market crash検知時のみ Level3 即実行を許可
     emergency_bypass_conditions:
       - "crisis_regime_detected"
       - "kill_switch_activated"

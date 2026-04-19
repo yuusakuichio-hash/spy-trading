@@ -5,7 +5,7 @@
 - .gitignore に .claude/skills/ を追加して今後のgit追跡を防止済み
 
 ## 現在のトークン状況
-- webhook Bearer token: `hub_KQNxSivBDhvrAroORy0AjiPIH3zdisqS`
+- webhook Bearer token: `<REDACTED>` ← C6-B1修正: 平文トークンを削除済み
 - 場所: .claude/skills/vps-channels.md (gitignore済み)
 - VPS上のwebook_server.py にハードコードされている可能性あり
 
