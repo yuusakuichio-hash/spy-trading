@@ -267,6 +267,18 @@ except ImportError as e:
     CUMULATIVE_DELTA_AVAILABLE = False
     log.warning(f"chronos_cumulative_delta not available: {e}")
 
+# N-C1: LiquiditySweepDetector をインポート（F13配線）
+try:
+    from chronos_liquidity_sweep import (
+        LiquiditySweepDetector as _LiquiditySweepDetector,
+        BarSnapshot as _SweepBarSnapshot,
+    )
+    LIQUIDITY_SWEEP_AVAILABLE = True
+    log.info("chronos_liquidity_sweep: loaded")
+except ImportError as e:
+    LIQUIDITY_SWEEP_AVAILABLE = False
+    log.warning(f"chronos_liquidity_sweep not available: {e}")
+
 # ── 認証情報 ───────────────────────────────────────────────────────────────────
 PUSHOVER_TOKEN = os.environ.get("PUSHOVER_TOKEN", "")
 PUSHOVER_USER  = os.environ.get("PUSHOVER_USER", "")
@@ -1396,6 +1408,24 @@ class ChronosBot:
         if self.cumulative_delta is not None:
             log.info("[MFFUBot] CumulativeDelta initialized: bucket=5min max=78")
 
+        # N-C1: LiquiditySweepDetector 生成（F13本番配線）
+        # 初期値はダミー (0.0) で生成し、daily_reset でリアル前日高安VWAP に更新する。
+        # env_dict に liquidity_sweep_signal を渡して strategy_selector のステージ7と接続。
+        self.liquidity_sweep: Optional["_LiquiditySweepDetector"] = None
+        if LIQUIDITY_SWEEP_AVAILABLE:
+            try:
+                self.liquidity_sweep = _LiquiditySweepDetector(
+                    prev_high = 0.0,   # daily_reset で実データに更新
+                    prev_low  = 0.0,
+                    prev_vwap = 0.0,
+                    ib_high   = None,
+                    ib_low    = None,
+                )
+                log.info("[MFFUBot] LiquiditySweepDetector initialized (levels=placeholder)")
+            except Exception as _e:
+                log.warning(f"[MFFUBot] LiquiditySweepDetector init error: {_e}")
+                self.liquidity_sweep = None
+
     # ── 接続 ──────────────────────────────────────────────────────────────────
 
     def connect(self) -> bool:
@@ -1543,6 +1573,25 @@ class ChronosBot:
                         )
                     except Exception as _e:
                         log.debug(f"[MFFUBot] cumulative_delta bias calc skipped: {_e}")
+
+                # N-C1: liquidity_sweep_signal を env_dict に設定（F13配線完成）
+                if self.liquidity_sweep is not None:
+                    try:
+                        # post_sweep_bars: 直近バーリストから取得（簡易: 空リストでも動作）
+                        _post_bars = getattr(self, "_recent_bars", [])
+                        _sweep_entry = self.liquidity_sweep.get_entry_signal(
+                            post_sweep_bars = _post_bars,
+                            atr             = float(getattr(self.orb, "_atr", 0.0) or 0.0),
+                        )
+                        if _sweep_entry is not None:
+                            env_dict["liquidity_sweep_signal"] = _sweep_entry
+                            log.info(
+                                f"[MFFUBot] liquidity_sweep_signal set: "
+                                f"signal={_sweep_entry.get('signal')} "
+                                f"conf={_sweep_entry.get('confidence', 0):.2f}"
+                            )
+                    except Exception as _e:
+                        log.debug(f"[MFFUBot] liquidity_sweep signal calc skipped: {_e}")
 
                 mffu_result = select_futures_strategy(env_dict)
                 # CRITICAL-2修正: 返り値は list[dict]。[0]でprimaryを取得する
@@ -2325,6 +2374,37 @@ class ChronosBot:
                 except Exception as _e:
                     log.debug(f"[MFFUBot] CumulativeDelta.update_from_bar error: {_e}")
 
+            # N-C1: LiquiditySweepDetector にバーデータを配線（F13本番配線）
+            # 各 1分足バーで check_sweep を呼び、sweep 検知時は env_dict に signal を渡す。
+            if self.liquidity_sweep is not None and bar.get("high") and bar.get("low"):
+                try:
+                    _sweep_bar = _SweepBarSnapshot(
+                        timestamp = int(bar.get("timestamp", 0)),
+                        open  = float(bar.get("open", 0)),
+                        high  = float(bar.get("high", 0)),
+                        low   = float(bar.get("low", 0)),
+                        close = float(bar.get("close", 0)),
+                        volume= float(bar.get("volume", 0)),
+                    )
+                    # volume_20m_avg と atr は orb から取得可能
+                    _vol_avg = float(bar.get("volume", 0))   # 簡易: 1バー平均（本番はget_bars 20本平均）
+                    _atr     = float(getattr(self.orb, "_atr", 0.0) or 0.0)
+                    _sweep_sig = self.liquidity_sweep.check_sweep(
+                        current_bar    = _sweep_bar,
+                        volume_20m_avg = _vol_avg,
+                        atr            = _atr,
+                    )
+                    if _sweep_sig:
+                        log.info(
+                            f"[MFFUBot] LiquiditySweep detected: "
+                            f"{_sweep_sig.direction} @ {_sweep_sig.level_price:.2f}"
+                        )
+                    # sweep期限切れチェック
+                    if self.liquidity_sweep.is_sweep_expired(int(bar.get("timestamp", 0))):
+                        self.liquidity_sweep.clear_pending()
+                except Exception as _e:
+                    log.debug(f"[MFFUBot] LiquiditySweepDetector.check_sweep error: {_e}")
+
     # ── メインループ ──────────────────────────────────────────────────────────
 
     def run_forever(self):
@@ -3098,6 +3178,30 @@ class ChronosBot:
         if self.cumulative_delta is not None:
             self.cumulative_delta.daily_reset()
             log.info("[MFFUBot] CumulativeDelta daily_reset called")
+
+        # N-C1: LiquiditySweepDetector 日次 levels 更新
+        # price_history は env_dict 経由で渡されてくる。daily_reset 時点では
+        # 前日高安 VWAP を取得して levels を更新する。
+        # 取得できない場合は前回値をそのまま維持（sweepはpending未満で無害）。
+        if self.liquidity_sweep is not None:
+            try:
+                # env_dict にある前日データ or ORB戦術から取得
+                _ph = getattr(self, "_prev_day_high", None)
+                _pl = getattr(self, "_prev_day_low",  None)
+                _pv = getattr(self, "_prev_day_vwap", None)
+                if _ph and _pl and _pv:
+                    self.liquidity_sweep.update_levels(
+                        prev_high = _ph,
+                        prev_low  = _pl,
+                        prev_vwap = _pv,
+                    )
+                    log.info(
+                        f"[MFFUBot] LiquiditySweep levels updated: "
+                        f"prev_high={_ph:.2f} prev_low={_pl:.2f} prev_vwap={_pv:.2f}"
+                    )
+                self.liquidity_sweep.clear_pending()  # 前日の pending sweep をクリア
+            except Exception as _e:
+                log.warning(f"[MFFUBot] LiquiditySweep daily_reset error: {_e}")
 
         # 連敗カウンタ日次リセット (consecutive_loss_guard: daily_reset_et="09:00")
         prev_consecutive = self._consecutive_losses

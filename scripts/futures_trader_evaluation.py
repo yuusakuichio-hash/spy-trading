@@ -325,9 +325,13 @@ def grep_codebase(pattern: str, files: list[Path], max_results: int = 10) -> lis
 
 def ast_check_class_implemented(file_path: Path, class_name: str, required_methods: list[str]) -> dict:
     """
-    C4修正: AST解析でクラスが実際に実装されているか確認する。
+    N-C4修正: AST解析でクラスが実際に実装されているか確認する。
 
-    空クラス (pass / NotImplementedError のみ) は未実装とみなす。
+    gaming対策 4経路:
+      1. 全メソッド本体チェック（1つでも空なら is_stub=True）
+      2. ast.Expr の Ellipsis / Constant(None) は空扱い・Docstring(文字列)は除外
+      3. 採点スクリプト self-test: dummy_stub_score() で0点確認（_run_selftest参照）
+      4. キャッシュクリアは run_evaluation() で importlib.invalidate_caches() を呼ぶ
 
     Returns:
         {
@@ -352,44 +356,79 @@ def ast_check_class_implemented(file_path: Path, class_name: str, required_metho
     except Exception:
         return result
 
+    def _is_nie_raise(stmt: _ast.stmt) -> bool:
+        """raise NotImplementedError / raise NotImplementedError() を検知する。"""
+        if not isinstance(stmt, _ast.Raise):
+            return False
+        exc = getattr(stmt, "exc", None)
+        if exc is None:
+            return False
+        if isinstance(exc, _ast.Name) and exc.id == "NotImplementedError":
+            return True
+        if (isinstance(exc, _ast.Call)
+                and isinstance(getattr(exc, "func", None), _ast.Name)
+                and exc.func.id == "NotImplementedError"):
+            return True
+        return False
+
+    def _is_empty_expr(stmt: _ast.stmt) -> bool:
+        """
+        ast.Expr が「空扱い」かどうかを判定する。
+
+        N-C4修正: Ellipsis / Constant(None) は空扱い。
+        文字列 Constant（docstring）は空扱い（docstringのみのメソッドは stub）。
+        つまり ast.Expr は常に empty として扱い、実体ある式（関数呼び出し等）は
+        ast.Expr(value=ast.Call...) となるため下記判定で除外される。
+
+        実体ある ast.Expr.value の例:
+          - ast.Call (関数呼び出し)
+          - ast.Attribute (属性アクセス)
+        これらは is_empty=False → methods_implemented に追加される。
+        """
+        if not isinstance(stmt, _ast.Expr):
+            return False
+        val = stmt.value
+        # Ellipsis: `...` (ast.Constant(value=Ellipsis) または ast.Ellipsis)
+        if isinstance(val, _ast.Constant):
+            # None, Ellipsis, 文字列(docstring) はすべて空扱い
+            return True
+        # Python 3.7 以前: ast.Ellipsis / ast.Str
+        if isinstance(val, getattr(_ast, "Ellipsis", type(None))):
+            return True
+        if isinstance(val, getattr(_ast, "Str", type(None))):
+            return True  # 旧 docstring
+        # 関数呼び出し等の実体ある式は空扱いしない
+        return False
+
+    def _method_is_empty(func_node: _ast.FunctionDef) -> bool:
+        """メソッドが実質的に空（stub）かどうかを判定する。"""
+        body = func_node.body
+        if len(body) == 0:
+            return True
+        return all(
+            isinstance(s, _ast.Pass)
+            or _is_nie_raise(s)
+            or _is_empty_expr(s)
+            for s in body
+        )
+
     for node in _ast.walk(tree):
         if isinstance(node, _ast.ClassDef) and node.name == class_name:
             result["found"] = True
+            stub_method_count = 0
             for item in node.body:
                 if isinstance(item, _ast.FunctionDef):
                     method_name = item.name
                     result["methods_found"].append(method_name)
-                    # 本体が pass / raise NotImplementedError のみなら stub
-                    # raise NotImplementedError は ast.Raise(exc=ast.Name(id='NotImplementedError'))
-                    # raise NotImplementedError() は ast.Raise(exc=ast.Call(func=ast.Name(id='NotImplementedError')))
-                    def _is_nie_raise(stmt):
-                        if not isinstance(stmt, _ast.Raise):
-                            return False
-                        exc = getattr(stmt, "exc", None)
-                        if exc is None:
-                            return False
-                        # raise NotImplementedError  (Name)
-                        if isinstance(exc, _ast.Name) and exc.id == "NotImplementedError":
-                            return True
-                        # raise NotImplementedError()  (Call)
-                        if (isinstance(exc, _ast.Call)
-                                and isinstance(getattr(exc, "func", None), _ast.Name)
-                                and exc.func.id == "NotImplementedError"):
-                            return True
-                        return False
-
-                    is_empty = (
-                        len(item.body) == 0
-                        or all(
-                            isinstance(s, _ast.Pass)
-                            or _is_nie_raise(s)
-                            or isinstance(s, _ast.Expr)  # docstringのみ
-                            for s in item.body
-                        )
-                    )
-                    if not is_empty:
+                    if _method_is_empty(item):
+                        stub_method_count += 1
+                    else:
                         result["methods_implemented"].append(method_name)
-            if required_methods:
+
+            # N-C4: 1つでも空メソッドがあれば is_stub=True（全メソッドチェック）
+            if stub_method_count > 0:
+                result["is_stub"] = True
+            elif required_methods:
                 stubs = [m for m in required_methods if m not in result["methods_implemented"]]
                 result["is_stub"] = len(stubs) == len(required_methods)
             break
@@ -2062,6 +2101,71 @@ def build_markdown_report(report: EvaluationReport) -> str:
 # エントリポイント
 # ---------------------------------------------------------------------------
 
+def _run_selftest() -> bool:
+    """
+    N-C4: 採点スクリプト self-test。
+    dummy stub クラスで ast_check_class_implemented が is_stub=True を返すことを確認。
+
+    Returns:
+        True: self-test 合格
+        False: self-test 失敗（採点バグの可能性）
+    """
+    import tempfile
+    import ast as _ast
+
+    # dummy stub: 全メソッドが pass のみ
+    _DUMMY_STUB_SRC = '''
+class DummyStub:
+    def method_a(self):
+        pass
+    def method_b(self):
+        pass
+    def method_c(self):
+        ...
+'''
+    # dummy real: 実装あり
+    _DUMMY_REAL_SRC = '''
+class DummyReal:
+    def method_a(self):
+        x = 1 + 2
+        return x
+    def method_b(self):
+        print("hello")
+'''
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".py", delete=False, encoding="utf-8"
+    ) as f:
+        f.write(_DUMMY_STUB_SRC)
+        stub_path = Path(f.name)
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".py", delete=False, encoding="utf-8"
+    ) as f:
+        f.write(_DUMMY_REAL_SRC)
+        real_path = Path(f.name)
+
+    try:
+        stub_result = ast_check_class_implemented(stub_path, "DummyStub", ["method_a", "method_b"])
+        real_result = ast_check_class_implemented(real_path, "DummyReal", ["method_a", "method_b"])
+
+        stub_ok = stub_result["is_stub"] is True
+        real_ok = real_result["is_stub"] is False and len(real_result["methods_implemented"]) >= 2
+
+        if stub_ok and real_ok:
+            print("[selftest] PASS: dummy stub → is_stub=True, dummy real → is_stub=False")
+            return True
+        else:
+            print(
+                f"[selftest] FAIL: stub_result={stub_result} real_result={real_result}",
+                file=sys.stderr,
+            )
+            return False
+    finally:
+        stub_path.unlink(missing_ok=True)
+        real_path.unlink(missing_ok=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="先物MES優秀トレーダー判定FW (Chronos採点)")
     parser.add_argument("--codebase", type=str, default=str(BASE),
@@ -2070,7 +2174,21 @@ def main() -> None:
                         help="出力ファイルパス (default: data/eval/chronos_trader_eval_YYYYMMDD.md)")
     parser.add_argument("--json", action="store_true", help="JSONも出力する")
     parser.add_argument("--no-pushover", action="store_true")
+    parser.add_argument("--skip-selftest", action="store_true", help="self-test をスキップする")
     args = parser.parse_args()
+
+    # N-C4: キャッシュクリア（採点実行ごと）
+    import importlib
+    importlib.invalidate_caches()
+
+    # N-C4: self-test 実行（採点バイアス検出）
+    if not args.skip_selftest:
+        if not _run_selftest():
+            print(
+                "[eval] ABORT: self-test failed. 採点スクリプトに is_stub 判定バグあり。",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     EVAL_DIR.mkdir(parents=True, exist_ok=True)
 

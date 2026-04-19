@@ -525,6 +525,10 @@ class TestStrategyIntegration:
     def test_select_futures_strategy_with_sweep_signal(self):
         """env に liquidity_sweep_signal を渡すと sweep 戦術が追加される"""
         import chronos_strategy_selector as sel
+        # cycle4: F13 disabled 時はスキップ
+        if not sel._F13_ENABLED:
+            pytest.skip("F13 liquidity_sweep disabled (cycle4 一時無効化中)")
+
 
         env = {
             "vix":                 22.0,

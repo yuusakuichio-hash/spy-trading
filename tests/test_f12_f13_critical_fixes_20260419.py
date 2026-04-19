@@ -463,6 +463,9 @@ class TestHigh7SweepSize:
     def test_default_kelly_sweep_size(self):
         """kelly_fraction 未指定でもsweepのsize_pctが合理的な範囲"""
         import chronos_strategy_selector as sel
+        # cycle4: F13 disabled 時はスキップ
+        if not sel._F13_ENABLED:
+            pytest.skip("F13 liquidity_sweep disabled (cycle4 一時無効化中)")
         env = self._make_sweep_env()
         strategies = sel.select_futures_strategy(env)
         sweep_strats = [s for s in strategies if "liquidity_sweep_reversal" in s["strategy"]]
@@ -559,6 +562,9 @@ class TestHigh8F12ToF13Order:
     def test_aligned_bias_no_reduction(self):
         """bias が neutral の場合は縮小されない"""
         import chronos_strategy_selector as sel
+        # cycle4: F13 disabled 時はスキップ
+        if not sel._F13_ENABLED:
+            pytest.skip("F13 liquidity_sweep disabled (cycle4 一時無効化中)")
         env = {
             "vix": 22.0,
             "vix_history": [20.0, 21.0, 22.0] * 20,

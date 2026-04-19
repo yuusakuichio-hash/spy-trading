@@ -182,6 +182,31 @@ except ImportError:
     _CUMULATIVE_DELTA_AVAILABLE = False
     log.warning("[MFFUStrategySelector] chronos_cumulative_delta not available: F12 disabled")
 
+# ── F12/F13 enabled フラグ（chronos_rules.yaml から読む）─────────────────────────
+# cycle4 CRITICAL 4件発見につき一時無効化可能にする。
+# rules.yaml の cumulative_delta.enabled / liquidity_sweep.enabled を参照。
+# ファイル読み込み失敗時はデフォルト True (有効) で動作継続。
+def _load_f12_f13_enabled_flags() -> tuple[bool, bool]:
+    """chronos_rules.yaml から F12/F13 の enabled フラグを読み取る。"""
+    try:
+        import yaml as _yaml
+        from pathlib import Path as _Path
+        _rp = _Path(__file__).parent / "chronos_rules.yaml"
+        if _rp.exists():
+            _d = _yaml.safe_load(_rp.read_text(encoding="utf-8")) or {}
+            _f12 = bool(_d.get("cumulative_delta", {}).get("enabled", True))
+            _f13 = bool(_d.get("liquidity_sweep", {}).get("enabled", True))
+            return _f12, _f13
+    except Exception as _e:
+        log.warning(f"[MFFUStrategySelector] _load_f12_f13_enabled_flags error: {_e}")
+    return True, True
+
+_F12_ENABLED, _F13_ENABLED = _load_f12_f13_enabled_flags()
+if not _F12_ENABLED:
+    log.info("[MFFUStrategySelector] F12 cumulative_delta: DISABLED (chronos_rules.yaml)")
+if not _F13_ENABLED:
+    log.info("[MFFUStrategySelector] F13 liquidity_sweep: DISABLED (chronos_rules.yaml)")
+
 # ── F13 Liquidity Sweep 統合（後方互換: ImportError 時は無効化）──────────────────
 try:
     from chronos_liquidity_sweep import LiquiditySweepDetector, SweepSignal
@@ -961,8 +986,9 @@ def select_futures_strategy(env: dict) -> list[dict]:
     # cumulative_delta_bias が env に入っている場合、各戦術の size_pct に乗数を適用する。
     # CumulativeDelta.get_strategy_bias() から取得した dict を env["cumulative_delta_bias"] に渡す。
     # bid_volume / ask_volume が env にある場合は delta をその場で計算する。
+    # _F12_ENABLED=False の場合はステージ6全体をスキップ（他戦術 F9-F11 は正常動作）
 
-    if _CUMULATIVE_DELTA_AVAILABLE:
+    if _CUMULATIVE_DELTA_AVAILABLE and _F12_ENABLED:
         cd_bias = env.get("cumulative_delta_bias", None)
 
         # bid/ask volume が直接渡された場合はその場で delta_sign を計算
@@ -1057,6 +1083,8 @@ def select_futures_strategy(env: dict) -> list[dict]:
                 f"bias={bias_dir} divergence={divergence} "
                 f"current={cd_bias.get('current', 0):.0f}"
             )
+    elif not _F12_ENABLED:
+        log.info("[MFFUStrategySelector] F12 cumulative_delta: skipped (enabled=false in rules.yaml)")
     else:
         log.debug("[MFFUStrategySelector] F12 cumulative_delta: module unavailable, skipped")
 
@@ -1065,7 +1093,8 @@ def select_futures_strategy(env: dict) -> list[dict]:
     # LiquiditySweepDetector.get_entry_signal() から取得した dict を
     # env["liquidity_sweep_signal"] に渡す。
 
-    if _LIQUIDITY_SWEEP_AVAILABLE:
+    # _F13_ENABLED=False の場合はステージ7全体をスキップ（他戦術 F9-F12 は正常動作）
+    if _LIQUIDITY_SWEEP_AVAILABLE and _F13_ENABLED:
         sweep_signal = env.get("liquidity_sweep_signal", None)
 
         if sweep_signal is not None:
@@ -1133,6 +1162,8 @@ def select_futures_strategy(env: dict) -> list[dict]:
                     f"[MFFUStrategySelector] F13 sweep signal skipped: "
                     f"confidence={sig_conf:.2f} < min={min_conf}"
                 )
+    elif not _F13_ENABLED:
+        log.info("[MFFUStrategySelector] F13 liquidity_sweep: skipped (enabled=false in rules.yaml)")
     else:
         log.debug("[MFFUStrategySelector] F13 liquidity_sweep: module unavailable, skipped")
 

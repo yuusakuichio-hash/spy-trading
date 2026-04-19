@@ -25,9 +25,49 @@ from __future__ import annotations
 import logging
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Optional
+from datetime import datetime as _datetime
+from typing import Optional, Union
 
 log = logging.getLogger(__name__)
+
+
+# ── N-C2: timestamp 変換ヘルパー ─────────────────────────────────────────────
+
+def _to_timestamp(ts: Union[str, int, float]) -> int:
+    """
+    様々なフォーマットの timestamp を Unix int (秒) に変換する。
+
+    対応フォーマット:
+      - ISO8601 文字列: "2026-04-19T09:35:00Z" / "2026-04-19T09:35:00+00:00" etc.
+      - int / float: そのまま int にキャスト
+
+    不正値は ValueError を raise する（握り潰し禁止）。
+
+    Args:
+        ts: 変換対象のタイムスタンプ
+
+    Returns:
+        int: Unix タイムスタンプ (秒)
+
+    Raises:
+        ValueError: 変換不能な型/値の場合
+        TypeError: ts が str/int/float 以外の場合
+    """
+    if isinstance(ts, (int, float)):
+        return int(ts)
+    if isinstance(ts, str):
+        try:
+            # ISO8601: "Z" を "+00:00" に置換して fromisoformat で解析
+            normalized = ts.replace("Z", "+00:00")
+            dt = _datetime.fromisoformat(normalized)
+            return int(dt.timestamp())
+        except ValueError as e:
+            raise ValueError(
+                f"_to_timestamp: ISO8601 parse failed: ts={ts!r} error={e}"
+            ) from e
+    raise TypeError(
+        f"_to_timestamp: unsupported type {type(ts).__name__}: ts={ts!r}"
+    )
 
 
 # ── データクラス ─────────────────────────────────────────────────────────────
@@ -106,6 +146,9 @@ class CumulativeDelta:
         # バケット履歴 (deque で max_buckets を維持)
         self._buckets: deque[BucketDelta] = deque(maxlen=max_buckets)
 
+        # N-C3: 同バー二重計上防止セット（daily_reset でクリア）
+        self._processed_ts: set[int] = set()
+
         log.info(
             f"[CumulativeDelta] init: bucket={bucket_minutes}min "
             f"max_buckets={max_buckets}"
@@ -133,8 +176,9 @@ class CumulativeDelta:
 
         # C1修正(改): C2と同じ順序に統一
         # 先にバケット境界判定→flush → その後加算（先に加算するとflush時に混入する）
+        # N-C2: _to_timestamp でISO8601/int/float を統一変換
         if tick.timestamp is not None:
-            self._maybe_flush_bucket(tick.timestamp)
+            self._maybe_flush_bucket(_to_timestamp(tick.timestamp))
 
         self._current_buy_vol  += buy_vol
         self._current_sell_vol += sell_vol
@@ -151,6 +195,9 @@ class CumulativeDelta:
         """
         1分足バーから Cumulative Delta を近似計算する (tick なし代替)。
 
+        N-C3: 同バー二重計上防止
+          bar.timestamp が既に _processed_ts に含まれる場合は即 return。
+
         近似ロジック:
           close > open → 買い主導 → buy_volume = volume * 0.7, sell = 0.3
           close < open → 売り主導 → buy_volume = volume * 0.3, sell = 0.7
@@ -158,6 +205,15 @@ class CumulativeDelta:
 
         精度はティック比較で劣るが、方向性の傾向は捉えられる。
         """
+        # N-C3: timestamp dedupe（同バー二重計上防止）
+        bar_ts = _to_timestamp(bar.timestamp)
+        if bar_ts in self._processed_ts:
+            log.debug(
+                f"[CumulativeDelta] update_from_bar: duplicate ts={bar_ts} skipped"
+            )
+            return
+        self._processed_ts.add(bar_ts)
+
         if bar.close > bar.open:
             buy_ratio  = 0.7
             sell_ratio = 0.3
@@ -186,7 +242,8 @@ class CumulativeDelta:
         sell_vol = bar.volume * sell_ratio
 
         # C2修正: 先に境界判定→flush → そのあと新バー加算（逆転で二重計上を防ぐ）
-        self._maybe_flush_bucket(bar.timestamp)
+        # N-C2: bar_ts は _to_timestamp で変換済み
+        self._maybe_flush_bucket(bar_ts)
 
         # 内部ボリュームを直接加算（aggressor side の按分をスキップ）
         self._current_buy_vol  += buy_vol
@@ -253,6 +310,8 @@ class CumulativeDelta:
         self._current_sell_vol = 0.0
         self._current_bucket_ts = None
         self._buckets.clear()
+        # N-C3: 同バー dedupe セットをクリア
+        self._processed_ts.clear()
         log.info("[CumulativeDelta] daily reset complete")
 
     # ── 取得 API ─────────────────────────────────────────────────────────────
