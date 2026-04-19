@@ -67,6 +67,15 @@ except ImportError:
     _HEARTBEAT_OK = False
     def _write_pulse(*a, **kw): pass  # type: ignore[misc]
 
+# ── 外部死活監視 ping（Pushover と独立した Tier 2 保険） ─────────────────────
+# Atlas: SPXオプションBot 系（Chronos と混同禁止）
+try:
+    from common.external_health_ping import ping_healthchecks as _ext_ping
+    _EXT_PING_OK = True
+except ImportError:
+    _EXT_PING_OK = False
+    def _ext_ping(*a, **kw) -> bool: return False  # type: ignore[misc]
+
 try:
     import yaml  # type: ignore
 except ImportError:
@@ -839,6 +848,13 @@ def main():
     _last_pulse = 0.0
     _PULSE_INTERVAL = 60
 
+    # 外部死活監視 ping（2分毎・Atlas: SPXオプションBot系）
+    _last_ext_ping = 0.0
+    _EXT_PING_INTERVAL = 120  # 2分毎（atlas_agent）
+
+    # 起動時に外部ping "start" 送信（Atlas系・Chronos と混同禁止）
+    _ext_ping("atlas_agent", status="start")
+
     while True:
         try:
             now = time.time()
@@ -948,6 +964,12 @@ def main():
                 _write_pulse("atlas_agent", state="healthy", details={"fired": len(fired_list), "in_market": in_market, "dry_run": dry})
                 _last_pulse = now
 
+            # 外部死活監視 ping（2分毎・Pushover と独立した経路）
+            # Atlas: SPXオプションBot エージェント（Chronos と混同禁止）
+            if now - _last_ext_ping >= _EXT_PING_INTERVAL:
+                _ext_ping("atlas_agent", status="success")
+                _last_ext_ping = now
+
             if once_mode:
                 log(f"--once complete: fired={len(fired_list)}")
                 break
@@ -959,6 +981,7 @@ def main():
         except Exception as e:
             log(f"[LOOP_ERR] {e}")
             _write_pulse("atlas_agent", state="degraded", details={"error": str(e)})
+            _ext_ping("atlas_agent", status="fail", payload=str(e)[:500])
             time.sleep(10)
 
 

@@ -43,6 +43,15 @@ except ImportError:
     _HEARTBEAT_OK = False
     def _write_pulse(*a, **kw): pass  # type: ignore[misc]
 
+# ── 外部死活監視 ping（Pushover と独立した Tier 2 保険） ─────────────────────
+# Atlas: SPXオプションBot watchdog（Chronos と混同禁止）
+try:
+    from common.external_health_ping import ping_healthchecks as _ext_ping
+    _EXT_PING_OK = True
+except ImportError:
+    _EXT_PING_OK = False
+    def _ext_ping(*a, **kw) -> bool: return False  # type: ignore[misc]
+
 # ── 共通 Pushover クライアント（SPOF解消・backoff/queue一元管理） ─────────────
 try:
     from common import pushover_client as _pc
@@ -566,6 +575,13 @@ def main():
     _last_pulse = 0.0
     _PULSE_INTERVAL = 60
 
+    # 外部死活監視 ping（5分毎・Atlas: SPXオプションBot watchdog）
+    _last_ext_ping = 0.0
+    _EXT_PING_INTERVAL = 300  # 5分毎（watchdog）
+
+    # 起動時に外部ping "start" 送信（Atlas系・Chronos と混同禁止）
+    _ext_ping("atlas_watchdog", status="start")
+
     while True:
         try:
             new_lines, last_pos = tail_new_lines(str(LOG_PATH), last_pos)
@@ -582,11 +598,18 @@ def main():
                 _write_pulse("atlas_watchdog", state="healthy", details={"watching": str(LOG_PATH)})
                 _last_pulse = now
 
+            # 外部死活監視 ping（5分毎・Pushover と独立した経路）
+            # Atlas: SPXオプションBot watchdog（Chronos と混同禁止）
+            if now - _last_ext_ping >= _EXT_PING_INTERVAL:
+                _ext_ping("atlas_watchdog", status="success")
+                _last_ext_ping = now
+
             time.sleep(CHECK_INTERVAL)
         except KeyboardInterrupt:
             break
         except Exception as e:
             _write_pulse("atlas_watchdog", state="degraded", details={"error": str(e)})
+            _ext_ping("atlas_watchdog", status="fail", payload=str(e)[:500])
             time.sleep(10)
 
 

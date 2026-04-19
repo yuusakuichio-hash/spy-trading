@@ -30,6 +30,15 @@ sys.path.insert(0, str(_TRADING_DIR))
 
 from common.heartbeat import STALE_THRESHOLD_SEC, is_stale, list_components
 
+# ── 外部死活監視 ping（Pushover と独立した Tier 2 保険） ─────────────────────
+# 内部heartbeat監視デーモン自体も外部から監視される
+try:
+    from common.external_health_ping import ping_healthchecks as _ext_ping
+    _EXT_PING_OK = True
+except ImportError:
+    _EXT_PING_OK = False
+    def _ext_ping(*a, **kw) -> bool: return False  # type: ignore[misc]
+
 # ----------------------------------------------------------------
 # Pushover クライアント（共通実装があれば優先、なければ直接 requests）
 # ----------------------------------------------------------------
@@ -85,10 +94,10 @@ CHECK_INTERVAL_SEC: int = 120  # 2分毎チェック
 
 # コンポーネント → LaunchAgent ラベルのマッピング
 COMPONENT_LAUNCHD_LABEL: dict[str, str] = {
-    "chronos_agent": "com.soralab.chronos_agent",
-    "atlas_agent": "com.soralab.atlas_agent",
-    "chronos_watchdog": "com.soralab.chronos_watchdog",
-    "atlas_watchdog": "com.soralab.atlas_watchdog",
+    "chronos_agent":   "com.soralab.chronos_agent",   # launchctl確認済み 2026-04-20
+    "atlas_agent":     "com.atlas.agent",              # 修正: com.soralab.atlas_agent → com.atlas.agent
+    "chronos_watchdog": "com.chronos.watchdog",        # 修正: com.soralab.chronos_watchdog → com.chronos.watchdog
+    "atlas_watchdog":  "com.atlas.watchdog",           # 修正: com.soralab.atlas_watchdog → com.atlas.watchdog
 }
 
 # 再起動試行回数の上限（3回超えで emergency）
@@ -230,6 +239,13 @@ def run_monitor() -> None:
         priority=0,
     )
 
+    # 外部死活監視 ping（5分毎）
+    _last_ext_ping = 0.0
+    _EXT_PING_INTERVAL = 300
+
+    # 起動時に外部ping "start" 送信
+    _ext_ping("sora_heartbeat_monitor", status="start")
+
     while True:
         try:
             components = _monitored_components()
@@ -253,8 +269,15 @@ def run_monitor() -> None:
             else:
                 log.info("[MONITOR] all_healthy: components=%s", components)
 
+            # 外部死活監視 ping（5分毎・Pushover と独立した経路）
+            _now = time.time()
+            if _now - _last_ext_ping >= _EXT_PING_INTERVAL:
+                _ext_ping("sora_heartbeat_monitor", status="success")
+                _last_ext_ping = _now
+
         except Exception as exc:
             log.error("[MONITOR_ERR] %s", exc, exc_info=True)
+            _ext_ping("sora_heartbeat_monitor", status="fail", payload=str(exc)[:500])
 
         time.sleep(CHECK_INTERVAL_SEC)
 

@@ -54,6 +54,15 @@ except ImportError:
     _HEARTBEAT_OK = False
     def _write_pulse(*a, **kw): pass  # type: ignore[misc]
 
+# ── 外部死活監視 ping（Pushover と独立した Tier 2 保険） ─────────────────────
+# Chronos: CME先物Bot 系（Atlas と混同禁止）
+try:
+    from common.external_health_ping import ping_healthchecks as _ext_ping
+    _EXT_PING_OK = True
+except ImportError:
+    _EXT_PING_OK = False
+    def _ext_ping(*a, **kw) -> bool: return False  # type: ignore[misc]
+
 # ── 市場カレンダー（一元管理） ────────────────────────────────────────────────
 try:
     from common.market_calendar import is_in_market_hours as _is_in_market_hours
@@ -1054,6 +1063,11 @@ def run(dry_run: bool = True, armed: bool = False, once: bool = False) -> None:
 
     _last_pulse = 0.0
     _PULSE_INTERVAL = 60  # 1分毎に heartbeat を書き込む
+    _last_ext_ping = 0.0
+    _EXT_PING_INTERVAL = 120  # 外部ping: 2分毎（Chronos系）
+
+    # 起動時に外部ping "start" 送信
+    _ext_ping("chronos_agent", status="start")
 
     while True:
         try:
@@ -1067,6 +1081,12 @@ def run(dry_run: bool = True, armed: bool = False, once: bool = False) -> None:
                 _write_pulse("chronos_agent", state="healthy", details={"fired": len(fired), "dry_run": dry_run})
                 _last_pulse = _now
 
+            # 外部死活監視 ping（2分毎・Pushover と独立した経路）
+            # Chronos: CME先物Bot エージェント（Atlas と混同禁止）
+            if _now - _last_ext_ping >= _EXT_PING_INTERVAL:
+                _ext_ping("chronos_agent", status="success")
+                _last_ext_ping = _now
+
             if once:
                 log.info("[Chronos Agent] --once 完了: fired=%d", len(fired))
                 break
@@ -1079,6 +1099,7 @@ def run(dry_run: bool = True, armed: bool = False, once: bool = False) -> None:
         except Exception as e:
             log.error("[LOOP_ERR] %s", e)
             _write_pulse("chronos_agent", state="degraded", details={"error": str(e)})
+            _ext_ping("chronos_agent", status="fail", payload=str(e)[:500])
             time.sleep(10)
 
 
