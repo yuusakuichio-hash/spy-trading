@@ -173,6 +173,24 @@ except ImportError:
     _JUDGEMENT_AVAILABLE = False
     log.warning("[MFFUStrategySelector] judgement_logic not available: sentiment bias disabled")
 
+# ── F12 Cumulative Delta 統合（後方互換: ImportError 時は無効化）─────────────────
+try:
+    from chronos_cumulative_delta import CumulativeDelta, calc_bid_ask_delta, calc_volume_ratio
+    _CUMULATIVE_DELTA_AVAILABLE = True
+    log.info("[MFFUStrategySelector] chronos_cumulative_delta: loaded")
+except ImportError:
+    _CUMULATIVE_DELTA_AVAILABLE = False
+    log.warning("[MFFUStrategySelector] chronos_cumulative_delta not available: F12 disabled")
+
+# ── F13 Liquidity Sweep 統合（後方互換: ImportError 時は無効化）──────────────────
+try:
+    from chronos_liquidity_sweep import LiquiditySweepDetector, SweepSignal
+    _LIQUIDITY_SWEEP_AVAILABLE = True
+    log.info("[MFFUStrategySelector] chronos_liquidity_sweep: loaded")
+except ImportError:
+    _LIQUIDITY_SWEEP_AVAILABLE = False
+    log.warning("[MFFUStrategySelector] chronos_liquidity_sweep not available: F13 disabled")
+
 
 def _fallback_compute_dynamic_vix_thresholds(vix_history: list[float]) -> dict:
     """strategy_selector が import できない場合のフォールバック。"""
@@ -206,6 +224,93 @@ CONSISTENCY_SAFETY_PCT = 0.35
 # Daily loss フロア（EOD DD $2,000 の 3%相当）
 # $50K 口座: $50,000 × 0.03 = $1,500
 DAILY_LOSS_FLOOR_PCT = 0.03
+
+
+def get_atr_regime(atr_14d: float, atr_history_60d: list[float]) -> str:
+    """
+    ATR14日値と60日分のATR履歴から現在のボラティリティレジームを動的分類する。
+
+    固定閾値ハードコード禁止 (feedback_no_fixed_params.md)。
+    60日分位数から閾値を動的算出する。
+
+    Args:
+        atr_14d:          現在の14日ATR値 (例: MESなら価格ポイント単位)
+        atr_history_60d:  過去60日分のATR値リスト (古い順)
+
+    Returns:
+        "low"     — P25以下: 低ボラ (size縮小)
+        "normal"  — P25〜P75: 通常
+        "high"    — P75〜P90: 高ボラ (size拡大)
+        "extreme" — P90超: 超高ボラ (逆張り抑制・size大幅縮小)
+    """
+    history = [x for x in atr_history_60d if x > 0]
+
+    if not history or len(history) < 5:
+        # 履歴不足: normalとして扱う (フォールバック)
+        log.warning(
+            f"[ATRRegime] atr_history_60d 不足 ({len(history)}件) → normal"
+        )
+        return "normal"
+
+    sorted_h = sorted(history)
+    n = len(sorted_h)
+
+    def _percentile(data: list[float], pct: float) -> float:
+        """線形補間パーセンタイル。"""
+        idx = pct / 100.0 * (len(data) - 1)
+        lo  = int(idx)
+        hi  = min(lo + 1, len(data) - 1)
+        frac = idx - lo
+        return data[lo] * (1.0 - frac) + data[hi] * frac
+
+    p25 = _percentile(sorted_h, 25)
+    p75 = _percentile(sorted_h, 75)
+    p90 = _percentile(sorted_h, 90)
+
+    if atr_14d <= p25:
+        regime = "low"
+    elif atr_14d <= p75:
+        regime = "normal"
+    elif atr_14d <= p90:
+        regime = "high"
+    else:
+        regime = "extreme"
+
+    log.info(
+        f"[ATRRegime] atr_14d={atr_14d:.2f} "
+        f"p25={p25:.2f} p75={p75:.2f} p90={p90:.2f} "
+        f"→ regime={regime}"
+    )
+    return regime
+
+
+def apply_atr_regime_to_size(base_size_pct: float, atr_regime: str) -> float:
+    """
+    ATRレジームに応じてsize_pctに乗数を適用する。
+
+    乗数はVIX帯と同列に扱う (chronos_strategy_selector.py 設計方針)。
+    数値はchronosrules.yaml の atr_regime_multipliers セクションから動的参照も可。
+
+    Args:
+        base_size_pct: 乗数適用前のsize_pct
+        atr_regime:    get_atr_regime() の戻り値
+
+    Returns:
+        調整後のsize_pct (0.0以上1.0以下にクランプ)
+    """
+    multipliers = {
+        "low":     0.8,   # 低ボラ: 機会が少ない → 縮小
+        "normal":  1.0,   # 通常: 変化なし
+        "high":    1.2,   # 高ボラ: ORBトレンド環境 → 拡大
+        "extreme": 0.5,   # 超高ボラ: 逆張り抑制・損失リスク急増 → 大幅縮小
+    }
+    mult = multipliers.get(atr_regime, 1.0)
+    adjusted = max(0.0, min(1.0, base_size_pct * mult))
+    log.info(
+        f"[ATRRegime] size_pct {base_size_pct:.2f} × {mult} "
+        f"(regime={atr_regime}) → {adjusted:.2f}"
+    )
+    return adjusted
 
 
 def _is_orb_window(time_et: str) -> bool:
@@ -303,16 +408,19 @@ def select_futures_strategy(env: dict) -> list[dict]:
     """
     strategies = []
 
-    vix         = env.get("vix", 20.0)
-    vix_history = env.get("vix_history", [])
-    vix_z       = env.get("vix_z", 0.0)
-    time_et     = env.get("time_et", "00:00")
-    gap_pct     = env.get("gap_pct", 0.0)
-    pnl_day     = env.get("account_pnl_day", 0.0)
-    pnl_month   = env.get("account_pnl_month", 0.0)
-    balance     = env.get("account_balance", 50_000.0)
-    cons_used   = env.get("consistency_used_pct", 0.0)
-    sma_state   = env.get("sma20_vs_sma50", None)
+    vix           = env.get("vix", 20.0)
+    vix_history   = env.get("vix_history", [])
+    vix_z         = env.get("vix_z", 0.0)
+    time_et       = env.get("time_et", "00:00")
+    gap_pct       = env.get("gap_pct", 0.0)
+    pnl_day       = env.get("account_pnl_day", 0.0)
+    pnl_month     = env.get("account_pnl_month", 0.0)
+    balance       = env.get("account_balance", 50_000.0)
+    cons_used     = env.get("consistency_used_pct", 0.0)
+    sma_state     = env.get("sma20_vs_sma50", None)
+    atr_14d       = env.get("atr_14d", 0.0)
+    atr_history   = env.get("atr_history_60d", [])
+    atr_regime    = get_atr_regime(atr_14d, atr_history) if atr_14d > 0 and atr_history else "normal"
 
     # ── ステージ1: MFFUルール絶対チェック ──────────────────────────────────────
 
@@ -530,39 +638,42 @@ def select_futures_strategy(env: dict) -> list[dict]:
             # panic帯: 2/3サイズで稼働（大波乱対応）
             base_size = 0.67
             tod_size  = _apply_tod("orb", base_size)
+            atr_size  = apply_atr_regime_to_size(tod_size, atr_regime)
             strategies.append({
                 "strategy":   "orb",
-                "size_pct":   tod_size,
+                "size_pct":   atr_size,
                 "confidence": 0.80,
                 "reason":     (
                     f"VIX={vix:.1f}({vix_band}) ORB panic帯 "
-                    f"size={tod_size:.2f} (TOD adjusted from {base_size})"
+                    f"size={atr_size:.2f} (TOD={tod_size:.2f} ATR={atr_regime})"
                 ),
             })
         elif vix_band == "high":
             # high帯: フルサイズ（11年BT最優秀帯）
             base_size = 1.0
             tod_size  = _apply_tod("orb", base_size)
+            atr_size  = apply_atr_regime_to_size(tod_size, atr_regime)
             strategies.append({
                 "strategy":   "orb",
-                "size_pct":   tod_size,
+                "size_pct":   atr_size,
                 "confidence": 0.85,
                 "reason":     (
                     f"VIX={vix:.1f}({vix_band}) ORB最優秀帯 "
-                    f"size={tod_size:.2f} (TOD adjusted)"
+                    f"size={atr_size:.2f} (TOD={tod_size:.2f} ATR={atr_regime})"
                 ),
             })
         elif vix_band == "mid":
             # mid帯: 50%サイズ（期待値低いが取引機会確保）
             base_size = 0.5
             tod_size  = _apply_tod("orb", base_size)
+            atr_size  = apply_atr_regime_to_size(tod_size, atr_regime)
             strategies.append({
                 "strategy":   "orb",
-                "size_pct":   tod_size,
+                "size_pct":   atr_size,
                 "confidence": 0.55,
                 "reason":     (
                     f"VIX={vix:.1f}({vix_band}) ORB準備枠 "
-                    f"size={tod_size:.2f} (TOD adjusted from {base_size})"
+                    f"size={atr_size:.2f} (TOD={tod_size:.2f} ATR={atr_regime})"
                 ),
             })
         # vix_band == "low" → ORB不採用（11年BTで月利-22%）
@@ -835,6 +946,130 @@ def select_futures_strategy(env: dict) -> list[dict]:
         _in_result = any(s["strategy"].startswith(_sn.split("_long")[0].split("_short")[0]) for s in strategies)
         log.debug(f"[StrategyCheck] {_sn}: in_result={_in_result}")
 
+    # ── ステージ6: F12 Cumulative Delta バイアス適用 ──────────────────────────────
+    # cumulative_delta_bias が env に入っている場合、各戦術の size_pct に乗数を適用する。
+    # CumulativeDelta.get_strategy_bias() から取得した dict を env["cumulative_delta_bias"] に渡す。
+    # bid_volume / ask_volume が env にある場合は delta をその場で計算する。
+
+    if _CUMULATIVE_DELTA_AVAILABLE:
+        cd_bias = env.get("cumulative_delta_bias", None)
+
+        # bid/ask volume が直接渡された場合はその場で delta_sign を計算
+        bid_vol = env.get("bid_volume", None)
+        ask_vol = env.get("ask_volume", None)
+        if cd_bias is None and bid_vol is not None and ask_vol is not None:
+            delta = calc_bid_ask_delta(bid_vol, ask_vol)
+            vol_ratio = calc_volume_ratio(max(ask_vol, 0.0), max(bid_vol, 0.0))
+            cd_bias = {
+                "bias":       "bullish" if delta > 0 else ("bearish" if delta < 0 else "neutral"),
+                "current":    delta,
+                "recent_5m":  delta,
+                "divergence": "aligned",
+                "confidence": min(abs(delta) / 10_000.0, 1.0),
+            }
+            log.info(
+                f"[MFFUStrategySelector] F12 bid_ask_delta: "
+                f"ask={ask_vol:.0f} bid={bid_vol:.0f} delta={delta:.0f} "
+                f"vol_ratio={vol_ratio:.3f} bias={cd_bias['bias']}"
+            )
+
+        if cd_bias is not None:
+            bias_dir = cd_bias.get("bias", "neutral")
+            divergence = cd_bias.get("divergence", "aligned")
+
+            # バイアスと一致しない戦術のサイズを縮小
+            for s in strategies:
+                if s["strategy"] == "no_trade":
+                    continue
+                strat_dir = None
+                if s["strategy"] in ("orb", "vix_mr_long", "level_trading",
+                                     "volume_profile_long", "econ_event_long",
+                                     "range_break_long"):
+                    strat_dir = "bullish"
+                elif s["strategy"] in ("volume_profile_short", "econ_event_short",
+                                       "range_break_short"):
+                    strat_dir = "bearish"
+
+                if strat_dir and bias_dir not in ("neutral",):
+                    if strat_dir != bias_dir:
+                        # 方向不一致: size を 10% 縮小
+                        orig_size = s["size_pct"]
+                        s["size_pct"] = max(0.0, s["size_pct"] * 0.9)
+                        log.info(
+                            f"[F12 CumulativeDelta] size reduced: "
+                            f"strategy={s['strategy']} bias={bias_dir} "
+                            f"size {orig_size:.2f}→{s['size_pct']:.2f}"
+                        )
+                    elif divergence == "bullish_divergence" and strat_dir == "bullish":
+                        # 強気乖離 × 強気戦術: size を 10% 拡大
+                        s["size_pct"] = min(1.0, s["size_pct"] * 1.1)
+                    elif divergence == "bearish_divergence" and strat_dir == "bearish":
+                        # 弱気乖離 × 弱気戦術: size を 10% 拡大
+                        s["size_pct"] = min(1.0, s["size_pct"] * 1.1)
+
+            log.info(
+                f"[MFFUStrategySelector] F12 cumulative_delta applied: "
+                f"bias={bias_dir} divergence={divergence} "
+                f"current={cd_bias.get('current', 0):.0f}"
+            )
+    else:
+        log.debug("[MFFUStrategySelector] F12 cumulative_delta: module unavailable, skipped")
+
+    # ── ステージ7: F13 Liquidity Sweep エントリーシグナル追加 ────────────────────
+    # liquidity_sweep_signal が env に入っている場合、liquidity_sweep_reversal 戦術を追加する。
+    # LiquiditySweepDetector.get_entry_signal() から取得した dict を
+    # env["liquidity_sweep_signal"] に渡す。
+
+    if _LIQUIDITY_SWEEP_AVAILABLE:
+        sweep_signal = env.get("liquidity_sweep_signal", None)
+
+        if sweep_signal is not None:
+            sig_dir     = sweep_signal.get("signal", "")
+            sig_conf    = sweep_signal.get("confidence", 0.0)
+            sig_reason  = sweep_signal.get("reason", "")
+            level_type  = sweep_signal.get("level_type", "")
+            level_price = sweep_signal.get("level_price", 0.0)
+
+            # 最低信頼度 (chronos_rules.yaml: liquidity_sweep.min_confidence = 0.60)
+            min_conf = 0.60
+
+            if sig_dir in ("long", "short") and sig_conf >= min_conf:
+                sweep_strat_name = f"liquidity_sweep_reversal_{sig_dir}"
+                # sweep reversal は保守的サイズ (0.5)
+                sweep_size = min(sig_conf * 0.7, 0.5)
+
+                # prev_high_sweep / prev_low_sweep をログで確認できるように
+                if level_type in ("prev_high", "ib_high"):
+                    liq_level_tag = "prev_high_sweep"
+                else:
+                    liq_level_tag = "prev_low_sweep"
+
+                strategies.append({
+                    "strategy":   sweep_strat_name,
+                    "size_pct":   sweep_size,
+                    "confidence": sig_conf,
+                    "reason":     (
+                        f"[F13 LiquiditySweep] {liq_level_tag}: "
+                        f"level={level_price:.2f} "
+                        f"direction={sig_dir} "
+                        f"conf={sig_conf:.2f} "
+                        f"size={sweep_size:.2f} "
+                        f"| {sig_reason}"
+                    ),
+                })
+                log.info(
+                    f"[MFFUStrategySelector] F13 liquidity_sweep_reversal added: "
+                    f"dir={sig_dir} level={level_type}@{level_price:.2f} "
+                    f"conf={sig_conf:.2f} size={sweep_size:.2f}"
+                )
+            elif sig_conf < min_conf:
+                log.info(
+                    f"[MFFUStrategySelector] F13 sweep signal skipped: "
+                    f"confidence={sig_conf:.2f} < min={min_conf}"
+                )
+    else:
+        log.debug("[MFFUStrategySelector] F13 liquidity_sweep: module unavailable, skipped")
+
     # ── フォールバック ──────────────────────────────────────────────────────────
     if not strategies:
         strategies.append({
@@ -871,6 +1106,205 @@ def select_futures_strategy(env: dict) -> list[dict]:
     )
 
     return strategies
+
+
+# ── Anchored VWAP (F11: 3→5点改善) ──────────────────────────────────────────────
+# Brian Shannon AlphaTrends 流の複数アンカー運用
+# Source: data/research_mes_trader_day_20260419.md §B-3
+# アンカー: 前日高値・前日安値・直近FOMC発表時点 の3種類
+
+def calc_anchored_vwap(
+    prices:    list[float],
+    volumes:   list[float],
+    anchor_ts: int,
+    timestamps: list[int],
+) -> Optional[float]:
+    """
+    アンカー時刻以降のデータから Anchored VWAP を計算する。
+
+    Args:
+        prices:     各バーの代表値 (HL2 or 終値推奨)
+        volumes:    各バーの出来高
+        anchor_ts:  アンカー基準のUnixタイムスタンプ（この時刻以降を使用）
+        timestamps: 各バーのUnixタイムスタンプ
+
+    Returns:
+        Anchored VWAP 値 (float) または None（データ不足の場合）
+
+    計算式:
+        AVWAP = sum(price_i * volume_i) / sum(volume_i)
+        ただし i はアンカー以降の全バー
+    """
+    if not prices or not volumes or not timestamps:
+        return None
+    if len(prices) != len(volumes) or len(prices) != len(timestamps):
+        log.warning(
+            f"[AnchoredVWAP] length mismatch: "
+            f"prices={len(prices)} volumes={len(volumes)} timestamps={len(timestamps)}"
+        )
+        return None
+
+    cumulative_pv  = 0.0
+    cumulative_vol = 0.0
+
+    for price, vol, ts in zip(prices, volumes, timestamps):
+        if ts < anchor_ts:
+            continue
+        if vol <= 0:
+            continue
+        cumulative_pv  += price * vol
+        cumulative_vol += vol
+
+    if cumulative_vol <= 0:
+        log.warning(
+            f"[AnchoredVWAP] no volume after anchor_ts={anchor_ts}: "
+            "データ不足 → None"
+        )
+        return None
+
+    avwap = cumulative_pv / cumulative_vol
+    log.debug(
+        f"[AnchoredVWAP] anchor_ts={anchor_ts} "
+        f"bars={sum(1 for ts in timestamps if ts >= anchor_ts)} "
+        f"avwap={avwap:.4f}"
+    )
+    return avwap
+
+
+def get_anchored_vwap_set(
+    prices:     list[float],
+    volumes:    list[float],
+    timestamps: list[int],
+    prev_day_high_ts:  Optional[int] = None,
+    prev_day_low_ts:   Optional[int] = None,
+    last_fomc_ts:      Optional[int] = None,
+) -> dict[str, Optional[float]]:
+    """
+    3アンカー（前日高値・前日安値・直近FOMC）の Anchored VWAP セットを返す。
+
+    Args:
+        prices:          各バーの代表値
+        volumes:         各バーの出来高
+        timestamps:      各バーのUnixタイムスタンプ
+        prev_day_high_ts: 前日高値形成時刻のUnixタイムスタンプ
+        prev_day_low_ts:  前日安値形成時刻のUnixタイムスタンプ
+        last_fomc_ts:     直近FOMC発表時刻のUnixタイムスタンプ
+
+    Returns:
+        {
+            "prev_high": float or None,  # 前日高値アンカー AVWAP
+            "prev_low":  float or None,  # 前日安値アンカー AVWAP
+            "fomc":      float or None,  # 直近FOMC アンカー AVWAP
+        }
+
+    使用例 (VWAP Reclaim戦術との統合):
+        avwap_set = get_anchored_vwap_set(...)
+        if price > avwap_set["prev_high"]:
+            # 前日高値アンカー AVWAP を価格が上回った → Reclaim確認
+            signal = "long_reclaim"
+    """
+    result: dict[str, Optional[float]] = {
+        "prev_high": None,
+        "prev_low":  None,
+        "fomc":      None,
+    }
+
+    if prev_day_high_ts is not None:
+        result["prev_high"] = calc_anchored_vwap(
+            prices, volumes, prev_day_high_ts, timestamps
+        )
+        log.info(
+            f"[AnchoredVWAP] prev_high anchor: avwap={result['prev_high']}"
+        )
+
+    if prev_day_low_ts is not None:
+        result["prev_low"] = calc_anchored_vwap(
+            prices, volumes, prev_day_low_ts, timestamps
+        )
+        log.info(
+            f"[AnchoredVWAP] prev_low anchor: avwap={result['prev_low']}"
+        )
+
+    if last_fomc_ts is not None:
+        result["fomc"] = calc_anchored_vwap(
+            prices, volumes, last_fomc_ts, timestamps
+        )
+        log.info(
+            f"[AnchoredVWAP] fomc anchor: avwap={result['fomc']}"
+        )
+
+    return result
+
+
+def check_vwap_reclaim_signal(
+    current_price: float,
+    avwap_set:     dict[str, Optional[float]],
+    tolerance_pct: float = 0.001,
+) -> Optional[dict]:
+    """
+    Anchored VWAP Reclaim シグナルを判定する。
+
+    価格が AVWAP を上回った（Reclaim）か下回った（Break）かを判定し、
+    VWAP Reclaim 戦術のエントリー根拠として使用する。
+
+    Args:
+        current_price:  現在の価格
+        avwap_set:      get_anchored_vwap_set() の戻り値
+        tolerance_pct:  AVWAP との許容乖離率（デフォルト0.1%）
+
+    Returns:
+        シグナルがある場合:
+            {
+                "signal":    "long_reclaim" | "short_break",
+                "anchor":    "prev_high" | "prev_low" | "fomc",
+                "avwap":     float,
+                "deviation": float,  # (price - avwap) / avwap
+                "reason":    str,
+            }
+        シグナルなしの場合: None
+    """
+    if not current_price:
+        return None
+
+    for anchor_name, avwap in avwap_set.items():
+        if avwap is None or avwap <= 0:
+            continue
+
+        deviation = (current_price - avwap) / avwap
+
+        # Reclaim: 価格が AVWAP を tolerance 以上上回った
+        if deviation > tolerance_pct:
+            signal = {
+                "signal":    "long_reclaim",
+                "anchor":    anchor_name,
+                "avwap":     avwap,
+                "deviation": deviation,
+                "reason":    (
+                    f"VWAP Reclaim ({anchor_name}): "
+                    f"price={current_price:.4f} > avwap={avwap:.4f} "
+                    f"({deviation:.3%})"
+                ),
+            }
+            log.info(f"[VWAPReclaim] {signal['reason']}")
+            return signal
+
+        # Break: 価格が AVWAP を tolerance 以上下回った
+        if deviation < -tolerance_pct:
+            signal = {
+                "signal":    "short_break",
+                "anchor":    anchor_name,
+                "avwap":     avwap,
+                "deviation": deviation,
+                "reason":    (
+                    f"VWAP Break ({anchor_name}): "
+                    f"price={current_price:.4f} < avwap={avwap:.4f} "
+                    f"({deviation:.3%})"
+                ),
+            }
+            log.info(f"[VWAPReclaim] {signal['reason']}")
+            return signal
+
+    return None
 
 
 def build_env_dict(
