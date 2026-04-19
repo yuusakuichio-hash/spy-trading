@@ -564,10 +564,15 @@ class TestWatchWindowGate(unittest.TestCase):
 
     # ── (f) 窓外時間 + stale → skip ──────────────────────────────────────────
     def test_f_window_outside_stale_skips_recovery(self):
-        """市場時間外(JST 07:41)で stale ファイルを検知 → recovery もアラートも発動しない。"""
+        """CME先物クローズ時間（土曜 10:00 JST）で stale → recovery もアラートも発動しない。
+
+        旧テスト: JST 07:41 月曜 = SPX オプション窓外。
+        新テスト: 土曜 10:00 JST = CME 先物週末クローズ（窓外）。
+          月曜 07:41 JST は CME 先物開場中のため、先物仕様では窓内となる。
+        """
         from datetime import datetime, timezone, timedelta
-        # JST 07:41 = 窓外 ("22:20" → "05:10")
-        fake_jst = datetime(2026, 4, 20, 7, 41, 0, tzinfo=timezone(timedelta(hours=9)))
+        # 土曜 10:00 JST = CME 先物週末クローズ（土曜 06:00 以降はクローズ）
+        fake_jst = datetime(2026, 4, 25, 10, 0, 0, tzinfo=timezone(timedelta(hours=9)))  # 2026-04-25 土曜
 
         with (
             patch("chronos_watchdog.datetime") as mock_dt,
@@ -612,6 +617,159 @@ class TestWatchWindowGate(unittest.TestCase):
             result_outside = cw._is_in_watch_window(windows)
 
         self.assertFalse(result_outside, "05:15 JST は市場時間帯窓外のはず")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CME先物 時間帯ゲートテスト（7件）
+# 正しい先物時間帯: 月曜 07:00 JST 〜 土曜 06:00 JST / デイリー休止 06:00-07:00 JST
+# ─────────────────────────────────────────────────────────────────────────────
+class TestCMEFuturesWindowGate(unittest.TestCase):
+    """CME E-mini 先物 Globex 時間帯ゲート (_is_in_futures_window_jst) の 7ケーステスト。
+
+    テスト設計根拠 (CME公式):
+      Sunday 6:00 PM ET – Friday 5:00 PM ET (Globex)
+      Daily break: 5:00-6:00 PM ET each day
+      JST換算 (夏時間 EDT+13h):
+        開場: 月曜 07:00 JST
+        閉場: 土曜 06:00 JST
+        デイリー休止: 毎日 06:00-07:00 JST
+    """
+
+    def _make_jst(self, year, month, day, hour, minute):
+        """JST datetime を生成するヘルパー。"""
+        from datetime import datetime, timezone, timedelta
+        return datetime(year, month, day, hour, minute, 0,
+                        tzinfo=timezone(timedelta(hours=9)))
+
+    def test_1_monday_07_01_jst_is_open(self):
+        """(1) 月曜 07:01 JST → 窓内（週オープン直後）。"""
+        # 2026-04-20 は月曜
+        now = self._make_jst(2026, 4, 20, 7, 1)
+        result = cw._is_in_futures_window_jst(now)
+        self.assertTrue(result, "月曜 07:01 JST は CME 先物窓内のはず")
+
+    def test_2_saturday_05_59_jst_is_open(self):
+        """(2) 土曜 05:59 JST → 窓内（週クローズ直前）。"""
+        # 2026-04-25 は土曜
+        now = self._make_jst(2026, 4, 25, 5, 59)
+        result = cw._is_in_futures_window_jst(now)
+        self.assertTrue(result, "土曜 05:59 JST は CME 先物窓内のはず")
+
+    def test_3_saturday_06_01_jst_is_closed(self):
+        """(3) 土曜 06:01 JST → 窓外（週末クローズ）。"""
+        # 2026-04-25 は土曜
+        now = self._make_jst(2026, 4, 25, 6, 1)
+        result = cw._is_in_futures_window_jst(now)
+        self.assertFalse(result, "土曜 06:01 JST は週末クローズ（窓外）のはず")
+
+    def test_4_sunday_12_00_jst_is_closed(self):
+        """(4) 日曜 12:00 JST → 窓外（日曜は全日クローズ）。"""
+        # 2026-04-26 は日曜
+        now = self._make_jst(2026, 4, 26, 12, 0)
+        result = cw._is_in_futures_window_jst(now)
+        self.assertFalse(result, "日曜 12:00 JST は全日クローズ（窓外）のはず")
+
+    def test_5_tuesday_06_30_jst_is_daily_break(self):
+        """(5) 火曜 06:30 JST → 窓外（デイリー休止 06:00-07:00）。"""
+        # 2026-04-21 は火曜
+        now = self._make_jst(2026, 4, 21, 6, 30)
+        result = cw._is_in_futures_window_jst(now)
+        self.assertFalse(result, "火曜 06:30 JST はデイリー休止中（窓外）のはず")
+
+    def test_6_tuesday_07_01_jst_is_open_after_break(self):
+        """(6) 火曜 07:01 JST → 窓内（デイリー休止明け）。"""
+        # 2026-04-21 は火曜
+        now = self._make_jst(2026, 4, 21, 7, 1)
+        result = cw._is_in_futures_window_jst(now)
+        self.assertTrue(result, "火曜 07:01 JST はデイリー休止明け（窓内）のはず")
+
+    def test_7_monday_06_59_jst_is_closed_before_open(self):
+        """(7) 月曜 06:59 JST → 窓外（週オープン前 かつ デイリー休止内）。"""
+        # 2026-04-20 は月曜
+        now = self._make_jst(2026, 4, 20, 6, 59)
+        result = cw._is_in_futures_window_jst(now)
+        self.assertFalse(result, "月曜 06:59 JST は週オープン前（窓外）のはず")
+
+    def test_boundary_saturday_06_00_is_closed(self):
+        """土曜 06:00 JST ちょうど → 窓外（境界値: 閉場開始）。"""
+        now = self._make_jst(2026, 4, 25, 6, 0)
+        result = cw._is_in_futures_window_jst(now)
+        self.assertFalse(result, "土曜 06:00 JST ちょうどは週末クローズ開始（窓外）のはず")
+
+    def test_boundary_monday_07_00_is_open(self):
+        """月曜 07:00 JST ちょうど → 窓内（境界値: 週オープン）。"""
+        now = self._make_jst(2026, 4, 20, 7, 0)
+        result = cw._is_in_futures_window_jst(now)
+        self.assertTrue(result, "月曜 07:00 JST ちょうどは週オープン（窓内）のはず")
+
+    def test_wednesday_midday_is_open(self):
+        """水曜昼間 (12:00 JST) → 窓内（通常取引中）。"""
+        now = self._make_jst(2026, 4, 22, 12, 0)
+        result = cw._is_in_futures_window_jst(now)
+        self.assertTrue(result, "水曜 12:00 JST は通常取引中（窓内）のはず")
+
+    def test_daily_break_start_06_00_is_closed(self):
+        """デイリー休止開始境界: 水曜 06:00 JST → 窓外。"""
+        now = self._make_jst(2026, 4, 22, 6, 0)
+        result = cw._is_in_futures_window_jst(now)
+        self.assertFalse(result, "水曜 06:00 JST はデイリー休止開始（窓外）のはず")
+
+    def test_daily_break_end_06_59_is_closed(self):
+        """デイリー休止中: 水曜 06:59 JST → 窓外。"""
+        now = self._make_jst(2026, 4, 22, 6, 59)
+        result = cw._is_in_futures_window_jst(now)
+        self.assertFalse(result, "水曜 06:59 JST はデイリー休止中（窓外）のはず")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# market_calendar モジュール単体テスト
+# ─────────────────────────────────────────────────────────────────────────────
+class TestMarketCalendarCMEFutures(unittest.TestCase):
+    """common.market_calendar.is_in_market_hours("cme_futures", ...) の単体テスト。"""
+
+    def setUp(self):
+        """market_calendar をインポートできない場合はスキップ。"""
+        try:
+            from common.market_calendar import is_in_market_hours
+            self.is_in_market_hours = is_in_market_hours
+        except ImportError:
+            self.skipTest("common.market_calendar が利用不可")
+
+    def _make_jst(self, year, month, day, hour, minute):
+        from datetime import datetime, timezone, timedelta
+        return datetime(year, month, day, hour, minute, 0,
+                        tzinfo=timezone(timedelta(hours=9)))
+
+    def test_monday_open(self):
+        """月曜 08:00 JST → 開場。"""
+        now = self._make_jst(2026, 4, 20, 8, 0)
+        self.assertTrue(self.is_in_market_hours("cme_futures", now))
+
+    def test_saturday_closed(self):
+        """土曜 10:00 JST → 週末クローズ。"""
+        now = self._make_jst(2026, 4, 25, 10, 0)
+        self.assertFalse(self.is_in_market_hours("cme_futures", now))
+
+    def test_daily_break(self):
+        """火曜 06:30 JST → デイリー休止。"""
+        now = self._make_jst(2026, 4, 21, 6, 30)
+        self.assertFalse(self.is_in_market_hours("cme_futures", now))
+
+    def test_friday_evening_open(self):
+        """金曜 18:00 JST → 開場（閉場は土曜 06:00）。"""
+        now = self._make_jst(2026, 4, 24, 18, 0)
+        self.assertTrue(self.is_in_market_hours("cme_futures", now))
+
+    def test_spx_options_market(self):
+        """SPX オプション: 水曜 23:00 JST → 開場窓内。"""
+        now = self._make_jst(2026, 4, 22, 23, 0)
+        self.assertTrue(self.is_in_market_hours("spx_options", now))
+
+    def test_invalid_market_raises(self):
+        """未知の market 文字列は ValueError を発生させること。"""
+        now = self._make_jst(2026, 4, 20, 10, 0)
+        with self.assertRaises(ValueError):
+            self.is_in_market_hours("unknown_market", now)
 
 
 if __name__ == "__main__":
