@@ -54,6 +54,15 @@ except ImportError:
     _HEARTBEAT_OK = False
     def _write_pulse(*a, **kw): pass  # type: ignore[misc]
 
+# ── 市場カレンダー（一元管理） ────────────────────────────────────────────────
+try:
+    from common.market_calendar import is_in_market_hours as _is_in_market_hours
+    _MARKET_CALENDAR_OK = True
+except ImportError:
+    _MARKET_CALENDAR_OK = False
+    def _is_in_market_hours(market, now):  # type: ignore[misc]
+        return True
+
 # ── .env ロード ──────────────────────────────────────────────────────────────
 def _load_env_file():
     for candidate in [Path("/root/spxbot/.env"), Path(__file__).parent / ".env"]:
@@ -133,7 +142,12 @@ _DEFAULT_CFG: dict[str, Any] = {
         "chronos": "data/logs/chronos.log",
         "chronos_agent": "data/logs/chronos_agent.log",
     },
-    "market_window": {"start": "22:25", "end": "05:05"},
+    # market_window は "mode" フィールドで先物/オプションを区別する。
+    # 旧: {"start": "22:25", "end": "05:05"} は SPX オプション時間帯のコピペ誤り（2026-04-20修正）
+    # Chronos は CME E-mini 先物 (MES/MNQ) を対象とするため "cme_futures" モードを使用する。
+    # CME Globex: 月曜 07:00 JST 〜 土曜 06:00 JST / デイリー休止 06:00-07:00 JST
+    # (夏時間優先ハードコード。DST切替: 2026/11/1 に common/market_calendar.py を更新)
+    "market_window": {"mode": "cme_futures"},
     "mffu": {
         "max_loss_usd": 2000.0,
         "consistency_max_pct": 0.50,
@@ -472,16 +486,57 @@ def is_log_stale(log_path: Path, threshold_sec: int = 180) -> tuple[bool, float]
 
 # ── 市場時間チェック ─────────────────────────────────────────────────────────
 def is_market_hours_now(cfg: dict[str, Any]) -> bool:
-    """market_window（JST）内かどうかを判定する。"""
+    """market_window 設定に基づいて現在時刻が取引可能時間帯かどうかを判定する。
+
+    Chronos は CME E-mini 先物 (MES/MNQ 等) を対象とするため、
+    market_window.mode = "cme_futures" でセッション判定を行う。
+
+    CME Globex (夏時間優先・JST):
+      開場: 月曜 07:00 JST 〜 土曜 06:00 JST
+      デイリー休止: 毎日 06:00-07:00 JST
+      週末クローズ: 土曜 06:00 JST 〜 月曜 07:00 JST
+
+    旧実装 (start: "22:25", end: "05:05") は SPX オプション時間帯のコピペ誤り。
+    2026-04-20 に先物仕様へ修正済み。
+    TODO(DST切替): 2026/11/1 冬時間開始。common/market_calendar.py の定数を更新すること。
+    """
     win = cfg.get("market_window", _DEFAULT_CFG["market_window"])
+    now_jst = datetime.datetime.now(JST)
+
+    # 新形式: mode フィールドで市場を指定
+    mode = win.get("mode")
+    if mode == "cme_futures":
+        if _MARKET_CALENDAR_OK:
+            return _is_in_market_hours("cme_futures", now_jst)
+        # フォールバック: common.market_calendar 未ロード時のインライン実装
+        weekday = now_jst.weekday()  # 0=月, 6=日
+        h = now_jst.hour
+        m = now_jst.minute
+        hm = (h, m)
+        if weekday == 5 and hm >= (6, 0):
+            return False
+        if weekday == 6:
+            return False
+        if weekday == 0 and hm < (7, 0):
+            return False
+        if (6, 0) <= hm < (7, 0):
+            return False
+        return True
+
+    if mode == "spx_options":
+        if _MARKET_CALENDAR_OK:
+            return _is_in_market_hours("spx_options", now_jst)
+        # フォールバック: 旧 start/end 形式
+        hm_str = now_jst.strftime("%H:%M")
+        return hm_str >= "22:20" or hm_str <= "05:10"
+
+    # 後方互換: 旧形式 {"start": "HH:MM", "end": "HH:MM"}
     start = win.get("start", "22:25")
     end   = win.get("end", "05:05")
-    now = datetime.datetime.now(JST)
-    hm = now.strftime("%H:%M")
+    hm_str = now_jst.strftime("%H:%M")
     if start >= end:
-        # 日跨ぎ（22:25〜翌05:05）
-        return hm >= start or hm <= end
-    return start <= hm <= end
+        return hm_str >= start or hm_str <= end
+    return start <= hm_str <= end
 
 
 # ── アカウント state.json 読み込み ────────────────────────────────────────────
@@ -992,7 +1047,7 @@ def run(dry_run: bool = True, armed: bool = False, once: bool = False) -> None:
             f"chronos_agent.py 起動\n"
             f"dry_run: {'ON' if dry_run else 'OFF (ARMED)'}\n"
             f"cycle: {cycle_interval}秒\n"
-            f"市場時間: {cfg.get('market_window', {})}"
+            f"市場時間: CME先物24H (mode={cfg.get('market_window', {}).get('mode', '?')})"
         ),
         priority=0,
     )
@@ -1080,7 +1135,12 @@ def main() -> None:
     if args.selftest:
         cfg = load_config()
         log.info("[Chronos Agent] selftest: config OK. mffu=%s", cfg.get("mffu"))
-        log.info("[Chronos Agent] selftest: market_window=%s", cfg.get("market_window"))
+        mw = cfg.get("market_window", {})
+        mw_mode = mw.get("mode", "legacy_hhmm")
+        log.info(
+            "[Chronos Agent] selftest: market_window=%s mode=%s (CME先物24H仕様)",
+            mw, mw_mode,
+        )
         log.info("[Chronos Agent] selftest: YAML_AVAILABLE=%s KILL_SWITCH_AVAILABLE=%s",
                  YAML_AVAILABLE, KILL_SWITCH_AVAILABLE)
         return
