@@ -64,7 +64,12 @@ PUSHOVER_USER  = os.environ.get("PUSHOVER_USER",  "u2cevk8nktib3sr148rw2hs78ecvu
 # ── 自己回復設定 ──────────────────────────────────────────────────────────────
 RECOVERY_STATE_PATH   = BASE_DIR / "data" / "atlas_watchdog_recovery_state.json"
 RECOVERY_COOLDOWN_SEC = 600          # 試行間隔 10分
+# 実在サービス名: launchctl list | grep atlas で確認済み (2026-04-20)
+# com.atlas.agent は正しい。plist は LAUNCHCTL_PLIST_PATH で明示管理
 LAUNCHCTL_SERVICE_ID  = "com.atlas.agent"
+LAUNCHCTL_PLIST_PATH  = (
+    Path.home() / "Library" / "LaunchAgents" / "com.atlas.agent.plist"
+)
 
 # ── Pushover backoff 設定 ─────────────────────────────────────────────────────
 PUSHOVER_BACKOFF_STATE_PATH   = BASE_DIR / "data" / "atlas_pushover_backoff_state.json"
@@ -193,10 +198,17 @@ def pushover_send(title: str, message: str, priority: int = 1) -> None:
             data=data,
             timeout=10,
         )
-        if resp.status_code == 429:
+        # banned 検知: 200 OK でも body に "banned" が含まれる場合がある
+        # 参考: chronos_agent.log に {"status":0,"ip":"banned"} の記録あり
+        _body_text = resp.text[:500] if hasattr(resp, "text") else ""
+        _is_banned = "banned" in _body_text.lower()
+
+        if resp.status_code == 429 or _is_banned:
+            if _is_banned and resp.status_code != 429:
+                log.warning("[BACKOFF] 200 OK but body contains 'banned': %s", _body_text[:200])
             _pushover_consecutive_429 += 1
             log.warning(
-                "[BACKOFF] 429 received (%d/%d)",
+                "[BACKOFF] 429/banned received (%d/%d)",
                 _pushover_consecutive_429, PUSHOVER_429_MAX_CONSECUTIVE,
             )
             if _pushover_consecutive_429 >= PUSHOVER_429_MAX_CONSECUTIVE:
@@ -297,9 +309,7 @@ def _attempt_self_recovery(issue_label: str) -> None:
         log.warning(
             "[RECOVERY] attempt=%d: launchctl bootstrap 再登録 %s", attempt, LAUNCHCTL_SERVICE_ID
         )
-        plist_path = (
-            Path.home() / "Library" / "LaunchAgents" / f"{LAUNCHCTL_SERVICE_ID}.plist"
-        )
+        plist_path = LAUNCHCTL_PLIST_PATH
         try:
             subprocess.run(
                 ["launchctl", "bootout", f"gui/{os.getuid()}", str(plist_path)],
@@ -310,8 +320,8 @@ def _attempt_self_recovery(issue_label: str) -> None:
                 capture_output=True, text=True, timeout=30, shell=False,
             )
             log.info(
-                "[RECOVERY] bootstrap returncode=%d stdout=%s stderr=%s",
-                result.returncode, result.stdout.strip(), result.stderr.strip(),
+                "[RECOVERY] bootstrap returncode=%d stdout=%s stderr=%s plist=%s",
+                result.returncode, result.stdout.strip(), result.stderr.strip(), plist_path,
             )
             pushover_send(
                 "[Atlas/Watchdog] 自己回復 attempt=2",
