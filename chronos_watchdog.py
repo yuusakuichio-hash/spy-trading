@@ -34,6 +34,15 @@ from typing import Any
 
 import requests
 
+# ── 市場カレンダー（一元管理） ────────────────────────────────────────────────
+try:
+    from common.market_calendar import is_in_market_hours as _is_in_market_hours
+    _MARKET_CALENDAR_OK = True
+except ImportError:
+    _MARKET_CALENDAR_OK = False
+    def _is_in_market_hours(market, now):  # type: ignore[misc]
+        return True  # カレンダー不可の場合は常時監視（安全側）
+
 # ── Heartbeat pulse（能動監視）───────────────────────────────────────────────
 try:
     from common.heartbeat import write_pulse as _write_pulse
@@ -80,27 +89,95 @@ CHECK_INTERVAL_SEC = 10            # ログ tail チェック間隔（秒）
 JST = timezone(timedelta(hours=9))
 
 # ── 監視対象定義（時間帯ゲート付き） ──────────────────────────────────────────
-# watch_windows_jst: [(開始HH:MM, 終了HH:MM), ...] JST表記
-# 窓が日をまたぐ場合（例: 22:20〜05:10）は正しく処理する。
-# 将来的に config/watch_targets.yaml に移す余地を残す（現在は .py にハードコード）。
+# market_type: "cme_futures" | "spx_options" | None（常時監視）
+# common.market_calendar.is_in_market_hours() に委譲することで一元管理。
+#
+# 旧実装 watch_windows_jst=[("22:20","05:10")] は SPX オプション時間帯のコピペ誤り。
+# Chronos は CME E-mini 先物 (MES/MNQ) を対象とするため "cme_futures" を使用する。
+# CME Globex: 月曜 07:00 JST 〜 土曜 06:00 JST / デイリー休止 06:00-07:00 JST
+# (夏時間優先ハードコード。DST切替時は common/market_calendar.py の定数を更新すること)
 WATCH_TARGETS = [
     {
         "path": BASE_DIR / "data" / "logs" / "chronos.log",
-        # chronos_bot は 22:25 JST 市場オープン時のみ起動 → 市場時間帯のみ監視
-        "watch_windows_jst": [("22:20", "05:10")],
+        # chronos_bot は CME 先物セッション中のみ起動 → 先物時間帯のみ監視
+        # 旧: watch_windows_jst=[("22:20","05:10")] は SPX帯の誤り（2026-04-20修正）
+        "market_type": "cme_futures",
         "service": "com.soralab.chronos_bot",
     },
     {
         "path": BASE_DIR / "data" / "logs" / "chronos_agent.log",
-        # chronos_agent は常時起動
-        "watch_windows_jst": [("00:00", "23:59")],
+        # chronos_agent は常時起動 → 全時間帯監視
+        "market_type": None,
         "service": "com.soralab.chronos_agent",
     },
 ]
 
 
+def _is_in_futures_window_jst(now_jst: datetime) -> bool:
+    """CME E-mini 先物 Globex の取引可能時間帯かどうかを判定する。
+
+    common.market_calendar が利用可能な場合はそちらに委譲する。
+    利用不可の場合はインライン実装でフォールバックする（単一責任の原則を維持）。
+
+    CME Globex (夏時間 EDT = JST - 13h):
+      開場: 月曜 07:00 JST〜土曜 06:00 JST (週末クローズ)
+      デイリー休止: 毎日 06:00-07:00 JST
+
+    TODO(DST切替): 2026/11/1 冬時間開始。デイリー休止が 07:00-08:00 JST に変わる。
+      common/market_calendar.py の CME_DAILY_BREAK_* と CME_OPEN_WEEKDAY_HOUR_JST を更新すること。
+    """
+    if _MARKET_CALENDAR_OK:
+        return _is_in_market_hours("cme_futures", now_jst)
+
+    # ── フォールバック実装（common.market_calendar 未ロード時）──────────────
+    weekday = now_jst.weekday()  # 0=月, 6=日
+    h = now_jst.hour
+    m = now_jst.minute
+    hm = (h, m)
+
+    # 週末クローズ
+    if weekday == 5 and hm >= (6, 0):
+        return False
+    if weekday == 6:
+        return False
+    if weekday == 0 and hm < (7, 0):
+        return False
+
+    # デイリー休止: 毎日 06:00-07:00 JST
+    if (6, 0) <= hm < (7, 0):
+        return False
+
+    return True
+
+
+def _is_in_watch_window_for_target(target: dict) -> bool:
+    """WATCH_TARGETS エントリの market_type に応じて時間帯ゲートを判定する。
+
+    market_type が None の場合は常時 True（常時監視）を返す。
+    """
+    market_type = target.get("market_type")
+    if market_type is None:
+        return True
+
+    now_jst = datetime.now(tz=JST)
+
+    if market_type == "cme_futures":
+        return _is_in_futures_window_jst(now_jst)
+    elif market_type == "spx_options":
+        if _MARKET_CALENDAR_OK:
+            return _is_in_market_hours("spx_options", now_jst)
+        # フォールバック: 日跨ぎ窓 22:20〜05:10 JST
+        hm = (now_jst.hour, now_jst.minute)
+        return hm >= (22, 20) or hm <= (5, 10)
+
+    return True  # 未知の market_type は安全側（常時監視）
+
+
 def _is_in_watch_window(windows_jst: list[tuple[str, str]]) -> bool:
-    """現在時刻(JST)が watch_windows_jst の何れかの窓内にあるか判定する。
+    """後方互換: HH:MM タプルリストで直接窓を指定する旧 API。
+
+    新規コードは _is_in_watch_window_for_target() を使用すること。
+    atlas_watchdog.py の既存テストが参照するため残す。
 
     窓が日をまたぐ場合（例: "22:20" → "05:10"）も正しく処理する。
     """
@@ -553,9 +630,12 @@ def check_pattern(line: str, now: float) -> list[tuple[str, int]]:
 def run_health_check(watch_paths: list[Path]) -> None:
     """5分毎のヘルスチェック: 監視対象ファイルの存在とサイズを確認する。
 
-    WATCH_TARGETS に定義された watch_windows_jst で時間帯ゲートを実施する。
+    WATCH_TARGETS の market_type で時間帯ゲートを実施する。
     窓外の場合は skip（alert なし・recovery 試行なし）。
     recovery attempt=1→kickstart, attempt=2→bootstrap, attempt>=3→人間介入要求。
+
+    Chronos は CME 先物 (cme_futures) を対象とするため、
+    chronos.log の監視は月曜 07:00〜土曜 06:00 JST（デイリー休止 06:00-07:00 除く）。
     """
     log.info("[HealthCheck] 開始: %d ファイル監視中", len(watch_paths))
     issues: list[str] = []
@@ -568,13 +648,21 @@ def run_health_check(watch_paths: list[Path]) -> None:
 
     for p in watch_paths:
         target = target_map.get(str(p))
-        windows_jst = target["watch_windows_jst"] if target else [("00:00", "23:59")]
 
-        if not _is_in_watch_window(windows_jst):
-            now_jst = datetime.now(tz=JST).strftime("%H:%M JST")
+        # 時間帯ゲート判定
+        if target is not None:
+            in_window = _is_in_watch_window_for_target(target)
+            market_type = target.get("market_type", "unknown")
+        else:
+            # WATCH_TARGETS 外のパスは常時監視（後方互換）
+            in_window = True
+            market_type = "unknown"
+
+        if not in_window:
+            now_str = datetime.now(tz=JST).strftime("%H:%M JST (%a)")
             log.info(
-                "[HealthCheck] SKIP (窓外 %s): %s windows=%s",
-                now_jst, p.name, windows_jst,
+                "[HealthCheck] SKIP (窓外 %s): %s market_type=%s",
+                now_str, p.name, market_type,
             )
             continue
 
