@@ -32,6 +32,14 @@ if [[ "${1:-}" == "--dry-run" ]]; then
     DRY_RUN=true
 fi
 
+# --force-check: Guard 1（セッション活性度判定）を bypass する
+# token_reset_trigger.sh から呼び出される固定時刻トリガー用オプション
+# Guard 2-3 は通常通り動作する
+FORCE_CHECK=false
+if [[ "${1:-}" == "--force-check" ]]; then
+    FORCE_CHECK=true
+fi
+
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S JST')] $*" | tee -a "${LOG_FILE}"
 }
@@ -99,10 +107,13 @@ claude_process_exists() {
 # Guard B (先行): rate_limit 状態を能動検知
 #   "limit/rate/429/overloaded/capacity" 検知時は Guard A をバイパス
 #   → auto_resume が強制介入モードへ進む
+#
+# --force-check フラグが立っている場合もこのチェックをスキップ
+# （token_reset_trigger.sh 側で既にチェック済みのため）
 # ----------------------------------------------------------------
 RATE_LIMITED=false
 
-if [[ "${DRY_RUN}" == "false" ]]; then
+if [[ "${DRY_RUN}" == "false" ]] && [[ "${FORCE_CHECK}" == "false" ]]; then
     LIMIT_CHECK=$(claude -p "echo ok" --output-format text 2>&1 | head -c 500 || true)
     if echo "${LIMIT_CHECK}" | grep -qiE "limit|rate|429|overloaded|capacity"; then
         RATE_LIMITED=true
@@ -113,13 +124,17 @@ fi
 # ----------------------------------------------------------------
 # Guard A: セッション活性度判定（A+Bハイブリッド）
 #
-#  条件 | claudeプロセス | mtime経過 | rate_limited | 判定
-#  1    | あり           | 30分未満  | false        | skip (active_session_recent_activity)
-#  2    | あり           | 30分以上  | false        | 介入 (stale_session_frozen_detected)
-#  3    | あり/なし      | 任意      | true         | 介入 (rate_limited_bypass)
-#  4    | なし           | 任意      | false        | 介入 (no_claude_process)
+#  条件 | claudeプロセス | mtime経過 | rate_limited | force_check | 判定
+#  1    | あり           | 30分未満  | false        | false       | skip
+#  2    | あり           | 30分以上  | false        | false       | 介入
+#  3    | あり/なし      | 任意      | true         | false       | 介入
+#  4    | なし           | 任意      | false        | false       | 介入
+#  5    | 任意           | 任意      | 任意         | true        | Guard 1 bypass → 直接 Guard 2へ
 # ----------------------------------------------------------------
-if [[ "${RATE_LIMITED}" == "false" ]]; then
+if [[ "${FORCE_CHECK}" == "true" ]]; then
+    # ケース5: --force-check → Guard 1 を完全 bypass
+    log_poll "state=force_check_bypass (Guard 1 bypassed by token_reset_trigger) → proceeding to Guard 2"
+elif [[ "${RATE_LIMITED}" == "false" ]]; then
     if claude_process_exists; then
         STALE_SECS=$(session_stale_seconds)
         if [[ "${STALE_SECS}" -lt "${ACTIVE_SESSION_THRESHOLD}" ]]; then
