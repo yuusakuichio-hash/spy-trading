@@ -29,7 +29,7 @@ import sys
 import time
 import logging
 from collections import defaultdict, deque
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -72,6 +72,47 @@ WATCHDOG_LOG = BASE_DIR / "data" / "logs" / "atlas_watchdog.log"
 
 HEALTH_CHECK_INTERVAL_SEC = 300   # 5分毎 health check
 CHECK_INTERVAL = 10                # ログ tail チェック間隔（秒）
+
+JST = timezone(timedelta(hours=9))
+
+# ── 監視対象定義（時間帯ゲート付き） ──────────────────────────────────────────
+# watch_windows_jst: [(開始HH:MM, 終了HH:MM), ...] JST表記
+# 窓が日をまたぐ場合（例: 22:20〜05:10）は正しく処理する。
+# 将来的に config/watch_targets.yaml に移す余地を残す（現在は .py にハードコード）。
+WATCH_TARGETS = [
+    {
+        "path": BASE_DIR / "data" / "logs" / "condor.log",
+        # Atlas (spy_bot/atlas_agent) は 22:25 JST 市場オープン時のみ起動 → 市場時間帯のみ監視
+        "watch_windows_jst": [("22:20", "05:10")],
+        "service": "com.atlas.agent",
+    },
+]
+
+
+def _is_in_watch_window(windows_jst: list[tuple[str, str]]) -> bool:
+    """現在時刻(JST)が watch_windows_jst の何れかの窓内にあるか判定する。
+
+    窓が日をまたぐ場合（例: "22:20" → "05:10"）も正しく処理する。
+    """
+    now_jst = datetime.now(tz=JST)
+    now_minutes = now_jst.hour * 60 + now_jst.minute
+
+    for start_str, end_str in windows_jst:
+        sh, sm = (int(x) for x in start_str.split(":"))
+        eh, em = (int(x) for x in end_str.split(":"))
+        start_min = sh * 60 + sm
+        end_min   = eh * 60 + em
+
+        if start_min <= end_min:
+            # 同日内の窓（例: 00:00〜23:59）
+            if start_min <= now_minutes <= end_min:
+                return True
+        else:
+            # 日跨ぎ窓（例: 22:20〜05:10）
+            if now_minutes >= start_min or now_minutes <= end_min:
+                return True
+
+    return False
 
 PUSHOVER_TOKEN = os.environ.get("PUSHOVER_TOKEN", "a5rb9ipb3yrdanv3vk4n8x28qt7io9")
 PUSHOVER_USER  = os.environ.get("PUSHOVER_USER",  "u2cevk8nktib3sr148rw2hs78ecvux")
@@ -426,15 +467,32 @@ def check_patterns(lines: list[str]) -> None:
 def run_health_check(watch_paths: list[str]) -> None:
     """5分毎のヘルスチェック: 監視対象ファイルの存在とサイズを確認する。
 
-    更新停止を検知したとき、通知の前に自己回復を試みる。
+    WATCH_TARGETS に定義された watch_windows_jst で時間帯ゲートを実施する。
+    窓外の場合は skip（alert なし・recovery 試行なし）。
     recovery attempt=1→kickstart, attempt=2→bootstrap, attempt>=3→人間介入要求。
     """
     log.info("[HealthCheck] 開始: %d ファイル監視中", len(watch_paths))
     issues: list[str] = []
     stale_detected = False
 
+    # path → WATCH_TARGETS エントリのマップを構築
+    target_map: dict[str, dict] = {
+        str(t["path"]): t for t in WATCH_TARGETS
+    }
+
     for filepath in watch_paths:
         p = Path(filepath)
+        target = target_map.get(str(p))
+        windows_jst = target["watch_windows_jst"] if target else [("00:00", "23:59")]
+
+        if not _is_in_watch_window(windows_jst):
+            now_jst = datetime.now(tz=JST).strftime("%H:%M JST")
+            log.info(
+                "[HealthCheck] SKIP (窓外 %s): %s windows=%s",
+                now_jst, p.name, windows_jst,
+            )
+            continue
+
         if not p.exists():
             issues.append(f"不存在: {p.name}")
             continue
@@ -479,7 +537,8 @@ def main():
 
     _load_backoff_state()
 
-    watch_paths = [str(LOG_PATH)]
+    # 監視対象ファイルリスト（WATCH_TARGETS から構築）
+    watch_paths = [str(t["path"]) for t in WATCH_TARGETS]
 
     # 初回は現在のファイル末尾位置から開始（過去ログはスキップ）
     try:
@@ -493,7 +552,7 @@ def main():
         "[Atlas/Watchdog] 起動",
         (
             f"atlas_watchdog.py 起動完了\n"
-            f"監視: {LOG_PATH}\n"
+            f"監視: {', '.join(watch_paths)}\n"
             f"チェック間隔: {CHECK_INTERVAL}秒 / 閾値: {WINDOW_SECONDS}秒/{THRESHOLD}件\n"
             f"自己回復: com.atlas.agent"
         ),
