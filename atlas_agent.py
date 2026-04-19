@@ -612,10 +612,15 @@ def dispatch(fired: dict, cfg: dict) -> dict:
             )
             _tmr_min = tmr_cfg.get("min_level", 3)
 
+            # BUG-9: この分岐は min_level=3 (デフォルト) のため _tmr_min <= 2 が False となり
+            # 通常は到達不可（dead code）。
+            # level2_approval_required=False かつ min_level=3 が標準設定のため
+            # 運用ブロックを防ぐための意図的な無効化設計（C7-B1修正）。
+            # min_level を 2 に変更した場合のみ有効化される安全弁として残す。
             if (tmr_enabled and l2_approval_required and
                     _tmr_min <= 2 and not _emergency_bypass and
                     atype not in ("notify_only",)):
-                # Level2 承認要求
+                # Level2 承認要求（min_level<=2 かつ level2_approval_required=True の場合のみ到達）
                 _l2_approval_body = (
                     f"[Two-Man Rule] Level2 AUTOFIX 承認要求\n"
                     f"rule: {rid}\n"
@@ -652,7 +657,21 @@ def dispatch(fired: dict, cfg: dict) -> dict:
         tmr_cfg = cfg.get("autofix", {}).get("two_man_rule", {})
         tmr_enabled = tmr_cfg.get("enabled", True) and not dry_run
         tmr_min_level = tmr_cfg.get("min_level", 3)
-        if tmr_enabled and level >= tmr_min_level:
+        # BUG-3修正: Level3 でも emergency_bypass を確認する
+        # kill_switch_activated / market_crash_detected 等があれば承認をスキップして即実行
+        _l3_emergency_bypass_conditions = tmr_cfg.get(
+            "level3_emergency_bypass_conditions",
+            tmr_cfg.get("emergency_bypass_conditions", []),
+        )
+        _l3_emergency_bypass = any(
+            cond in matched for cond in _l3_emergency_bypass_conditions
+        )
+        if _l3_emergency_bypass:
+            log(
+                f"[Two-Man Rule] Level3 emergency_bypass発動: {rid} "
+                f"matched={matched} → 承認スキップで即実行"
+            )
+        if tmr_enabled and level >= tmr_min_level and not _l3_emergency_bypass:
             # 承認要求Pushoverを送って実行ブロック
             approval_body = (
                 f"[Two-Man Rule] Level{level} アクション承認要求\n"

@@ -4482,8 +4482,9 @@ class TradeEngine:
                     )
                     return None, "idempotency_blocked"
             except Exception as _idem_err:
-                log.warning(f"[Idempotency] チェックスキップ (非致命的): {_idem_err}")
-                _idem_key = None
+                # BUG-7修正: fail-open → fail-safe。エラー時は発注を拒否する。
+                log.error(f"[Idempotency] チェック失敗 — 発注ブロック (fail-safe): {_idem_err}")
+                return None, "idempotency_check_failed"
 
         _pt_open_positions_list = self.get_open_positions()
         _pt_open_positions = len(_pt_open_positions_list)
@@ -4701,8 +4702,10 @@ class TradeEngine:
                              f"dealt_avg_price={avg_price} "
                              f"(poll {poll_idx + 1}/{max_polls})")
                 else:
+                    # BUG-2修正: FILLED_PART や待機中は fill を None に維持する
+                    # （FILLED_ALLのみ fills[order_id] = avg_price を設定）
                     fills.setdefault(order_id, None)
-                    fills[order_id] = avg_price  # 部分約定価格も更新
+                    # fills[order_id] = avg_price  # FILLED_PART でも更新していた誤実装を削除
                     still_pending.append(order_id)
                     log.debug(f"待機中: order_id={order_id} status={status} "
                               f"(poll {poll_idx + 1}/{max_polls})")
@@ -4727,8 +4730,12 @@ class TradeEngine:
                             qty: int, direction: str,
                             sell_init_price: Optional[float] = None,
                             buy_init_price: Optional[float] = None,
-                            vix: Optional[float] = None) -> bool:
+                            vix: Optional[float] = None,
+                            signal_id: Optional[str] = None) -> bool:
         """クレジットスプレッドを発注する。
+
+        BUG-1修正: signal_id 引数を追加。呼出元で決定的IDを生成して渡す。
+        signal_id が None の場合は {direction}_{sell_symbol}_{YYYYMMDDHHMM}_{uuid8} を自動生成。
 
         ENABLE_LIMIT_ENTRY=True の場合:
           - VIX <= LIMIT_HIGH_VIX_THRESHOLD → 指値注文（midプライス起点）
@@ -4738,6 +4745,15 @@ class TradeEngine:
         指値の結果（fill_method "limit" or "market_fallback" or "market"）は
         _last_entry_fills["fill_methods"] に記録される。
         """
+        # BUG-1: signal_id が未指定なら決定的IDを生成する
+        # 決定的ID: {cs}_{direction}_{sell_symbol}_{YYYYMMDDHHMM} + uuid8サフィックス
+        if signal_id is None:
+            import uuid as _uuid
+            _sell_sym = _extract_symbol_from_code(sell_code) or "UNK"
+            _ts_min = datetime.datetime.now(ET).strftime("%Y%m%d%H%M")
+            _uuid8  = _uuid.uuid4().hex[:8]
+            signal_id = f"cs_{direction}_{_sell_sym}_{_ts_min}_{_uuid8}"
+            log.debug(f"[CS] signal_id自動生成: {signal_id}")
         if DRY_TEST:
             # dry-testモード: 発注せずVirtualPositionManagerに仮想ポジションを追加
             # net_creditはオプションチェーンなしなので固定値$0.50を使用
@@ -4767,12 +4783,15 @@ class TradeEngine:
         placed = []
         order_ids = []
         fill_methods = []
-        for code, side, label, init_price in legs:
+        for leg_idx, (code, side, label, init_price) in enumerate(legs):
             time.sleep(0.5)
+            # BUG-1: signal_id を各脚に渡す（脚ごとに suffix を付与して一意性を保つ）
+            _leg_signal_id = f"{signal_id}_leg{leg_idx}" if signal_id else None
             order_id, fill_method = self._place_single_leg(
                 code, side, qty, label,
                 init_price=init_price,
                 use_limit=use_limit,
+                signal_id=_leg_signal_id,
             )
             if order_id is not None:
                 placed.append((code, side, label))
@@ -8288,20 +8307,18 @@ class ORBEngine:
         log.info(f"[ORB] 決済({reason}): {pos.direction} {remaining_qty}枚 "
                  f"@ ${exit_price:.2f} P&L=${pnl_usd:+.2f} ({pnl_pct:+.1%})")
 
-        # 本番決済注文
+        # BUG-8修正: 決済も _place_single_leg 経由で pre_trade_gate を通す
         if not self.dry_test and FUTU_AVAILABLE and self.eng and self.eng.trade_ctx:
             try:
-                ret, data = self.eng.trade_ctx.place_order(
-                    price=0, qty=remaining_qty, code=pos.code,
-                    trd_side=TrdSide.SELL,
-                    order_type=OrderType.MARKET,
-                    trd_env=self.eng.trade_env,
-                    acc_id=int(self.eng.account_id or 0),
-                    time_in_force=TimeInForce.DAY,
+                oid, fill_method = self.eng._place_single_leg(
+                    pos.code, TrdSide.SELL, remaining_qty, "orb_close",
+                    init_price=None, use_limit=False,
                 )
-                if ret != 0:
-                    log.error(f"[ORB] 決済注文失敗: {data}")
+                if oid is None:
+                    log.error(f"[ORB] 決済注文失敗: fill={fill_method}")
                     pushover_alert("[ORB] 決済注文失敗", f"{pos.code} {reason}", priority=1)
+                else:
+                    log.info(f"[ORB] 決済注文OK: oid={oid} fill={fill_method}")
             except Exception as e:
                 log.error(f"[ORB] 決済注文例外: {e}")
 
@@ -8803,9 +8820,13 @@ class CalendarEngine:
         now_et = datetime.datetime.now(ET)
         h, m = now_et.hour, now_et.minute
 
-        # フォースクローズ時刻チェック（15:45 ET）
+        # BUG-5修正: フォースクローズ時刻チェック（半日取引日は 12:30 ET に前倒し）
         if not self.dry_test:
-            if h > CALENDAR_FORCE_CLOSE_H or (h == CALENDAR_FORCE_CLOSE_H and m >= CALENDAR_FORCE_CLOSE_M):
+            if is_early_close_today():
+                _cal_fc_h, _cal_fc_m = EARLY_CLOSE_EXIT_H, EARLY_CLOSE_EXIT_M
+            else:
+                _cal_fc_h, _cal_fc_m = CALENDAR_FORCE_CLOSE_H, CALENDAR_FORCE_CLOSE_M
+            if h > _cal_fc_h or (h == _cal_fc_h and m >= _cal_fc_m):
                 return self._close_position("force_close_time")
 
         # dry_testモード: 起動7分後にIV crush シミュレート
@@ -9194,9 +9215,15 @@ class StraddleEngine:
             log.warning("[StraddleEngine] TradeContext未接続 → スキップ")
             return None
 
+        # BUG-6: signal_id生成
+        import uuid as _uuid
+        _st_sym = (self.symbol or "SPY").replace("US.", "")
+        _st_ts = datetime.datetime.now(ET).strftime('%Y%m%d%H%M')
+        _st_signal_id = f"straddle_{_st_sym}_{_st_ts}_{_uuid.uuid4().hex[:8]}"
         call_order_id, _ = self.eng._place_single_leg(
             call_code, TrdSide.BUY, qty, "straddle_call",
             init_price=None, use_limit=False,
+            signal_id=f"{_st_signal_id}_call",
         )
         if call_order_id is None:
             log.error("[StraddleEngine] CALL発注失敗 → ストラドルエントリー中止")
@@ -9205,6 +9232,7 @@ class StraddleEngine:
         put_order_id, _ = self.eng._place_single_leg(
             put_code, TrdSide.BUY, qty, "straddle_put",
             init_price=None, use_limit=False,
+            signal_id=f"{_st_signal_id}_put",
         )
         if put_order_id is None:
             log.error("[StraddleEngine] PUT発注失敗 → CALL脚のみ残留リスク")
@@ -9933,17 +9961,24 @@ class StraddleBuyEngine:
                  f"PUT:{put_code} ${put_mid:.2f} qty={qty}")
 
         if FUTU_AVAILABLE and self.eng and self.eng.trade_ctx:
+            # BUG-6: signal_id生成
+            import uuid as _uuid
+            _sb_sym = (getattr(self, "symbol", None) or "SPY").replace("US.", "")
+            _sb_ts  = datetime.datetime.now(ET).strftime('%Y%m%d%H%M')
+            _sb_signal_id = f"straddlebuy_{_sb_sym}_{_sb_ts}_{_uuid.uuid4().hex[:8]}"
             use_limit = (self.today_vix or 20.0) <= 30
             call_oid, _ = self.eng._place_single_leg(
                 code=call_code, side=TrdSide.BUY, qty=qty, label="STRADDLE_BUY_CALL",
-                init_price=call_mid if use_limit else None, use_limit=use_limit)
+                init_price=call_mid if use_limit else None, use_limit=use_limit,
+                signal_id=f"{_sb_signal_id}_call")
             if call_oid is None:
                 log.error("[STRADDLE_BUY] CALL発注失敗")
                 pushover_alert("[STRADDLE_BUY] CALL発注失敗", call_code, priority=1)
                 return None
             put_oid, _ = self.eng._place_single_leg(
                 code=put_code, side=TrdSide.BUY, qty=qty, label="STRADDLE_BUY_PUT",
-                init_price=put_mid if use_limit else None, use_limit=use_limit)
+                init_price=put_mid if use_limit else None, use_limit=use_limit,
+                signal_id=f"{_sb_signal_id}_put")
             if put_oid is None:
                 log.error("[STRADDLE_BUY] PUT発注失敗（CALL約定済み）")
                 pushover_alert("[STRADDLE_BUY] PUT発注失敗",
@@ -10051,11 +10086,17 @@ class StraddleBuyEngine:
 
         pos         = self.position
         now_et_time = datetime.datetime.now(ET).time()
-        time_stop   = datetime.time(STRADDLE_BUY_EXIT_H, STRADDLE_BUY_EXIT_M)
+        # BUG-5修正: 半日取引日は time_stop を 12:30 ET に前倒し
+        if is_early_close_today():
+            time_stop = datetime.time(EARLY_CLOSE_EXIT_H, EARLY_CLOSE_EXIT_M)
+            _ts_label = f"{EARLY_CLOSE_EXIT_H}:{EARLY_CLOSE_EXIT_M:02d}(半日)"
+        else:
+            time_stop = datetime.time(STRADDLE_BUY_EXIT_H, STRADDLE_BUY_EXIT_M)
+            _ts_label = f"{STRADDLE_BUY_EXIT_H}:{STRADDLE_BUY_EXIT_M:02d}"
 
         if not self.dry_test and now_et_time >= time_stop:
             cv = self._get_straddle_current_value(pos) or pos.entry_price_per_unit * 0.3
-            log.info("[STRADDLE_BUY] 15:50 タイムストップ")
+            log.info(f"[STRADDLE_BUY] {_ts_label} タイムストップ")
             return self._close_position(pos, cv, "time_stop")
 
         cv = self._get_straddle_current_value(pos)
@@ -10093,33 +10134,32 @@ class StraddleBuyEngine:
         log.info(f"[STRADDLE_BUY] 決済({reason}): {pos.qty}枚 "
                  f"@ ${exit_value:.2f} P&L=${pnl_usd:+.2f} ({pnl_pct:+.1%})")
 
+        # BUG-8修正: 決済も _place_single_leg 経由で pre_trade_gate を通す
         if not self.dry_test and FUTU_AVAILABLE and self.eng and self.eng.trade_ctx:
-            for code, label in [(pos.call_code, "CALL"), (pos.put_code, "PUT")]:
+            for code, label in [(pos.call_code, "straddle_call_close"), (pos.put_code, "straddle_put_close")]:
                 try:
-                    ret, data = self.eng.trade_ctx.place_order(
-                        price=0, qty=pos.qty, code=code,
-                        trd_side=TrdSide.SELL, order_type=OrderType.MARKET,
-                        trd_env=self.eng.trade_env,
-                        acc_id=int(self.eng.account_id or 0),
-                        time_in_force=TimeInForce.DAY,
+                    oid, fill_method = self.eng._place_single_leg(
+                        code, TrdSide.SELL, pos.qty, label,
+                        init_price=None, use_limit=False,
                     )
-                    if ret != 0:
-                        log.error(f"[STRADDLE_BUY] {label}決済失敗: {data}")
+                    if oid is None:
+                        log.error(f"[STRADDLE_BUY] {label}決済失敗: fill={fill_method}")
                         pushover_alert(f"[STRADDLE_BUY] {label}決済失敗",
                                        f"{code} {reason}", priority=1)
+                    else:
+                        log.info(f"[STRADDLE_BUY] {label}決済OK: oid={oid}")
                 except Exception as e:
                     log.error(f"[STRADDLE_BUY] {label}決済例外: {e}")
             for h_code, h_qty in pos.hedge_legs.items():
                 if h_qty <= 0:
                     continue
                 try:
-                    self.eng.trade_ctx.place_order(
-                        price=0, qty=abs(h_qty), code=h_code,
-                        trd_side=TrdSide.SELL, order_type=OrderType.MARKET,
-                        trd_env=self.eng.trade_env,
-                        acc_id=int(self.eng.account_id or 0),
-                        time_in_force=TimeInForce.DAY,
+                    oid, _fm = self.eng._place_single_leg(
+                        h_code, TrdSide.SELL, abs(h_qty), "straddle_hedge_close",
+                        init_price=None, use_limit=False,
                     )
+                    if oid is None:
+                        log.error(f"[STRADDLE_BUY] ヘッジレッグ決済失敗 {h_code}: fill={_fm}")
                 except Exception as e:
                     log.error(f"[STRADDLE_BUY] ヘッジレッグ決済例外 {h_code}: {e}")
 
@@ -10699,9 +10739,15 @@ class IVCrushEngine:
             premium_total = (call_mid + put_mid) * 100
             dp            = self._calc_dynamic_params(ticker)
             qty           = max(1, min(dp["max_qty"], int(cash * dp["max_risk_pct"] / premium_total)))
+            # BUG-6: signal_id生成
+            import uuid as _uuid
             import futu as ft
-            call_oid, _call_fm = self.eng._place_single_leg(call_code, ft.TrdSide.SELL, qty, "iv_crush_call_sell")
-            put_oid,  _put_fm  = self.eng._place_single_leg(put_code,  ft.TrdSide.SELL, qty, "iv_crush_put_sell")
+            _ivc_ts = datetime.datetime.now(ET).strftime('%Y%m%d%H%M')
+            _ivc_sid = f"ivcrush_{ticker}_{_ivc_ts}_{_uuid.uuid4().hex[:8]}"
+            call_oid, _call_fm = self.eng._place_single_leg(call_code, ft.TrdSide.SELL, qty, "iv_crush_call_sell",
+                                                             signal_id=f"{_ivc_sid}_call")
+            put_oid,  _put_fm  = self.eng._place_single_leg(put_code,  ft.TrdSide.SELL, qty, "iv_crush_put_sell",
+                                                             signal_id=f"{_ivc_sid}_put")
             if not call_oid or not put_oid:
                 log.warning(f"[IVCrush] 発注失敗 call_oid={call_oid}({_call_fm}) put_oid={put_oid}({_put_fm})")
                 # 片方だけ成功した場合はロールバック
@@ -11068,7 +11114,8 @@ class StrangleSellEngine:
         return best
 
     def execute_entry(self, underlying_price: float,
-                      vix: float) -> Optional[StrangleSellPosition]:
+                      vix: float,
+                      signal_id: Optional[str] = None) -> Optional[StrangleSellPosition]:
         """ストラングル売りを発注する。
 
         (1) OTM CALL を売る（delta≈0.15）
@@ -11219,10 +11266,18 @@ class StrangleSellEngine:
             return pos
 
         # 実発注: CALL売り → PUT売り
+        # BUG-6: signal_id が未指定なら決定的IDを生成
+        if signal_id is None:
+            import uuid as _uuid
+            _str_sym = (self.symbol or "SPY").replace("US.", "")
+            _str_ts = datetime.datetime.now(ET).strftime('%Y%m%d%H%M')
+            signal_id = f"strangle_{_str_sym}_{_str_ts}_{_uuid.uuid4().hex[:8]}"
         try:
             import futu as ft
-            self.eng._place_single_leg(call_code, ft.TrdSide.SELL, qty, "strangle_call_entry")
-            self.eng._place_single_leg(put_code,  ft.TrdSide.SELL, qty, "strangle_put_entry")
+            self.eng._place_single_leg(call_code, ft.TrdSide.SELL, qty, "strangle_call_entry",
+                                       signal_id=f"{signal_id}_call")
+            self.eng._place_single_leg(put_code,  ft.TrdSide.SELL, qty, "strangle_put_entry",
+                                       signal_id=f"{signal_id}_put")
         except Exception as e:
             log.warning(f"[StrangleSell] 発注エラー: {e}")
             return None
@@ -11252,10 +11307,13 @@ class StrangleSellEngine:
         now_et = datetime.datetime.now(ET)
         h, m   = now_et.hour, now_et.minute
 
-        # フォースクローズ
+        # BUG-5修正: フォースクローズ（半日取引日は 12:30 ET に前倒し）
         if not self.dry_test:
-            if (h > STRANGLE_SELL_FORCE_CLOSE_H or
-                    (h == STRANGLE_SELL_FORCE_CLOSE_H and m >= STRANGLE_SELL_FORCE_CLOSE_M)):
+            if is_early_close_today():
+                _fc_h, _fc_m = EARLY_CLOSE_EXIT_H, EARLY_CLOSE_EXIT_M
+            else:
+                _fc_h, _fc_m = STRANGLE_SELL_FORCE_CLOSE_H, STRANGLE_SELL_FORCE_CLOSE_M
+            if (h > _fc_h or (h == _fc_h and m >= _fc_m)):
                 return self._close_position("force_close_time")
 
         # dry_test: 8分後にシミュレート利確
@@ -11600,6 +11658,13 @@ class IronCondorSellEngine:
             log.info(f"[IC_SELL] execute_entry: {LAST_ENTRY_H}:{LAST_ENTRY_M:02d} ET以降 → エントリー中止")
             return None
         underlying = self.mkt.underlying_code if self.mkt else "US.SPY"
+        # BUG-6: signal_id が未指定なら決定的IDを生成
+        if signal_id is None:
+            import uuid as _uuid
+            _ic_sym = underlying.replace("US.", "")
+            _ic_ts = datetime.datetime.now(ET).strftime('%Y%m%d%H%M')
+            signal_id = f"ic_{_ic_sym}_{_ic_ts}_{_uuid.uuid4().hex[:8]}"
+            log.debug(f"[IC_SELL] signal_id自動生成: {signal_id}")
         # H-14修正: IC_SELL_EXCLUDED_SYMBOLS廃止 -> ALLOWED_SYMBOLS参照
         if not _sym_is_allowed(underlying):
             log.info(f"[IC_SELL] {underlying} はALLOWED_SYMBOLS未登録 → スキップ")
@@ -11904,10 +11969,15 @@ class IronCondorSellEngine:
         pos    = self.position
         now_et = datetime.datetime.now(ET)
 
-        if (not self.dry_test and
-                (now_et.hour, now_et.minute) >= (IC_SELL_FORCE_CLOSE_H, IC_SELL_FORCE_CLOSE_M)):
-            log.info("[IC_SELL] タイムストップ: 15:45 ET -> 強制決済")
-            return self._close_position(pos, reason="force_close_eod")
+        # BUG-5修正: 半日取引日は 12:30 ET に前倒し
+        if not self.dry_test:
+            if is_early_close_today():
+                _ic_fc_h, _ic_fc_m = EARLY_CLOSE_EXIT_H, EARLY_CLOSE_EXIT_M
+            else:
+                _ic_fc_h, _ic_fc_m = IC_SELL_FORCE_CLOSE_H, IC_SELL_FORCE_CLOSE_M
+            if (now_et.hour, now_et.minute) >= (_ic_fc_h, _ic_fc_m):
+                log.info(f"[IC_SELL] タイムストップ: {_ic_fc_h}:{_ic_fc_m:02d} ET -> 強制決済")
+                return self._close_position(pos, reason="force_close_eod")
 
         try:
             current_value = self._estimate_current_value(pos)
@@ -11999,26 +12069,26 @@ class IronCondorSellEngine:
             return True
 
         legs = [
-            (pos.put_buy_code,   "SELL", "PUT buy  cover"),
-            (pos.put_sell_code,  "BUY",  "PUT sell cover"),
-            (pos.call_buy_code,  "SELL", "CALL buy  cover"),
-            (pos.call_sell_code, "BUY",  "CALL sell cover"),
+            (pos.put_buy_code,   "SELL", "ic_put_buy_cover"),
+            (pos.put_sell_code,  "BUY",  "ic_put_sell_cover"),
+            (pos.call_buy_code,  "SELL", "ic_call_buy_cover"),
+            (pos.call_sell_code, "BUY",  "ic_call_sell_cover"),
         ]
         close_ok = True
+        # BUG-8修正: 決済も _place_single_leg 経由で pre_trade_gate を通す
+        import futu as ft
         for _code, _side_str, _label in legs:
             try:
                 _side = ft.TrdSide.BUY if _side_str == "BUY" else ft.TrdSide.SELL
-                ret, data = self.eng.trade_ctx.place_order(
-                    price=0, qty=pos.qty, code=_code, trd_side=_side,
-                    order_type=ft.OrderType.MARKET,
-                    trd_env=self.eng.trade_env,
-                    acc_id=int(self.eng.account_id or 0),
+                oid, fill_method = self.eng._place_single_leg(
+                    _code, _side, pos.qty, _label,
+                    init_price=None, use_limit=False,
                 )
-                if ret != 0:
-                    log.error(f"[IC_SELL] close {_label} NG: {data}")
+                if oid is None:
+                    log.error(f"[IC_SELL] close {_label} NG: fill={fill_method}")
                     close_ok = False
                 else:
-                    log.info(f"[IC_SELL] close {_label} OK")
+                    log.info(f"[IC_SELL] close {_label} OK: oid={oid} fill={fill_method}")
                 time.sleep(0.3)
             except Exception as _e:
                 log.error(f"[IC_SELL] close {_label} 例外: {_e}")
@@ -12709,7 +12779,11 @@ class ButterflyEngine:
         now_et = datetime.datetime.now(ET)
         h, m   = now_et.hour, now_et.minute
         now_min   = h * 60 + m
-        force_min = BUTTERFLY_FORCE_CLOSE_H * 60 + BUTTERFLY_FORCE_CLOSE_M
+        # BUG-5修正: 半日取引日は 12:30 ET に前倒し
+        if is_early_close_today():
+            force_min = EARLY_CLOSE_EXIT_H * 60 + EARLY_CLOSE_EXIT_M
+        else:
+            force_min = BUTTERFLY_FORCE_CLOSE_H * 60 + BUTTERFLY_FORCE_CLOSE_M
 
         lower_price = None
         atm_price   = None
