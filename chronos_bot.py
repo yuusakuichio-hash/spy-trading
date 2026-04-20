@@ -1278,14 +1278,20 @@ class FuturesORBStrategy:
                 return None
 
         # 発注
-        # MF-1α: idempotency key を生成して place_order に渡す（二重発注防止）
-        # retry 時は同じ key を使用することで Tradovate が重複を検知して拒否する。
-        _client_order_id = self._next_client_order_id() if hasattr(self, '_next_client_order_id') else None
+        # δ-1 (γ-2真統合): logical_order_id を渡して決定的 hash key を生成する。
+        # retry 時に同じ symbol/side/qty/timestamp_bucket で同じ key が生成され
+        # _is_order_sent() が True を返すことで二重発注を物理的に防ぐ。
+        import time as _time_mod_orb
+        _logical_order_id = f"{symbol}-{action}-{n_contracts}-{int(_time_mod_orb.time()//10)}"
+        _client_order_id = (
+            self._next_client_order_id(logical_order_id=_logical_order_id)
+            if hasattr(self, '_next_client_order_id') else None
+        )
         # β-2: retry/backoff コールパス — place_order 前に _is_order_sent() 確認（二重発注防止）
         if _client_order_id and hasattr(self, '_is_order_sent') and self._is_order_sent(_client_order_id):
             log.warning(
-                "[FuturesORB][MF-1α] retry abort: key=%s already sent — skipping duplicate order",
-                _client_order_id,
+                "[FuturesORB][MF-1α] retry abort: key=%s logical=%s already sent — skipping duplicate order",
+                _client_order_id, _logical_order_id,
             )
             return None
         order = None

@@ -81,3 +81,96 @@ class TestChronosBotStartup:
         assert startup_bot.client is None, (
             "dry_run=True なのに client が None でない — 本番発注が実行される恐れがある"
         )
+
+
+# =============================================================================
+# δ-7: subprocess 起動テスト — NameError/ImportError/起動即死を検知
+# =============================================================================
+
+class TestChronosBotSubprocessStartup:
+    """δ-7: subprocess.Popen で chronos_bot.py --dry-run を起動し
+    10秒後に exit code が None (alive) または 0 であることを確認。
+    NameError/ImportError/SyntaxError は exit code 1 で即死するため検知可能。
+    """
+
+    def test_subprocess_no_immediate_crash(self, tmp_path):
+        """chronos_bot.py --dry-run を subprocess 起動して10秒以内に即死しないこと。
+        δ-7: NameError/ImportError が残っている場合は exit code 1 で終了するため
+        このテストが FAIL し、起動問題を検知できる。
+        """
+        import subprocess
+        import time
+        import os
+
+        env = os.environ.copy()
+        env.update({
+            "MFFU_DATA_DIR": str(tmp_path),
+            "MFFU_LOG_DIR": str(tmp_path / "logs"),
+            "MFFU_ACCOUNT_ID": "test_subprocess_startup",
+            "PUSHOVER_USER": "",
+            "PUSHOVER_OPS_TOKEN": "",
+            "PUSHOVER_TOKEN": "",
+        })
+
+        proc = subprocess.Popen(
+            ["python3", "chronos_bot.py", "--dry-run"],
+            cwd=str(Path(__file__).resolve().parents[1]),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+        )
+
+        time.sleep(10)
+        ret = proc.poll()
+
+        if ret is not None and ret != 0:
+            stderr_out = proc.stderr.read().decode("utf-8", errors="replace")
+            pytest.fail(
+                f"chronos_bot.py --dry-run が exit code {ret} で即死。\n"
+                f"stderr 末尾:\n{stderr_out[-2000:]}"
+            )
+        # alive (ret is None) or clean exit (ret == 0) どちらも OK
+        if proc.poll() is None:
+            proc.terminate()
+            proc.wait(timeout=5)
+
+    def test_subprocess_no_name_error_in_stderr(self, tmp_path):
+        """subprocess 起動後10秒のstderrに NameError/ImportError が含まれないこと。
+        δ-7: 起動即死しなくてもインポートエラーがログに出ていれば FAIL。
+        """
+        import subprocess
+        import time
+        import os
+
+        env = os.environ.copy()
+        env.update({
+            "MFFU_DATA_DIR": str(tmp_path),
+            "MFFU_LOG_DIR": str(tmp_path / "logs"),
+            "MFFU_ACCOUNT_ID": "test_subprocess_import",
+            "PUSHOVER_USER": "",
+            "PUSHOVER_OPS_TOKEN": "",
+            "PUSHOVER_TOKEN": "",
+        })
+
+        proc = subprocess.Popen(
+            ["python3", "chronos_bot.py", "--dry-run"],
+            cwd=str(Path(__file__).resolve().parents[1]),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+        )
+
+        time.sleep(10)
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+        stderr_out = proc.stderr.read().decode("utf-8", errors="replace")
+        fatal_patterns = ["NameError", "ImportError", "SyntaxError", "AttributeError: module"]
+        found = [p for p in fatal_patterns if p in stderr_out]
+        assert not found, (
+            f"chronos_bot.py 起動 stderr に致命的エラーパターン {found} を検出。\n"
+            f"stderr 末尾:\n{stderr_out[-2000:]}"
+        )

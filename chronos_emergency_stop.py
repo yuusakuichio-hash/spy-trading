@@ -75,7 +75,17 @@ JST = zoneinfo.ZoneInfo("Asia/Tokyo")
 PUSHOVER_TOKEN = os.environ.get("PUSHOVER_TOKEN", "")
 PUSHOVER_USER  = os.environ.get("PUSHOVER_USER", "")
 
-LAUNCHAGENT_LABEL = "com.chronos.bot"
+# CRIT-6: 5アカplist対応 — 旧単一ラベルから配列化
+LAUNCHAGENT_LABEL  = "com.chronos.bot"   # 後方互換（今は .disabled）
+LAUNCHAGENT_LABELS = [
+    "com.chronos.bot",              # 旧 (退役済み .disabled)
+    "com.chronos.mffu_flex_A",
+    "com.chronos.mffu_rapid_B",
+    "com.chronos.mffu_pro_C",
+    "com.chronos.mffu_core_D",
+    "com.chronos.mffu_builder_E",
+    "com.chronos.fleet_watcher",
+]
 BOT_SCRIPT_NAME   = "chronos_bot.py"
 
 
@@ -83,8 +93,29 @@ BOT_SCRIPT_NAME   = "chronos_bot.py"
 # Pushover 通知
 # ─────────────────────────────────────────────────────────────────────────────
 
+_FALLBACK_ALERT_LOG = Path(__file__).parent / "data" / "logs" / "emergency_alerts.log"
+
+
+def _write_fallback_alert(message: str, title: str) -> None:
+    """δ-4: Pushover 429/障害時のログファイルフォールバック通知。
+    data/logs/emergency_alerts.log に ISO timestamp + title + message を追記する。
+    """
+    import datetime as _dt
+    try:
+        _FALLBACK_ALERT_LOG.parent.mkdir(parents=True, exist_ok=True)
+        ts = _dt.datetime.now().isoformat()
+        line = f"{ts} | EMERGENCY | {title} | {message}\n"
+        with open(_FALLBACK_ALERT_LOG, "a", encoding="utf-8") as _f:
+            _f.write(line)
+        log.warning(f"[FallbackAlert] written to {_FALLBACK_ALERT_LOG}")
+    except Exception as _e:
+        log.error(f"[FallbackAlert] write failed: {_e}")
+
+
 def pushover_emergency(message: str, title: str = "Chronos 緊急停止") -> bool:
-    """priority=2（緊急・確認必要）でPushover通知を送信する。"""
+    """priority=2（緊急・確認必要）でPushover通知を送信する。
+    δ-4: 429 / 接続失敗時はログファイルフォールバックに切り替える。
+    """
     try:
         import requests
         resp = requests.post(
@@ -104,10 +135,16 @@ def pushover_emergency(message: str, title: str = "Chronos 緊急停止") -> boo
         if resp.status_code == 200:
             log.info(f"[Pushover] emergency sent: {title}")
             return True
+        if resp.status_code == 429:
+            log.error(f"[Pushover] 429 rate-limited (IP ban) — switching to fallback alert log")
+            _write_fallback_alert(message, title)
+            return False
         log.error(f"[Pushover] HTTP {resp.status_code}: {resp.text[:200]}")
+        _write_fallback_alert(message, title)
         return False
     except Exception as e:
         log.error(f"[Pushover] send failed: {e}")
+        _write_fallback_alert(message, title)
         return False
 
 
@@ -319,19 +356,35 @@ def main():
              f"no_close={args.no_close} live={args.live}")
     log.info("=" * 60)
 
-    # Step 1: LaunchAgent 停止
+    # Step 1: LaunchAgent 停止（CRIT-6: 全5アカplistを停止）
     agent_stopped = False
     if not args.no_kill:
-        log.info("[Step 1] LaunchAgent 停止...")
-        agent_stopped = stop_launchagent(LAUNCHAGENT_LABEL, dry_run=args.dry_run)
+        log.info(f"[Step 1] LaunchAgent 停止: {len(LAUNCHAGENT_LABELS)}個のラベルを処理...")
+        stop_results = []
+        for label in LAUNCHAGENT_LABELS:
+            ok = stop_launchagent(label, dry_run=args.dry_run)
+            stop_results.append(ok)
+            log.info(f"[Step 1] {label}: {'stopped' if ok else 'not found or error (ignored)'}")
+        # 1つでも停止できれば成功扱い
+        agent_stopped = any(stop_results)
     else:
         log.info("[Step 1] LaunchAgent 停止: スキップ（--no-kill）")
 
-    # Step 2: Bot プロセス終了
+    # Step 2: Bot プロセス終了（CRIT-6: --paper プロセスも含む）
     killed = 0
     if not args.no_kill:
         log.info("[Step 2] Bot プロセス終了...")
         killed = kill_bot_processes(BOT_SCRIPT_NAME, dry_run=args.dry_run)
+        # CRIT-6: paper モードの残留プロセスも kill
+        if not args.dry_run:
+            try:
+                result = subprocess.run(
+                    ["pkill", "-f", "chronos_bot.py --paper"],
+                    capture_output=True, text=True, timeout=10
+                )
+                log.info(f"[Step 2] pkill chronos_bot.py --paper: returncode={result.returncode}")
+            except Exception as e:
+                log.warning(f"[Step 2] pkill --paper failed: {e}")
         log.info(f"[Step 2] {killed} プロセス終了")
     else:
         log.info("[Step 2] Bot プロセス終了: スキップ（--no-kill）")
@@ -378,8 +431,9 @@ def main():
     if args.dry_run:
         msg_lines.append("(dry-run: API実行なし)")
 
+    # CRIT-6: EMERGENCY STOP ALL 送信
     pushover_emergency(
-        title=f"MFFU緊急停止 [{env_label}]",
+        title=f"[Chronos] EMERGENCY STOP ALL [{env_label}]",
         message="\n".join(msg_lines),
     )
 

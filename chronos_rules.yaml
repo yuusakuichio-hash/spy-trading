@@ -422,7 +422,10 @@ agent:
 # データソース: Tradovate tick stream (aggressor side) または 1分足バー代替
 # 戦略連携: chronos_strategy_selector.py — env["cumulative_delta_bias"]
 cumulative_delta:
-  enabled: false  # cycle4真修正まで一時無効・redteam CRITICAL 4件発見
+  # δ-8 (2026-04-20): DEPRECATED — cycle4-12 redteam CRITICAL 4件未解消のため廃止。
+  # 復活条件: tick stream API接続確認 + unit test 全件合格 + redteam independent verification
+  # テスト側: tests/test_f12_f13_cycle6_20260419.py は enabled:false 前提で設計済み
+  enabled: false  # DEPRECATED: 復活は独立redteam合格後のみ
 
   # バケット集計幅 (分)
   # 5分 = ORB ウィンドウと同期・流動性の方向性を捉えやすい
@@ -452,7 +455,10 @@ cumulative_delta:
 # 定義: 大出来高で前日高安・VWAP・IB端を突破 → 即反転 (stop hunt reversal)
 # 戦略連携: chronos_strategy_selector.py — env["liquidity_sweep_signal"]
 liquidity_sweep:
-  enabled: false  # 同上
+  # δ-8 (2026-04-20): DEPRECATED — cycle4-12 redteam CRITICAL 4件未解消のため廃止。
+  # 復活条件: Tradovate MD WebSocket 確認 + volume_multiplier実データ検証 + redteam合格
+  # テスト側: tests/test_f12_f13_cycle6_20260419.py は enabled:false 前提で設計済み
+  enabled: false  # DEPRECATED: 復活は独立redteam合格後のみ
 
   # 有効突破の最低出来高倍率 (直近20分平均比)
   # 2.0倍以上の出来高を伴う突破のみを有効とする

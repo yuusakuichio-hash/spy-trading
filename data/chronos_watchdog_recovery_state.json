@@ -1,5 +1,5 @@
 {
-  "attempt": 0,
-  "last_attempt_ts": 0.0,
-  "recovered": true
+  "attempt": 1,
+  "last_attempt_ts": 1776685396.583693,
+  "recovered": false
 }
