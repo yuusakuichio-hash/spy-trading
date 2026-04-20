@@ -1281,6 +1281,13 @@ class FuturesORBStrategy:
         # MF-1α: idempotency key を生成して place_order に渡す（二重発注防止）
         # retry 時は同じ key を使用することで Tradovate が重複を検知して拒否する。
         _client_order_id = self._next_client_order_id() if hasattr(self, '_next_client_order_id') else None
+        # β-2: retry/backoff コールパス — place_order 前に _is_order_sent() 確認（二重発注防止）
+        if _client_order_id and hasattr(self, '_is_order_sent') and self._is_order_sent(_client_order_id):
+            log.warning(
+                "[FuturesORB][MF-1α] retry abort: key=%s already sent — skipping duplicate order",
+                _client_order_id,
+            )
+            return None
         order = None
         if self.client is not None:
             order = self.client.place_order(
@@ -1613,7 +1620,8 @@ class ChronosBot:
         _env_firm  = os.environ.get("CHRONOS_FIRM",  "").strip()
         _env_plan  = os.environ.get("CHRONOS_PLAN",  "").strip()
         _yaml_firm = _rules_yaml_for_firm.get("prop_firm", {}).get("firm", "mffu")
-        _yaml_plan = _rules_yaml_for_firm.get("prop_firm", {}).get("plan", "core_50k")
+        # β-7: "core_50k" default を除去 → 空文字 → _plan_id プロパティで fail-closed 発動
+        _yaml_plan = _rules_yaml_for_firm.get("prop_firm", {}).get("plan", "")
         self._firm: str = _env_firm  if _env_firm  else _yaml_firm
         self._plan: str = _env_plan  if _env_plan  else _yaml_plan
         # phase は _account_type から導出（下で _account_type 確定後に更新）
@@ -1722,6 +1730,8 @@ class ChronosBot:
         self._winning_days:           int   = 0    # 勝利日カウンタ（Payout条件監視用）
         self._daily_trade_count:      int   = 0    # 当日取引数（HFT違反監視用・日次reset）
         self._news_window_violation_flag: bool = False  # News Window違反フラグ
+        # β-4: last_trade_date ET — inactivity check 用（None=未取引）
+        self._last_trade_date_et: Optional[datetime.date] = None
 
         # ── MF-1α: 二重発注防止 — persistent idempotency key ────────────────────
         # orders.db に client_order_id を記録し、retry 時は同じ key を再利用する。
@@ -2275,9 +2285,18 @@ class ChronosBot:
 
     # ── MF-10α: 全期間 peak_balance 追跡ヘルパー ────────────────────────────────
 
+    def _peak_balance_file(self) -> Path:
+        """β-3: アカウント別 peak_balance ファイルパスを返す（5アカ独立）。
+        data/accounts/{account_id}/all_time_peak_balance.json
+        """
+        _acct_id = os.environ.get("MFFU_ACCOUNT_ID", "default")
+        _acct_dir = _get_base_dir() / "accounts" / _acct_id
+        _acct_dir.mkdir(parents=True, exist_ok=True)
+        return _acct_dir / "all_time_peak_balance.json"
+
     def _load_all_time_peak(self) -> float:
-        """全期間 peak_balance を persistent store から読み込む。"""
-        _peak_file = _get_base_dir() / "all_time_peak_balance.json"
+        """全期間 peak_balance を persistent store から読み込む。β-3: アカウント別パス使用。"""
+        _peak_file = self._peak_balance_file()
         try:
             if _peak_file.exists():
                 import json as _json
@@ -2288,8 +2307,8 @@ class ChronosBot:
         return self._session_balance
 
     def _save_all_time_peak(self) -> None:
-        """全期間 peak_balance を persistent store に書き込む。"""
-        _peak_file = _get_base_dir() / "all_time_peak_balance.json"
+        """全期間 peak_balance を persistent store に書き込む。β-3: アカウント別パス使用。"""
+        _peak_file = self._peak_balance_file()
         try:
             import json as _json
             _peak_file.write_text(
@@ -3384,6 +3403,8 @@ class ChronosBot:
                                         "trades_today":    self._daily_trade_count,
                                         # MF-10α: 全期間 peak を使用（session_balance ではない）
                                         "peak_balance":    self._all_time_peak_balance,
+                                        # β-4: last_trade_date 実記入（inactivity check 用）
+                                        "last_trade_date": self._last_trade_date_et,
                                     }
                                     # MF-2α: est_pnl と upcoming_events を渡す
                                     _upcoming_ev = []
@@ -3457,6 +3478,8 @@ class ChronosBot:
                                     "trades_today":    self._daily_trade_count,
                                     # MF-10α: 全期間 peak を使用（session_balance ではない）
                                     "peak_balance":    self._all_time_peak_balance,
+                                    # β-4: last_trade_date 実記入（inactivity check 用）
+                                    "last_trade_date": self._last_trade_date_et,
                                 }
                                 # MF-2α: est_pnl と upcoming_events を渡す
                                 _upcoming_ev2 = []
@@ -3476,6 +3499,8 @@ class ChronosBot:
                                 )
                                 if entry:
                                     self._daily_trade_count += 1  # cycle2: HFT監視用
+                                    # β-4: last_trade_date を ET で記録（inactivity check 用）
+                                    self._last_trade_date_et = now_et.date() if now_et else datetime.datetime.now(zoneinfo.ZoneInfo("America/New_York")).date()
                                     log.info(f"[MFFUBot] ORB ENTRY: {entry}")
                                     pushover(
                                         "MFFU Bot: ORBエントリー",

@@ -412,10 +412,13 @@ def check_t1_news_blackout(
             continue
         ev_ts = ev["ts"]
         # timezone 混在対応
+        # β-1修正: now が ET-aware になった。ev_ts も aware を推奨。
+        # ev_ts が aware で now が naive → now を UTC として解釈
+        # ev_ts が naive で now が aware → ev_ts に now の tzinfo を付与して同一TZ空間で比較
         if hasattr(ev_ts, "tzinfo") and ev_ts.tzinfo and not now.tzinfo:
             now = now.replace(tzinfo=datetime.timezone.utc)
         elif not (hasattr(ev_ts, "tzinfo") and ev_ts.tzinfo) and now.tzinfo:
-            ev_ts = ev_ts.replace(tzinfo=datetime.timezone.utc)
+            ev_ts = ev_ts.replace(tzinfo=now.tzinfo)
 
         # P1-HIGH-9: abs() を廃止。未来イベント（発表前）と過去イベント（発表後）を分離する。
         # - 未来イベント: now < ev_ts の場合 → 発表直前窓（イベントまで blackout_sec 以内）
@@ -669,8 +672,15 @@ def check_prop_firm_compliance(
         return False, "PF-1-HEDGE", msg
 
     # ── 8. T1 News Blackout ────────────────────────────────────────────────
+    # β-1: naive datetime.now() → ET-aware に修正（TZズレ防止）
+    try:
+        import zoneinfo as _zi_t1
+        _t1_et_tz = _zi_t1.ZoneInfo("America/New_York")
+    except ImportError:
+        import pytz as _pytz_t1
+        _t1_et_tz = _pytz_t1.timezone("America/New_York")
     ok, msg = check_t1_news_blackout(
-        datetime.datetime.now(),
+        datetime.datetime.now(tz=_t1_et_tz),
         order_ctx.get("upcoming_events", []),
         phase,
         rules,
