@@ -1,0 +1,64 @@
+name: Chronos Quality Gate
+
+on:
+  pull_request:
+    paths:
+      - 'chronos_*.py'
+      - 'common/**.py'
+      - 'tests/**.py'
+  push:
+    branches:
+      - main
+
+jobs:
+  schema-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt || true
+          pip install pytest mutmut
+      - name: Schema contract tests (MUST PASS)
+        run: |
+          python3 -m pytest tests/test_chronos_schema_contract.py -v --tb=short
+      - name: Regression baseline
+        run: |
+          python3 -m pytest tests/ --ignore=tests/test_tradeify --ignore=tests/test_pushover --ignore=tests/test_hmm_regime -q
+
+  mutation-testing:
+    runs-on: ubuntu-latest
+    needs: schema-contract
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install mutmut
+        run: pip install mutmut pytest
+      - name: Run mutation testing
+        id: mutation
+        run: |
+          # MF-8 fix: || true でクラッシュ握り潰しを除去。mutmut 自体が失敗したら即 FAIL。
+          mutmut run --paths-to-mutate common/kelly_sizer.py,common/plan_id.py,common/prop_firm_rules.py,chronos_pre_trade_check.py
+          # MF-8 fix: `mutmut results` の最初の数値は mutation 総数であり score ではない。
+          # killed/total を計算して score 率を算出する。
+          mutmut results --tsv | tee mutation_results.txt
+          KILLED=$(grep -c "^Killed" mutation_results.txt || echo 0)
+          TOTAL=$(wc -l < mutation_results.txt || echo 1)
+          # ゼロ除算防止
+          if [ "$TOTAL" -eq 0 ]; then TOTAL=1; fi
+          SCORE=$(( KILLED * 100 / TOTAL ))
+          echo "killed=$KILLED total=$TOTAL score=$SCORE"
+          echo "score=$SCORE" >> $GITHUB_OUTPUT
+      - name: Fail if mutation score < 50%
+        run: |
+          SCORE="${{ steps.mutation.outputs.score }}"
+          if [ -z "$SCORE" ] || [ "$SCORE" -lt "50" ]; then
+            echo "Mutation score ${SCORE}% < 50% — FAIL"
+            exit 1
+          fi
+          echo "Mutation score ${SCORE}% — PASS"

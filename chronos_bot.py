@@ -154,6 +154,7 @@ except ImportError as e:
 try:
     from chronos_strategy_selector import (
         select_futures_strategy,
+        select_futures_strategy_with_plan,
         build_env_dict,
         check_consistency_safety,
         get_atr_regime,
@@ -166,6 +167,37 @@ try:
 except ImportError as e:
     MFFU_SELECTOR_AVAILABLE = False
     log.warning(f"chronos_strategy_selector not available: {e}")
+
+# ── Phase D: KellySizer (common.kelly_sizer) ──────────────────────────────────
+try:
+    from common.kelly_sizer import KellySizer, calc_plan_kelly as _calc_plan_kelly_raw
+
+    def get_kelly_fraction(
+        plan_id: str,
+        win_rate: float = 0.55,
+        rr_ratio: float = 1.30,
+        half_kelly: bool = True,
+    ) -> float:
+        """Phase D KellySizer ラッパー。plan_id 別 Kelly 分率を返す。"""
+        try:
+            return _calc_plan_kelly_raw(
+                plan_id,
+                win_rate=win_rate,
+                rr_ratio=rr_ratio,
+                half_kelly=half_kelly,
+            )
+        except Exception as _ke:
+            log.warning(f"[PhaseD] get_kelly_fraction fallback: {_ke}")
+            return 0.10
+
+    KELLY_SIZER_AVAILABLE = True
+    log.info("Phase D loaded: common.kelly_sizer / get_kelly_fraction")
+except ImportError as _ks_err:
+    KELLY_SIZER_AVAILABLE = False
+    log.warning(f"common.kelly_sizer not available: {_ks_err}")
+
+    def get_kelly_fraction(plan_id: str, win_rate: float = 0.55, rr_ratio: float = 1.30, half_kelly: bool = True) -> float:  # type: ignore[misc]
+        return 0.10
 
 try:
     from futures_session_strategy import get_current_session
@@ -294,6 +326,59 @@ except Exception as _cdd_err:
     _CHRONOS_DEVIATION_DETECTOR_OK = False
     log.warning(f"bot_deviation_detector not available: {_cdd_err}")
 
+# ── Phase A/B/C: プロップファーム安全層 ─────────────────────────────────────────
+# Layer PF-1: prop_firm_rules (chronos_pre_trade_check 経由で呼ぶが直接参照も必要)
+# Layer PF-2: CrossAccountGuard
+# Layer PF-3: ChronosIntradayMonitor
+# Layer KS:   FirmScopedKillSwitch
+try:
+    from chronos_pre_trade_check import (
+        check_order as _chronos_check_order,
+        FuturesOrderContext as _FuturesOrderContext,
+    )
+    CHRONOS_PRE_TRADE_CHECK_AVAILABLE = True
+    log.info("chronos_pre_trade_check: loaded")
+except Exception as _ptc_err:
+    _chronos_check_order = None
+    _FuturesOrderContext = None
+    CHRONOS_PRE_TRADE_CHECK_AVAILABLE = False
+    log.warning(f"chronos_pre_trade_check not available: {_ptc_err}")
+
+try:
+    from common.prop_firm_cross_account import (
+        get_global_guard as _get_cross_account_guard,
+        CrossAccountGuard as _CrossAccountGuard,
+    )
+    CROSS_ACCOUNT_GUARD_AVAILABLE = True
+    log.info("prop_firm_cross_account: loaded")
+except Exception as _cag_err:
+    _get_cross_account_guard = None
+    _CrossAccountGuard = None
+    CROSS_ACCOUNT_GUARD_AVAILABLE = False
+    log.warning(f"prop_firm_cross_account not available: {_cag_err}")
+
+try:
+    from common.kill_switch import (
+        get_firm_kill_switch as _get_firm_kill_switch,
+        FirmScopedKillSwitch as _FirmScopedKillSwitch,
+    )
+    FIRM_KILL_SWITCH_AVAILABLE = True
+    log.info("kill_switch.FirmScopedKillSwitch: loaded")
+except Exception as _fks_err:
+    _get_firm_kill_switch = None
+    _FirmScopedKillSwitch = None
+    FIRM_KILL_SWITCH_AVAILABLE = False
+    log.warning(f"kill_switch FirmScopedKillSwitch not available: {_fks_err}")
+
+try:
+    from chronos_intraday_monitor import ChronosIntradayMonitor as _ChronosIntradayMonitor
+    INTRADAY_MONITOR_AVAILABLE = True
+    log.info("chronos_intraday_monitor: loaded")
+except Exception as _im_err:
+    _ChronosIntradayMonitor = None
+    INTRADAY_MONITOR_AVAILABLE = False
+    log.warning(f"chronos_intraday_monitor not available: {_im_err}")
+
 # ── 認証情報 ───────────────────────────────────────────────────────────────────
 PUSHOVER_TOKEN = os.environ.get("PUSHOVER_TOKEN", "")
 PUSHOVER_USER  = os.environ.get("PUSHOVER_USER", "")
@@ -322,10 +407,12 @@ WEEKLY_DD_HALT_PCT      = 0.03   # -3%
 
 # ── Pushover通知 ──────────────────────────────────────────────────────────────
 
-# HIGH-8: DoS throttling — 同一エラーメッセージは5分毎1回まで
+# HIGH-8 + P1-HIGH-14: DoS throttling — 同一エラーメッセージは60秒毎1回まで
+# Pushover IP ban 再発防止のため、5分（300秒）→ 60秒窓に変更。
+# 60秒未満の重複は repeat_count のみカウントし、次回通知時に "(repeated X times)" を付加する。
 # {cache_key: (last_sent_dt, repeat_count)}
 _pushover_throttle_cache: dict[str, tuple[datetime.datetime, int]] = {}
-_PUSHOVER_THROTTLE_SEC = 300  # 5分
+_PUSHOVER_THROTTLE_SEC = 60  # 60秒（IP ban 再発防止）
 
 
 def pushover(title: str, message: str, priority: int = 0) -> bool:
@@ -915,12 +1002,21 @@ class FuturesORBStrategy:
         news_filter:  NewsTradingFilter,
         product:      str = "MES",
         account_size: int = 50_000,
+        firm:         str = "",
+        plan:         str = "",
+        phase:        str = "evaluation",
     ):
         self.client       = client
         self.rule_guard   = rule_guard
         self.news_filter  = news_filter
         self.product      = product
         self.account_size = account_size
+        # ── Phase A: プロップファーム情報（Layer PF-1/PF-2/KS に渡す）──────────
+        self.firm         = firm
+        self.plan         = plan
+        self.phase        = phase
+        # Phase D: plan_id は ChronosBot._phase_for_prop 更新時に同期される
+        self.plan_id: str = ""
 
         # OR状態
         self._or_high:    Optional[float] = None
@@ -979,10 +1075,17 @@ class FuturesORBStrategy:
         env_score:       float,
         open_pnl:        float = 0.0,
         now_et:          Optional[datetime.datetime] = None,
+        prop_account_state: Optional[dict] = None,
     ) -> Optional[dict]:
         """
         ブレイクアウト判定とエントリー実行。
         ニュースフィルターチェックを追加（Apex版との差分）。
+
+        Args:
+            prop_account_state: MF-3 fix — ChronosBot から渡す実値 dict。
+                cycle_daily_pnl / trades_today / peak_balance を含むことで
+                Layer PF-1 のハードコードデフォルト（[] / 0 / capital_usd）を上書きする。
+                None の場合は chronos_pre_trade_check.py のデフォルトが使われる。
         """
         if not self._or_complete or self._entry_done:
             return None
@@ -1031,6 +1134,7 @@ class FuturesORBStrategy:
             account_balance = current_balance,
             max_contracts   = max_contracts,
             or_range        = or_range,
+            plan_id         = self.plan_id or None,
         )
 
         if n_contracts < 1:
@@ -1065,7 +1169,13 @@ class FuturesORBStrategy:
         _existing_positions = []
         if self.client is not None:
             try:
-                _existing_positions = self.client.get_positions() or []
+                # MF-2 fix: get_positions_for_rules() を使い "side" フィールドを保証する。
+                # get_positions() は net_pos のみ返すため p["side"] で KeyError が起きる。
+                # get_positions_for_rules() は net_pos → side 変換済みスキーマを返す。
+                if hasattr(self.client, "get_positions_for_rules"):
+                    _existing_positions = self.client.get_positions_for_rules() or []
+                else:
+                    _existing_positions = self.client.get_positions() or []
             except Exception:
                 _existing_positions = []
         _hedge_ok, _hedge_reason = _chv(
@@ -1086,6 +1196,70 @@ class FuturesORBStrategy:
             log.error(f"[FuturesORB] Cross-account hedging violation → 発注中止: {_cross_reason}")
             return None
 
+        # ── Layer KS: FirmScopedKillSwitch 発動チェック ───────────────────────────
+        # firm が設定されている場合、該当 firm の Kill Switch が発動中なら発注拒否
+        if FIRM_KILL_SWITCH_AVAILABLE and self.firm and _get_firm_kill_switch is not None:
+            _firm_ks = _get_firm_kill_switch()
+            if _firm_ks.is_active(self.firm):
+                _ks_reason = _firm_ks.get_reason(self.firm) or "unknown"
+                log.error(
+                    "[FuturesORB] Layer KS: FirmScopedKillSwitch 発動中 → 発注中止: "
+                    "firm=%s reason=%s", self.firm, _ks_reason,
+                )
+                return None
+
+        # ── Layer PF-1: chronos_pre_trade_check (prop_firm_rules 統合チェック) ────
+        # P0-CRITICAL-7: firm 未設定も含めて必ず通過させる（fail-closed）。
+        # chronos_pre_trade_check.check_order 内部で firm="" を検知してrejectする。
+        if CHRONOS_PRE_TRADE_CHECK_AVAILABLE and _chronos_check_order is not None:
+            _ptc_ctx = _FuturesOrderContext(
+                symbol                 = symbol,
+                side                   = action.upper() if action else "",
+                qty                    = n_contracts,
+                entry_price            = current_price,
+                est_margin             = current_balance * 0.05,  # 保守的 5% 見積り
+                capital_usd            = current_balance,
+                open_positions         = len(_existing_positions),
+                paper                  = (self.client is None),
+                mffu_account_balance   = current_balance,
+                mffu_daily_pnl         = open_pnl,
+                existing_positions_list= _existing_positions,
+                firm                   = self.firm,
+                plan                   = self.plan,
+                phase                  = self.phase,
+                # MF-3 fix: 呼出側 (ChronosBot) から実値を受け取り Layer PF-1 の
+                # ハードコードデフォルト（cycle_daily_pnl=[], trades_today=0,
+                # peak_balance=capital_usd）を上書きする。
+                prop_account_state     = prop_account_state or {},
+            )
+            _ptc_result = _chronos_check_order(_ptc_ctx)
+            if not _ptc_result.allow:
+                log.error(
+                    "[FuturesORB] Layer PF-1 REJECTED: layer=%s reason=%s",
+                    _ptc_result.layer, _ptc_result.reason,
+                )
+                return None
+
+        # ── Layer PF-2: CrossAccountGuard (firm 単位レート制限 + active 相関検出) ─
+        # CR-4修正: check_before_order() + record_order() の 2 段呼出しは TOCTOU race を生む。
+        # check_and_record() で atomic (SQLite EXCLUSIVE トランザクション) に置換する。
+        _cross_guard_instance = None
+        _cag_account_id = _current_account_id or f"{self.firm}_{self.plan}"
+        if CROSS_ACCOUNT_GUARD_AVAILABLE and self.firm and _get_cross_account_guard is not None:
+            _cross_guard_instance = _get_cross_account_guard(min_delay_sec=3)
+            _cag_ok, _cag_reason = _cross_guard_instance.check_and_record(
+                firm       = self.firm,
+                account_id = _cag_account_id,
+                symbol     = symbol,
+                side       = action.upper() if action else "",
+            )
+            if not _cag_ok:
+                log.error(
+                    "[FuturesORB] Layer PF-2 CrossAccountGuard REJECTED (check_and_record): %s",
+                    _cag_reason,
+                )
+                return None
+
         # 発注
         order = None
         if self.client is not None:
@@ -1097,6 +1271,13 @@ class FuturesORBStrategy:
             )
             if not order:
                 log.error("[FuturesORB] entry order failed")
+                # CR-4: 発注失敗時は check_and_record で登録した active を取り消す
+                if _cross_guard_instance is not None:
+                    _cross_guard_instance.record_close(
+                        account_id = _cag_account_id,
+                        symbol     = symbol,
+                        side       = action.upper() if action else "",
+                    )
                 return None
         else:
             # dry_run: mock注文
@@ -1115,6 +1296,11 @@ class FuturesORBStrategy:
         self._entry_side   = "Long" if action == "Buy" else "Short"
         self._entry_price  = current_price
         self._trade_id     = str(uuid.uuid4())[:8]
+
+        log.debug(
+            "[FuturesORB] Layer PF-2: CrossAccountGuard.check_and_record 完了: "
+            "firm=%s account=%s %s %s", self.firm, _cag_account_id, symbol, action,
+        )
 
         # ── 観点B: エントリー構造整合性チェック (約定後即時) ─────────────────
         if _CHRONOS_DEVIATION_DETECTOR_OK and _chronos_deviation_detector is not None:
@@ -1172,6 +1358,7 @@ class FuturesORBStrategy:
         monthly_realized_pnl: float = 0.0,
         today_max_win_per_contract: Optional[float] = None,
         or_range: Optional[float] = None,
+        plan_id: Optional[str] = None,
     ) -> int:
         """Consistency-aware Kelly でコントラクト数を計算する。
 
@@ -1186,6 +1373,8 @@ class FuturesORBStrategy:
                                           None の場合はConsistency制限を適用しない。
             or_range:                     ORレンジ幅（points）。Kelly枚数計算に使用。
                                           None の場合は保守的な1枚を返す。
+            plan_id:                      Phase D プランID（get_kelly_fraction に渡す）。
+                                          None の場合は spy_bot.calc_kelly_fraction にフォールバック。
 
         Returns:
             最終コントラクト数（1以上）
@@ -1199,7 +1388,11 @@ class FuturesORBStrategy:
         修正後: dollar_risk=5000(10%@50K) / risk_per_contract=500(100pts×5) = 10 枚 → min(10, max)
         """
         kelly: Optional[float] = None
-        if KELLY_AVAILABLE:
+        # Phase D: KellySizer を優先使用（plan_id が指定されている場合）
+        if KELLY_SIZER_AVAILABLE and plan_id:
+            kelly = get_kelly_fraction(plan_id)
+            log.info(f"_calc_contracts(PhaseD): plan_id={plan_id} kelly={kelly:.4f}")
+        elif KELLY_AVAILABLE:
             pnl_file = _BASE_DIR / "mffu_pnl.json"
             kelly = calc_kelly_fraction(pnl_file, strategy_filter=None)
 
@@ -1388,12 +1581,56 @@ class ChronosBot:
         self.rule_guard   = MFFURuleGuard(account_size)
         self.news_filter  = NewsTradingFilter()
 
+        # ── Phase A: firm/plan/phase 読み込み ─────────────────────────────────────
+        # 優先順位: 環境変数 > chronos_rules.yaml > デフォルト値
+        # 5アカ対応: 各 .env.d/<id>.env に CHRONOS_FIRM=mffu 等を設定可能
+        _rules_yaml_for_firm = _load_chronos_rules()
+        _env_firm  = os.environ.get("CHRONOS_FIRM",  "").strip()
+        _env_plan  = os.environ.get("CHRONOS_PLAN",  "").strip()
+        _yaml_firm = _rules_yaml_for_firm.get("prop_firm", {}).get("firm", "mffu")
+        _yaml_plan = _rules_yaml_for_firm.get("prop_firm", {}).get("plan", "core_50k")
+        self._firm: str = _env_firm  if _env_firm  else _yaml_firm
+        self._plan: str = _env_plan  if _env_plan  else _yaml_plan
+        # phase は _account_type から導出（下で _account_type 確定後に更新）
+        self._phase_for_prop: str = "evaluation"
+        log.info(
+            "[MFFUBot] prop config: firm=%s plan=%s (source=%s)",
+            self._firm, self._plan,
+            "env" if _env_firm else "yaml",
+        )
+
+        # ── Phase B: CrossAccountGuard シングルトン取得 ───────────────────────────
+        self._cross_guard = None
+        if CROSS_ACCOUNT_GUARD_AVAILABLE and _get_cross_account_guard is not None:
+            try:
+                self._cross_guard = _get_cross_account_guard(min_delay_sec=3)
+                log.info("[MFFUBot] CrossAccountGuard initialized (Layer PF-2)")
+            except Exception as _cg_e:
+                log.warning("[MFFUBot] CrossAccountGuard init failed: %s", _cg_e)
+
+        # ── Phase C: FirmScopedKillSwitch シングルトン取得 ────────────────────────
+        self._firm_ks = None
+        if FIRM_KILL_SWITCH_AVAILABLE and _get_firm_kill_switch is not None:
+            try:
+                self._firm_ks = _get_firm_kill_switch()
+                log.info("[MFFUBot] FirmScopedKillSwitch initialized (Layer KS)")
+            except Exception as _fks_e:
+                log.warning("[MFFUBot] FirmScopedKillSwitch init failed: %s", _fks_e)
+
+        # ── Layer PF-3: ChronosIntradayMonitor インスタンス（run_forever で起動）───
+        # run_forever() 内で asyncio スレッドに渡す。状態辞書のみここで準備。
+        self._intraday_monitor: Optional["_ChronosIntradayMonitor"] = None
+        self._intraday_monitor_states: dict = {}  # account_id: str -> state: dict
+
         self.orb = FuturesORBStrategy(
             client       = self.client,
             rule_guard   = self.rule_guard,
             news_filter  = self.news_filter,
             product      = product,
             account_size = account_size,
+            firm         = self._firm,
+            plan         = self._plan,
+            phase        = self._phase_for_prop,
         )
 
         self.roller = ContractRoller(product=product)
@@ -1492,6 +1729,27 @@ class ChronosBot:
         else:
             self._account_type: str = _yaml_account_type
             log.info(f"[MFFUBot] account_type from yaml: {self._account_type}")
+
+        # ── Phase A: _account_type 確定後に _phase_for_prop を更新 ─────────────────
+        # account_type から prop_firm_rules に渡す phase を導出する。
+        # evaluation / sim_funded / funded / pa の4フェーズに正規化する。
+        _phase_map = {
+            "evaluation":                   "evaluation",
+            "demo":                         "evaluation",
+            "mffu_eval":                    "evaluation",
+            "sim_funded":                   "sim_funded",
+            "mffu_sim_funded":              "sim_funded",
+            "mffu_sim_funded_after_payout": "sim_funded",
+            "funded":                       "funded",
+            "mffu_funded":                  "funded",
+            "pa":                           "pa",
+            "apex_pa":                      "pa",
+        }
+        self._phase_for_prop = _phase_map.get(self._account_type, "evaluation")
+        # orb の phase / plan_id も同期させる（FuturesORBStrategy.firm/plan/phase/plan_id）
+        self.orb.phase   = self._phase_for_prop
+        self.orb.plan_id = self._plan_id
+        log.info("[MFFUBot] phase_for_prop=%s plan_id=%s (from account_type=%s)", self._phase_for_prop, self._plan_id, self._account_type)
 
         # ── Survival Mode: 初回ペイアウト後状態管理 ─────────────────────────────
         # MFFU: 初回ペイアウト後 MLL $100 → survival_mode_after_payout 適用
@@ -1720,7 +1978,13 @@ class ChronosBot:
                     except Exception as _e:
                         log.debug(f"[MFFUBot] liquidity_sweep signal calc skipped: {_e}")
 
-                mffu_result = select_futures_strategy(env_dict)
+                # Phase D: plan_id を env_dict に格納（select_futures_strategy_with_plan が参照）
+                env_dict["plan_id"] = self._plan_id
+                # CR-2修正: _trade_count_today は存在しない。_daily_trade_count が正源
+                env_dict["trade_count_today"] = self._daily_trade_count
+                env_dict["open_positions"] = list(getattr(self, "_open_positions", {}).values())
+
+                mffu_result = select_futures_strategy_with_plan(env_dict)
                 # CRITICAL-2修正: 返り値は list[dict]。[0]でprimaryを取得する
                 primary = mffu_result[0] if mffu_result else {}
                 self._env_score = env_dict.get("env_score", 50.0)
@@ -2670,6 +2934,35 @@ class ChronosBot:
                 except Exception as _e:
                     log.debug(f"[MFFUBot] LiquiditySweepDetector.check_sweep error: {_e}")
 
+    # ── Phase D: plan_id プロパティ ──────────────────────────────────────────
+
+    @property
+    def _plan_id(self) -> str:
+        """Phase D plan_id 文字列を構築する。
+        例: firm=mffu, plan=flex_50k, phase=evaluation  →  "flex_eval"
+            firm=mffu, plan=rapid_50k, phase=simulation  →  "rapid_sim"
+        """
+        _PHASE_SUFFIX = {
+            "evaluation": "eval",
+            "simulation": "sim",
+            "funded":     "funded",
+        }
+        _PLAN_SHORT: dict[str, str] = {
+            "flex_50k":     "flex",
+            "flex_100k":    "flex",
+            "rapid_50k":    "rapid",
+            "rapid_25k":    "rapid",
+            "pro_50k":      "pro",
+            "pro_100k":     "pro",
+            "builder_25k":  "builder",
+            "builder_50k":  "builder",
+            "tradeify":     "tradeify",
+            "apex":         "apex",
+        }
+        short = _PLAN_SHORT.get(self._plan, self._plan.split("_")[0])
+        suffix = _PHASE_SUFFIX.get(self._phase_for_prop, self._phase_for_prop)
+        return f"{short}_{suffix}"
+
     # ── メインループ ──────────────────────────────────────────────────────────
 
     def run_forever(self):
@@ -2696,6 +2989,108 @@ class ChronosBot:
             log.error("[MFFUBot] connection failed, exiting")
             _pid_file.unlink(missing_ok=True)
             return
+
+        # ── Layer PF-3: ChronosIntradayMonitor を asyncio バックグラウンドで起動 ──
+        # threading + asyncio.run() で独立したイベントループを作りメインループと並走させる。
+        # メインループは time.sleep() ベースの同期コードのため、asyncio.create_task() は使えない。
+        # 代わりに daemon スレッドで asyncio.run(monitor_loop()) を実行する。
+        _monitor_thread = None
+        if INTRADAY_MONITOR_AVAILABLE and _ChronosIntradayMonitor is not None:
+            try:
+                _account_id_for_monitor = os.environ.get("MFFU_ACCOUNT_ID", "default")
+                # 口座状態辞書: firm/plan/phase を ChronosBot.__init__ で設定済みの値で初期化
+                self._intraday_monitor_states[_account_id_for_monitor] = {
+                    "firm":                           self._firm,
+                    "plan":                           self._plan,
+                    "phase":                          self._phase_for_prop,
+                    "mll":                            self.rule_guard.rules.eod_drawdown,
+                    "peak_balance_intraday":          self._session_balance,
+                    "current_balance_with_unrealized": self._session_balance,
+                    "payout_count":                   0,
+                    "last_trade_date":                None,
+                    "open_positions":                 [],
+                    "runtime_constraints":            {},
+                }
+
+                def _on_emergency_close(account_id: str, reason: str) -> None:
+                    log.critical(
+                        "[ChronosBot] EMERGENCY CLOSE: account=%s reason=%s",
+                        account_id, reason,
+                    )
+                    # FirmScopedKillSwitch 発動: 該当 firm の発注を即停止
+                    if self._firm_ks is not None:
+                        self._firm_ks.activate(self._firm, f"IntradayMonitor: {reason}")
+                    pushover(
+                        f"[Chronos/ALERT] IntradayMonitor 緊急クローズ",
+                        f"account={account_id}\nreason={reason}",
+                        priority=1,
+                    )
+
+                def _on_alert(account_id: str, message: str) -> None:
+                    log.warning(
+                        "[ChronosBot] INTRADAY ALERT: account=%s message=%s",
+                        account_id, message,
+                    )
+                    pushover(
+                        f"[Chronos] IntradayMonitor アラート",
+                        f"account={account_id}\n{message}",
+                    )
+
+                self._intraday_monitor = _ChronosIntradayMonitor(
+                    firm_account_states  = self._intraday_monitor_states,
+                    on_emergency_close   = _on_emergency_close,
+                    on_alert             = _on_alert,
+                )
+
+                import threading as _threading
+
+                def _monitor_thread_target() -> None:
+                    import asyncio as _asyncio
+                    try:
+                        _asyncio.run(self._intraday_monitor.monitor_loop())
+                    except Exception as _mt_e:
+                        log.error("[ChronosBot] IntradayMonitor thread error: %s", _mt_e)
+
+                _monitor_thread = _threading.Thread(
+                    target  = _monitor_thread_target,
+                    daemon  = True,
+                    name    = "chronos_intraday_monitor",
+                )
+                _monitor_thread.start()
+                log.info(
+                    "[MFFUBot] ChronosIntradayMonitor started: account=%s firm=%s plan=%s",
+                    _account_id_for_monitor, self._firm, self._plan,
+                )
+            except Exception as _im_start_err:
+                log.warning("[MFFUBot] ChronosIntradayMonitor start failed: %s", _im_start_err)
+
+        # CR-3修正: peak_balance_intraday を 1 秒毎に更新する専用スレッド。
+        # メインループ (60秒) とは独立させ Rapid Intraday Trailing MLL の即時検知を保証する。
+        _peak_stop_event = __import__("threading").Event()
+
+        def _peak_update_loop() -> None:
+            """1 秒毎に update_intraday_peak を呼ぶデーモンスレッド。"""
+            import threading as _th
+            while not _peak_stop_event.is_set():
+                try:
+                    if self._intraday_monitor is not None:
+                        _bal, _opnl = self._get_current_balance_and_pnl()
+                        self._intraday_monitor.update_intraday_peak(
+                            os.environ.get("MFFU_ACCOUNT_ID", "default"),
+                            _bal + _opnl,
+                        )
+                except Exception as _pe:
+                    log.debug("[MFFUBot] peak_loop error: %s", _pe)
+                _peak_stop_event.wait(timeout=1.0)
+
+        import threading as _th_peak
+        _peak_thread = _th_peak.Thread(
+            target = _peak_update_loop,
+            daemon = True,
+            name   = "chronos_peak_updater_1s",
+        )
+        _peak_thread.start()
+        log.info("[MFFUBot] peak_updater_1s thread started (CR-3)")
 
         while True:
             try:
@@ -2732,6 +3127,34 @@ class ChronosBot:
                         self.orb.finalize_or()
                         self._or_finalized = True
                         log.info(f"[MFFUBot] OR confirmed: range={self.orb.or_range}")
+
+                # ── Layer PF-3: IntradayMonitor 状態辞書を毎ループ更新 ───────────────
+                # ChronosIntradayMonitor はバックグラウンドスレッドで状態辞書を参照する。
+                # 残高・ポジションを毎 60 秒同期して最新状態を渡す。
+                if self._intraday_monitor is not None:
+                    _mon_account_id = os.environ.get("MFFU_ACCOUNT_ID", "default")
+                    if _mon_account_id in self._intraday_monitor_states:
+                        _mon_balance, _mon_open_pnl = self._get_current_balance_and_pnl()
+                        _mon_state = self._intraday_monitor_states[_mon_account_id]
+                        _mon_state["current_balance_with_unrealized"] = _mon_balance + _mon_open_pnl
+                        _mon_state["phase"] = self._phase_for_prop
+                        # IntradayMonitor の update_intraday_peak で peak を追跡させる
+                        self._intraday_monitor.update_intraday_peak(
+                            _mon_account_id, _mon_balance + _mon_open_pnl,
+                        )
+
+                # ── Layer KS: FirmScopedKillSwitch 発動チェック（毎ループ）─────────
+                # IntradayMonitor が on_emergency_close で発動させた場合の即時検知。
+                # 発動中は当該 firm の全エントリーをブロックする。
+                if self._firm_ks is not None and self._firm and self._firm_ks.is_active(self._firm):
+                    _ks_reason = self._firm_ks.get_reason(self._firm) or "unknown"
+                    log.critical(
+                        "[MFFUBot] FirmScopedKillSwitch 発動中: firm=%s reason=%s "
+                        "→ 全エントリーブロック",
+                        self._firm, _ks_reason,
+                    )
+                    time.sleep(MAIN_LOOP_SLEEP_SECS)
+                    continue
 
                 # ── F3: Daily Soft Stop チェック（毎分・エントリー前に評価）──────
                 # 日次損失 $300 到達で size_pct 50% 削減フラグを立てる。
@@ -2820,13 +3243,23 @@ class ChronosBot:
                                     # BUG-NEW-1 cycle3: 違反フラグ設定（agent L4 検知用）
                                     self._news_window_violation_flag = True
                                 elif not self.orb._entry_done:
+                                    # MF-3 fix: ChronosBot 実値を prop_account_state に設定して
+                                    # Layer PF-1 の cycle_daily_pnl=[] / trades_today=0 を上書き
+                                    _prop_acct_state = {
+                                        "cycle_daily_pnl": list(
+                                            getattr(self.rule_guard.rules, "daily_pnl_history", [])
+                                        ),
+                                        "trades_today":    self._daily_trade_count,
+                                        "peak_balance":    max(balance, self._session_balance),
+                                    }
                                     entry = self.orb.check_breakout(
-                                        current_price   = price,
-                                        current_balance = balance,
-                                        vix             = self._vix or 20.0,
-                                        env_score       = self._env_score,
-                                        open_pnl        = open_pnl,
-                                        now_et          = now_et,
+                                        current_price      = price,
+                                        current_balance    = balance,
+                                        vix                = self._vix or 20.0,
+                                        env_score          = self._env_score,
+                                        open_pnl           = open_pnl,
+                                        now_et             = now_et,
+                                        prop_account_state = _prop_acct_state,
                                     )
                                     if entry:
                                         self._survival_today_trades += 1
@@ -2875,13 +3308,23 @@ class ChronosBot:
                                 )
                             # ORB エントリー（ORBがまだエントリーしていない場合）
                             elif not self.orb._entry_done:
+                                # MF-3 fix: ChronosBot 実値を prop_account_state に設定して
+                                # Layer PF-1 の cycle_daily_pnl=[] / trades_today=0 を上書き
+                                _prop_acct_state = {
+                                    "cycle_daily_pnl": list(
+                                        getattr(self.rule_guard.rules, "daily_pnl_history", [])
+                                    ),
+                                    "trades_today":    self._daily_trade_count,
+                                    "peak_balance":    max(balance, self._session_balance),
+                                }
                                 entry = self.orb.check_breakout(
-                                    current_price   = price,
-                                    current_balance = balance,
-                                    vix             = self._vix or 20.0,
-                                    env_score       = self._env_score,
-                                    open_pnl        = open_pnl,
-                                    now_et          = now_et,
+                                    current_price      = price,
+                                    current_balance    = balance,
+                                    vix                = self._vix or 20.0,
+                                    env_score          = self._env_score,
+                                    open_pnl           = open_pnl,
+                                    now_et             = now_et,
+                                    prop_account_state = _prop_acct_state,
                                 )
                                 if entry:
                                     self._daily_trade_count += 1  # cycle2: HFT監視用
@@ -3079,6 +3522,21 @@ class ChronosBot:
                 if now_et.minute % 5 == 0 and now_et.second < 30:
                     self._save_state("periodic")
 
+                # P0-CRITICAL-4: ChronosIntradayMonitor の peak_balance_intraday を
+                # メインループ毎（60秒）に更新する。
+                # Rapid Sim Funded での Intraday Trailing MLL 予兆80%検知に必須。
+                if self._intraday_monitor is not None:
+                    try:
+                        _balance_for_peak, _open_pnl_for_peak = self._get_current_balance_and_pnl()
+                        _equity_for_peak = _balance_for_peak + _open_pnl_for_peak
+                        _acct_id_for_peak = os.environ.get("MFFU_ACCOUNT_ID", "default")
+                        self._intraday_monitor.update_intraday_peak(
+                            account_id                      = _acct_id_for_peak,
+                            current_balance_with_unrealized = _equity_for_peak,
+                        )
+                    except Exception as _peak_upd_err:
+                        log.debug("[MFFUBot] peak_update error: %s", _peak_upd_err)
+
                 # トークンrenew
                 if not self.dry_run and self.client:
                     self.client.ensure_authenticated()
@@ -3172,7 +3630,13 @@ class ChronosBot:
             env["avg_volume"]       = getattr(self, "_avg_volume", 0.0)
             env["recent_closes"]    = getattr(self, "_recent_closes", None)
 
-        strategies = select_futures_strategy(env)
+        # Phase D: plan_id を env に格納
+        env["plan_id"] = self._plan_id
+        # CR-2修正: _trade_count_today は存在しない。_daily_trade_count が正源
+        env["trade_count_today"] = self._daily_trade_count
+        env["open_positions"] = list(getattr(self, "_open_positions", {}).values())
+
+        strategies = select_futures_strategy_with_plan(env)
 
         # P1: VIX Term Structure のsize_multiplierを既存戦術サイズに適用
         # no_trade 戦術は乗算対象から外す
@@ -3766,6 +4230,10 @@ def check_cross_account_hedging(
 # エントリーポイント
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ── Chronos 命名統一エイリアス ────────────────────────────────────────────────
+# ChronosBot は実装本体クラス（旧MFFUBot）の公式名称
+# MFFUBot は後方互換 alias として保持（テスト・既存コードとの互換）
+MFFUBot = ChronosBot  # noqa: E305  (A案統一: ChronosBot が正式名)
 def main():
     parser = argparse.ArgumentParser(description="MyFundedFutures Bot")
     parser.add_argument("--paper",        action="store_true", default=True,
@@ -3803,10 +4271,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-# ── Chronos 命名統一エイリアス ────────────────────────────────────────────────
-# ChronosBot は実装本体クラス（旧MFFUBot）の公式名称
-# MFFUBot は後方互換 alias として保持（テスト・既存コードとの互換）
-MFFUBot = ChronosBot  # noqa: E305  (A案統一: ChronosBot が正式名)
 
 
 class ChronosClient:
