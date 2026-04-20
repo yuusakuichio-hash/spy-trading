@@ -1,9 +1,10 @@
-"""common/strategy_selector.py — 環境適応型戦術選択 + PDT 0DTE→1DTEフォールバック
+"""common/strategy_selector.py — 環境適応型戦術選択 + PDT 0DTE→1DTEフォールバック + HMMレジームフィルタ
 
 役割:
   - PDT残数 / capital / 市場環境に応じて最適戦術を返す
   - PDT残0 + capital < $25K + 0DTE戦術 → 同ロジックの1DTE版へ自動切替
   - 1DTE未実装戦術 → "no_trade" 返却
+  - HMMレジームフィルタ: FRAGILE_DIV → skip, FRAGILE_TREND → size×0.5
 
 使い方:
     from common.strategy_selector import StrategySelector, SelectionResult
@@ -15,6 +16,8 @@
     )
     # result.strategy: "1dte_cs" or "CS" or "no_trade"
     # result.fallback_activated: True if 0DTE→1DTE切替が発生
+    # result.regime_state: "STABLE" / "FRAGILE_TREND" / "FRAGILE_DIV" / "UNKNOWN"
+    # result.regime_size_multiplier: 1.0 / 0.5 / 0.0
 """
 from __future__ import annotations
 
@@ -34,6 +37,15 @@ from common.pdt_1dte_utils import (
 
 log = logging.getLogger(__name__)
 
+# HMMレジーム分類器（オプショナル: インポート失敗でも動作継続）
+try:
+    from common.hmm_regime import get_global_classifier, RegimeState as _RegimeState
+    _HMM_AVAILABLE = True
+    log.info("[StrategySelector] HMMレジーム分類器ロード成功")
+except Exception as _hmm_import_err:
+    _HMM_AVAILABLE = False
+    log.warning(f"[StrategySelector] HMMレジーム分類器ロード失敗 → レジームフィルタ無効: {_hmm_import_err}")
+
 try:
     import zoneinfo
     ET = zoneinfo.ZoneInfo("America/New_York")
@@ -52,6 +64,9 @@ class SelectionResult:
     reason: str                 # 選択理由（デバッグ用）
     original_candidate: str     # フォールバック前の元候補戦術名
     satisfies_no_pdt: bool = False  # PDT残0でもこの戦術が選択可能か
+    # HMMレジーム情報（Atlas施策4）
+    regime_state: str = "UNKNOWN"           # STABLE / FRAGILE_TREND / FRAGILE_DIV / UNKNOWN
+    regime_size_multiplier: float = 1.0    # 1.0 / 0.5 / 0.0
 
 
 class StrategySelector:
@@ -85,6 +100,43 @@ class StrategySelector:
         if now_et is None:
             now_et = datetime.datetime.now(ET)
 
+        # ── [HMMレジームフィルタ] Atlas施策4 ───────────────────────────────────
+        # FRAGILE_DIV → no_trade (エントリースキップ)
+        # FRAGILE_TREND → size乗数0.5 (SelectionResultに記録、サイズ調整は呼び出し側が行う)
+        # UNKNOWN → 保守的に0.5乗数、エントリーは継続
+        _regime_state = "UNKNOWN"
+        _regime_multiplier = 1.0
+        if _HMM_AVAILABLE:
+            try:
+                _clf = get_global_classifier()
+                _regime_enum = _clf.predict_current()
+                _regime_state = _regime_enum.value
+                _regime_multiplier = _clf.get_size_multiplier(_regime_enum)
+                log.info(
+                    f"[StrategySelector][HMM] regime={_regime_state}, "
+                    f"size_multiplier={_regime_multiplier:.1f}"
+                )
+                if _clf.should_skip_entry(_regime_enum):
+                    is_0dte = is_0dte_strategy(candidate, expiry_date, now_et)
+                    log.info(
+                        f"[StrategySelector][HMM] FRAGILE_DIV → no_trade: {candidate}"
+                    )
+                    return SelectionResult(
+                        strategy="no_trade",
+                        is_0dte=is_0dte,
+                        fallback_activated=False,
+                        pdt_remaining=float("inf"),
+                        reason=f"HMMレジーム={_regime_state} → エントリースキップ",
+                        original_candidate=candidate,
+                        satisfies_no_pdt=False,
+                        regime_state=_regime_state,
+                        regime_size_multiplier=0.0,
+                    )
+            except Exception as _hmm_err:
+                log.warning(f"[StrategySelector][HMM] レジーム取得失敗 → 無視: {_hmm_err}")
+                _regime_state = "UNKNOWN"
+                _regime_multiplier = 0.5  # 取得失敗時は保守的に
+
         # $25K以上はPDT対象外 → そのまま通過
         if capital_usd >= 25_000.0:
             is_0dte = is_0dte_strategy(candidate, expiry_date, now_et)
@@ -96,6 +148,8 @@ class StrategySelector:
                 reason=f"capital=${capital_usd:.0f} >= $25K → PDT対象外",
                 original_candidate=candidate,
                 satisfies_no_pdt=True,
+                regime_state=_regime_state,
+                regime_size_multiplier=_regime_multiplier,
             )
 
         # PDTトラッカーなし → チェック無効
@@ -109,6 +163,8 @@ class StrategySelector:
                 reason="PDTTracker未設定 → チェック無効",
                 original_candidate=candidate,
                 satisfies_no_pdt=strategy_satisfies_no_pdt(candidate),
+                regime_state=_regime_state,
+                regime_size_multiplier=_regime_multiplier,
             )
 
         is_0dte = is_0dte_strategy(candidate, expiry_date, now_et)
@@ -125,6 +181,8 @@ class StrategySelector:
                 reason=f"1DTE以上 → PDT対象外 (capital=${capital_usd:.0f})",
                 original_candidate=candidate,
                 satisfies_no_pdt=True,
+                regime_state=_regime_state,
+                regime_size_multiplier=_regime_multiplier,
             )
 
         # 0DTE + PDT残あり → そのまま通過
@@ -137,6 +195,8 @@ class StrategySelector:
                 reason=f"0DTE PDT残{remaining}本あり → 通過",
                 original_candidate=candidate,
                 satisfies_no_pdt=no_pdt_ok,
+                regime_state=_regime_state,
+                regime_size_multiplier=_regime_multiplier,
             )
 
         # 0DTE + PDT残0 + satisfies_no_pdt=True → 満期放置前提で通過
@@ -157,6 +217,8 @@ class StrategySelector:
                 ),
                 original_candidate=candidate,
                 satisfies_no_pdt=True,
+                regime_state=_regime_state,
+                regime_size_multiplier=_regime_multiplier,
             )
 
         # 0DTE + PDT残0 → フォールバック判定
@@ -177,6 +239,8 @@ class StrategySelector:
                 reason=f"{candidate}は1DTE未対応戦術 → no_trade",
                 original_candidate=candidate,
                 satisfies_no_pdt=False,
+                regime_state=_regime_state,
+                regime_size_multiplier=_regime_multiplier,
             )
 
         fallback_name = get_1dte_fallback_name(candidate)
@@ -189,6 +253,8 @@ class StrategySelector:
                 reason=f"{candidate}: 1DTE版名称生成失敗 → no_trade",
                 original_candidate=candidate,
                 satisfies_no_pdt=False,
+                regime_state=_regime_state,
+                regime_size_multiplier=_regime_multiplier,
             )
 
         # フォールバック発動
@@ -211,6 +277,8 @@ class StrategySelector:
             ),
             original_candidate=candidate,
             satisfies_no_pdt=True,  # 1DTEは常にsatisfies_no_pdt=True
+            regime_state=_regime_state,
+            regime_size_multiplier=_regime_multiplier,
         )
 
     def select_with_pdt_check(
