@@ -1,0 +1,111 @@
+# chronos_config_tradeify_lightning.yaml — Tradeify Lightning Instant Funded 用 Chronos設定
+#                                           (Sora Lab / Chronos)
+#
+# 仕様: Tradeify Lightning（評価スキップ・即Funded・2025-09-12 以降改定仕様）
+# Source: https://help.tradeify.co/en/articles/10495938-lightning-funded-accounts
+#         https://tradeify.co/funded-trader-agreement
+# 調査: data/tradeify_full_spec_20260420.md
+# 実装: chronos_rules_plugin/tradeify_lightning.py
+#
+# 2026-04-20 CRITICAL修正:
+#   - fee: $295 買い切り（旧 $111/月は Select plan の値）
+#   - activation_fee: $0（旧 $1,500/$4,000 は Select plan・Lightning には不要）
+#   - profit_split: 常時 90%（旧 threshold $15K は Select plan の段階制）
+#   - daily_loss_limit_usd: $1,250（新規追加）
+#   - max_mini_contracts: 4（旧: 10）/ max_micro_contracts: 40（旧: 100）
+#   - consistency_rule: 20%/25%/30% scaling（旧: null）
+#   - excluded_tactics: pro_rush 削除（Builder 戦術置換により廃止）
+#
+# !!! 重要: 戦術割当は MFFU 側と明示的に分離すること !!!
+#   - Tradeify: VWAP Reclaim / Liquidity Sweep 専用
+#   - MFFU:     ORB / VIX-MR / Session Break / Gap Fill 系
+#   1戦略1firm制約: 同一戦術を複数firmで使用しない
+#
+# account_id: tradeify_F（MFFU A/B/C/D/E に続く F 番）
+
+tradeify_compliance:
+  firm: "tradeify"
+  plan: "lightning_instant_funded_50k"
+  account_id: "tradeify_F"
+  phase: "funded"   # Instant Funded = 評価フェーズなし・即 funded
+
+  account:
+    account_size_usd: 50000
+    fee_buyonce_usd: 295.0         # $295 買い切り（旧 $111/月は Select plan の値）
+    activation_fee_usd: 0          # $0（Lightning は不要。Select plan の $1,500/$4,000 とは別物）
+
+  funded:
+    # EOD Drawdown のみ
+    max_loss_limit_usd: 2000
+    daily_loss_limit_usd: 1250     # $1,250/日（2025-09-12 以降追加）
+    # Consistency Rule: 累計利益帯別スケーリング（2025-09-12 以降追加）
+    consistency_rule:
+      tiers:
+        - profit_range_usd: [0, 3000]
+          max_daily_pct: 0.20
+        - profit_range_usd: [3000, 10000]
+          max_daily_pct: 0.25
+        - profit_range_usd: [10000, null]
+          max_daily_pct: 0.30
+    allow_t1_news: true            # 制限なし（"Free rein"）
+    overnight_hold_allowed: true
+    weekend_hold_allowed: true     # 明示制限なし
+    drawdown_mode: "EOD"
+
+    # コントラクト上限（Tradovate 接続・50K 基準・2025-09-12 以降改定）
+    max_mini_contracts: 4          # 旧: 10
+    max_micro_contracts: 40        # 旧: 100
+
+  payout:
+    cycle_winning_days: 5
+    # Profit Split: 常時 90%（Select plan の 100%→90% 段階制は Lightning には不適用）
+    profit_split_pct: 0.90         # 常時 90%
+    activation_fee_usd: 0          # $0（Lightning には不要）
+
+  # 同時口座上限
+  concurrent_max_accounts: 5
+  total_capital_max_usd: 1000000  # $1M 総合上限
+
+  # !!! 戦術分離（1戦略1firm制約）!!!
+  # Tradeify 専用戦術（MFFU 側で使用禁止）
+  allowed_tactics:
+    - "vwap_reclaim"
+    - "liquidity_sweep"
+
+  # MFFU 専用戦術（Tradeify では禁止）
+  # 注: pro_rush は Builder 戦術置換により廃止（2026-04-20 CRITICAL修正）
+  excluded_tactics:
+    - "orb"
+    - "orb_buy"
+    - "vix_mr"
+    - "session_break"
+    - "gap_fill"
+    - "overnight_gap"
+
+  # エントリー時間帯（ET）— MFFU と重複しない時間帯推奨
+  # MFFU の ORB は 9:30-10:00 ET 集中 → Tradeify は 10:00 以降に特化
+  allowed_entry_windows_et:
+    - start: "10:00"
+      end: "11:30"
+      label: "VWAP Reclaim Window"
+    - start: "13:00"
+      end: "15:30"
+      label: "Liquidity Sweep Window"
+
+  # 自動化ポリシー（Tradeify 公式準拠）
+  automation_policy:
+    self_owned_strategy_only: true   # 自己所有戦略のみ
+    hft_prohibited: true             # HFT（1秒未満反復売買）禁止
+    commercial_strategy_prohibited: true  # 第三者販売禁止
+    live_video_verification_required: true  # 初回 payout 時に Live 動画検証要
+
+  # Broker 接続
+  broker: "tradovate"               # Tradovate / NinjaTrader / WealthCharts / tradesea
+  preferred_symbol: "MES"           # Micro E-mini S&P500（$5/point）
+
+  # Copy Trading（MFFU 口座との相互コピー可否）
+  copy_trading_from_mffu: false     # 1戦略1firm制約により MFFU 側から copy しない
+
+  # タイミングジッター（5 firm 認証分散）
+  # tradeify_F は MFFU A/B/C/D/E の後に続く
+  start_delay_sec: 25              # 5秒ずつずらす（A:0 B:5 C:10 D:15 E:20 F:25）
