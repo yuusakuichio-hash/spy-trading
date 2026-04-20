@@ -283,6 +283,17 @@ except ImportError as e:
     LIQUIDITY_SWEEP_AVAILABLE = False
     log.warning(f"chronos_liquidity_sweep not available: {e}")
 
+# ── Bot動作乖離検知 (観点B・D フック / Atlas混同禁止・Chronos専用インスタンス) ──
+try:
+    from common.bot_deviation_detector import DeviationDetector as _DeviationDetector
+    _chronos_deviation_detector = _DeviationDetector()
+    _CHRONOS_DEVIATION_DETECTOR_OK = True
+    log.info("bot_deviation_detector: loaded for Chronos")
+except Exception as _cdd_err:
+    _chronos_deviation_detector = None
+    _CHRONOS_DEVIATION_DETECTOR_OK = False
+    log.warning(f"bot_deviation_detector not available: {_cdd_err}")
+
 # ── 認証情報 ───────────────────────────────────────────────────────────────────
 PUSHOVER_TOKEN = os.environ.get("PUSHOVER_TOKEN", "")
 PUSHOVER_USER  = os.environ.get("PUSHOVER_USER", "")
@@ -1105,6 +1116,41 @@ class FuturesORBStrategy:
         self._entry_price  = current_price
         self._trade_id     = str(uuid.uuid4())[:8]
 
+        # ── 観点B: エントリー構造整合性チェック (約定後即時) ─────────────────
+        if _CHRONOS_DEVIATION_DETECTOR_OK and _chronos_deviation_detector is not None:
+            try:
+                _order_id_str = str(order.get("order_id", self._trade_id)) if order else self._trade_id
+                _actual_fills = [{"side": action.lower(), "price": current_price, "qty": n_contracts}]
+                _dev_b = _chronos_deviation_detector.check_entry_integrity(
+                    bot_name="chronos",
+                    tactic="futures_orb",
+                    order_id=_order_id_str,
+                    expected_structure={"legs": 1, "credit": False},
+                    actual_fills=_actual_fills,
+                )
+                if _dev_b:
+                    _chronos_deviation_detector.alert(_dev_b)
+                    log.warning(f"[DEVIATION-B] {_dev_b.title}")
+
+                # ── 観点D: 発注フロー異常チェック ──────────────────────────
+                _fill_status = str(order.get("status", "filled")).lower() if order else "filled"
+                _submit_ts = time.time() - 2.0  # 発注時刻は入手不可のため直近2秒前を近似
+                _dev_d = _chronos_deviation_detector.check_execution_anomaly(
+                    bot_name="chronos",
+                    tactic="futures_orb",
+                    order_id=_order_id_str,
+                    submitted_at=_submit_ts,
+                    filled_at=time.time() if "fill" in _fill_status else None,
+                    submitted_price=current_price,
+                    filled_price=current_price,
+                    status="rejected" if "reject" in _fill_status else "filled",
+                )
+                if _dev_d:
+                    _chronos_deviation_detector.alert(_dev_d)
+                    log.warning(f"[DEVIATION-D] {_dev_d.title}")
+            except Exception as _cdev_err:
+                log.warning(f"[DEVIATION_HOOK_ERR] {_cdev_err}")
+
         log.info(f"[FuturesORB] entry confirmed: trade_id={self._trade_id} "
                  f"side={self._entry_side} stop={stop_price:.2f} target={target_price:.2f}")
 
@@ -1499,6 +1545,9 @@ class ChronosBot:
         # B-5: price_history 配線（strategy_selector に渡す直近クローズ系列）
         from collections import deque as _deque
         self._price_history: _deque = _deque(maxlen=20)
+
+        # BUG-1 cycle3: 起動時に永続状態を復元（再起動でカウンタ消失防止）
+        self._load_state()
 
     # ── 接続 ──────────────────────────────────────────────────────────────────
 
@@ -2439,6 +2488,78 @@ class ChronosBot:
         except Exception as e:
             log.warning(f"[SaveState] write failed: {e}")
 
+    def _load_state(self) -> None:
+        """BUG-1 cycle3: data/accounts/<account_id>/state.json から永続状態を復元する。
+
+        __init__ 末尾で呼出。state.json 不在はフレッシュ起動として扱い warning なし。
+        state.json が存在する場合は以下の5フィールドを復元する:
+          - _best_single_day_profit
+          - _total_profit
+          - _winning_days
+          - _daily_trade_count
+          - _news_window_violation_flag
+
+        欠損フィールドはデフォルト値（0 / False）のまま + warning ログ出力。
+        """
+        account_id = os.environ.get(
+            "MFFU_ACCOUNT_ID",
+            f"mffu_{self.product.lower()}_{'paper' if self.paper else 'live'}",
+        )
+        state_path = _get_base_dir() / "accounts" / account_id / "state.json"
+
+        if not state_path.exists():
+            log.info("[LoadState] state.json 不在 → フレッシュ起動: %s", state_path)
+            return
+
+        try:
+            raw = state_path.read_text(encoding="utf-8")
+            state = json.loads(raw)
+        except Exception as e:
+            log.warning("[LoadState] state.json パース失敗 → フレッシュ起動: %s", e)
+            return
+
+        # 5フィールド復元（欠損は警告のみ・デフォルト値維持）
+        _FIELDS = [
+            ("best_single_day_profit_usd", "_best_single_day_profit", float, 0.0),
+            ("total_profit_usd",           "_total_profit",           float, 0.0),
+            ("winning_days_count",         "_winning_days",           int,   0),
+            ("daily_trade_count",          "_daily_trade_count",      int,   0),
+        ]
+        for json_key, attr, typ, default in _FIELDS:
+            if json_key in state:
+                try:
+                    setattr(self, attr, typ(state[json_key]))
+                except (ValueError, TypeError) as e:
+                    log.warning("[LoadState] %s 変換失敗(%s) → デフォルト %s", json_key, e, default)
+                    setattr(self, attr, default)
+            else:
+                log.warning("[LoadState] %s 欠損 → デフォルト %s", json_key, default)
+                setattr(self, attr, default)
+
+        # news_window_violation_flag は phase_flags 内にある
+        phase_flags = state.get("phase_flags", {})
+        if "news_window_violation" in phase_flags:
+            try:
+                self._news_window_violation_flag = bool(phase_flags["news_window_violation"])
+            except (ValueError, TypeError) as e:
+                log.warning("[LoadState] news_window_violation 変換失敗(%s) → False", e)
+                self._news_window_violation_flag = False
+        else:
+            log.warning("[LoadState] news_window_violation 欠損 → False")
+            self._news_window_violation_flag = False
+
+        log.info(
+            "[LoadState] 状態復元完了: account=%s "
+            "total_profit=%.2f winning_days=%d best_day=%.2f "
+            "daily_trades=%d news_violation=%s",
+            account_id,
+            self._total_profit,
+            self._winning_days,
+            self._best_single_day_profit,
+            self._daily_trade_count,
+            self._news_window_violation_flag,
+        )
+
     def _get_current_balance_and_pnl(self) -> tuple[float, float]:
         """
         (cash_balance, open_pnl) を返す。
@@ -2696,6 +2817,8 @@ class ChronosBot:
                                         "[MFFUBot][SurvivalMode] NewsGuard: T1ニュース前後2分窓 → "
                                         "新規エントリースキップ"
                                     )
+                                    # BUG-NEW-1 cycle3: 違反フラグ設定（agent L4 検知用）
+                                    self._news_window_violation_flag = True
                                 elif not self.orb._entry_done:
                                     entry = self.orb.check_breakout(
                                         current_price   = price,

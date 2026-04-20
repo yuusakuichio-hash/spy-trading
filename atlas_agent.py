@@ -47,6 +47,15 @@ try:
 except Exception:
     _DEV_SCANNER_OK = False
 
+# Bot動作乖離検知 (観点A-D リアルタイム監視)
+try:
+    from common.bot_deviation_detector import DeviationDetector as _DeviationDetector
+    _atlas_deviation_detector = _DeviationDetector()
+    _DEVIATION_DETECTOR_OK = True
+except Exception:
+    _atlas_deviation_detector = None
+    _DEVIATION_DETECTOR_OK = False
+
 # PDT Tracker 連携（全戦術合算FINRA PDTカウンタ）
 try:
     from common.pdt_tracker import get_global_tracker as _pdt_get_tracker, PDT_LIMIT as _PDT_LIMIT
@@ -844,6 +853,10 @@ def main():
     _dev_scan_interval = 300  # 5分
     _notified_surge_cats: set[str] = set()  # 既通知カテゴリ（重複抑制）
 
+    # DeviationDetector Greeks スナップショット（1分毎）
+    _last_greeks_snapshot = 0.0
+    _GREEKS_SNAPSHOT_INTERVAL = 60  # 1分
+
     # Heartbeat pulse（1分毎）
     _last_pulse = 0.0
     _PULSE_INTERVAL = 60
@@ -862,11 +875,54 @@ def main():
             st = load_state()
             manual_halt = st.get("manual_halt")
 
+            # ── DeviationDetector halt_flag チェック ─────────────────────────
+            # 本番で連続逸脱が ESCALATE_THRESHOLD 回を超えた場合 Bot を停止する
+            if _DEVIATION_DETECTOR_OK and _atlas_deviation_detector is not None:
+                try:
+                    if _atlas_deviation_detector.is_halt_flagged():
+                        pushover(
+                            "[Atlas/HALT] 乖離検知 Bot 停止フラグ",
+                            "DeviationDetector が連続逸脱を検知しました。\n"
+                            "手動確認後 DeviationDetector.clear_halt_flag() を実行してください。",
+                            priority=2,
+                        )
+                        log("[DEVIATION_HALT] halt_flag=True → Level4 halt")
+                        # halt_flag は手動解除まで維持 (ここでは clear しない)
+                except Exception as _dhe:
+                    log(f"[DEVIATION_HALT_ERR] {_dhe}")
+
             new_lines: list[str] = []
             for name, tl in tailers.items():
                 new_lines.extend(tl.read_new())
 
             fired_list = matcher.ingest(new_lines, now)
+
+            # ── DeviationDetector Greeks 1分毎スナップショット (観点C) ────────
+            if (
+                _DEVIATION_DETECTOR_OK
+                and _atlas_deviation_detector is not None
+                and in_market
+                and (now - _last_greeks_snapshot >= _GREEKS_SNAPSHOT_INTERVAL)
+            ):
+                try:
+                    # atlas_state.json から現在ポジションの Greeks を読む
+                    positions = st.get("positions", {})
+                    for pos_id, pos in positions.items() if isinstance(positions, dict) else []:
+                        greeks = pos.get("greeks")
+                        tactic = pos.get("tactic", "unknown")
+                        if greeks and isinstance(greeks, dict):
+                            dev = _atlas_deviation_detector.check_greeks_range(
+                                bot_name="atlas",
+                                tactic=tactic,
+                                position_id=pos_id,
+                                current_greeks=greeks,
+                            )
+                            if dev:
+                                _atlas_deviation_detector.alert(dev)
+                                log(f"[DEVIATION-C] {dev.title}")
+                    _last_greeks_snapshot = now
+                except Exception as _gse:
+                    log(f"[GREEKS_SNAP_ERR] {_gse}")
 
             # synthetic: bot_process_stale
             if in_market:
