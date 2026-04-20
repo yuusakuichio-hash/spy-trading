@@ -12033,6 +12033,7 @@ class IronCondorSellEngine:
                 f"size={VIX_SPIKE_IC_SIZE_FACTOR}x (リスクキャップ厳格化)"
             )
         log.info(f"[IC_SELL] premarket_check OK: VIX={vix:.1f} IVR={ivr_pct:.0f}%ile spike30={_spike_30}")
+        return True
 
     # -- Phase 2: エントリー実行 -----------------------------------------------
 
@@ -12072,6 +12073,10 @@ class IronCondorSellEngine:
         if not cash or cash <= 0:
             cash = 10000.0
         qty = self._calc_qty(cash, spread_width, capital_pct)
+        # VIXスパイク+30%翌日: サイズを0.5倍に縮小してリスクキャップ厳格化
+        if self._vix_spike_30:
+            qty = max(1, int(qty * VIX_SPIKE_IC_SIZE_FACTOR))
+            log.info(f"[IC_SELL][VIXSpike30] qty縮小: x{VIX_SPIKE_IC_SIZE_FACTOR} -> qty={qty}")
 
         log.info(
             f"[IC_SELL] Entry: {sym_ticker} VIX={vix:.1f} IVR={ivr_pct:.0f}%ile "
@@ -12116,7 +12121,14 @@ class IronCondorSellEngine:
                 "spread_width": spread_width, "vix": vix,
                 "call_delta": call_delta, "put_delta": put_delta,
                 "trade_id": trade_id, "signal_id": signal_id,
+                "vix_spike_30": self._vix_spike_30,
             })
+            if self._vix_spike_30:
+                record_vix_spike_ic_trade({
+                    "date": today_str, "symbol": underlying, "event": "entry",
+                    "vix": vix, "qty": qty, "net_credit": pos.net_credit,
+                    "signal_id": signal_id, "trade_id": trade_id,
+                })
             pushover("[Atlas][IC_SELL][DRY-TEST]",
                      f"IC entry: {sym_ticker} CALL {cs_strike}/{cb_strike} "
                      f"PUT {ps_strike}/{pb_strike} x{qty} credit=${pos.net_credit:.2f}")
@@ -12341,7 +12353,14 @@ class IronCondorSellEngine:
             "put_delta_actual":  round(put_sell_opt.get("delta", 0), 4),
             "capital_pct": capital_pct,
             "trade_id": trade_id, "signal_id": signal_id,
+            "vix_spike_30": self._vix_spike_30,
         })
+        if self._vix_spike_30:
+            record_vix_spike_ic_trade({
+                "date": today_str, "symbol": underlying, "event": "entry",
+                "vix": vix, "qty": qty, "net_credit": pos.net_credit,
+                "signal_id": signal_id, "trade_id": trade_id,
+            })
         self.entry_done = True
         self.trade_done = True
         self.position   = pos
@@ -14462,6 +14481,8 @@ class SPYCreditSpreadBot:
                          f"(+{vix - yesterday_vix:.1f} >= dyn_threshold={dyn_threshold:.2f}) "
                          f"→ tomorrow is recovery day")
         save_vix_spike_data(vix, spike_for_tomorrow=spike)
+        # 施策8: 日次VIX終値ログ（+30%スパイク検知）を更新
+        save_vix_daily_close(vix)
 
     def _on_position_closed(self, pnl_usd: float, close_reason: str = "manual_close"):
         """ポジション決済完了後に呼ぶ後処理。
