@@ -9,8 +9,36 @@ from datetime import datetime, timezone, timedelta
 
 BASE = "/Users/yuusakuichio/trading"
 PENDING_PATH = f"{BASE}/data/pending_completions.jsonl"
+PATTERNS_PATH = f"{BASE}/data/violation_patterns.json"
 LOG_PATH = f"{BASE}/data/logs/discipline_violations.log"
 JST = timezone(timedelta(hours=9))
+
+
+def load_deadline_minutes(now):
+    """時間帯別deadlineをviolation_patterns.jsonから取得。
+    場中 22:30-05:00 JST は10分 / 場外 05:00-22:30 は20分 /
+    メンテ 06:00-07:00 は60分 / 週末 土06:00-月07:00 は120分。
+    2026-04-20 analyst推奨（data/pending_threshold_optimization_20260420.md）。
+    """
+    try:
+        with open(PATTERNS_PATH, "r") as f:
+            patterns = json.load(f)
+        cfg = patterns.get("memory_as_completion", {})
+        weekday = now.weekday()
+        h, m = now.hour, now.minute
+        if weekday == 5 and (h, m) >= (6, 0):
+            return cfg.get("deadline_minutes_weekend", 120)
+        if weekday == 6:
+            return cfg.get("deadline_minutes_weekend", 120)
+        if weekday == 0 and (h, m) < (7, 0):
+            return cfg.get("deadline_minutes_weekend", 120)
+        if (h, m) >= (6, 0) and (h, m) < (7, 0):
+            return cfg.get("deadline_minutes_maintenance", 60)
+        if (h, m) >= (22, 30) or (h, m) < (5, 0):
+            return cfg.get("deadline_minutes_market_hours", 10)
+        return cfg.get("deadline_minutes_daytime", 20)
+    except Exception:
+        return 30
 
 TRIGGER_PATTERNS = [
     r"memory/feedback_.*violations?.*\.md",
@@ -82,7 +110,8 @@ if not should_trigger(file_path):
     sys.exit(0)
 
 now = datetime.now(JST)
-deadline = now + timedelta(minutes=30)
+deadline_min = load_deadline_minutes(now)
+deadline = now + timedelta(minutes=deadline_min)
 fingerprint = compute_fingerprint(file_path, content)
 
 existing = load_pending()
@@ -104,7 +133,7 @@ log_event(f"PENDING_REGISTERED: {os.path.basename(file_path)} deadline={deadline
 
 sys.stderr.write(f"\n[MEMORY_TRACKER] 違反メモリ登録: {os.path.basename(file_path)}\n")
 sys.stderr.write(f"[MEMORY_TRACKER] deadline: {deadline.strftime('%Y-%m-%d %H:%M JST')}\n")
-sys.stderr.write(f"[MEMORY_TRACKER] 30分以内に対応コードをcommitしないとPushover[ALERT]が発火する。\n")
+sys.stderr.write(f"[MEMORY_TRACKER] {deadline_min}分以内に対応コードをcommitしないとPushover[ALERT]が発火する。\n")
 sys.stderr.write(f"[MEMORY_TRACKER] メモリ保存=対策完了ではない。コード実装まで完了とみなすな。\n\n")
 
 sys.exit(0)
