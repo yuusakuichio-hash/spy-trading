@@ -7,12 +7,13 @@ strategy_selector.py — 環境適応型 戦術選択エンジン
   このエンジンもそうあるべき。固定閾値は最小限（パニック閾値のみ）。
   全VIX閾値は60日パーセンタイルから動的算出。
 
-戦術候補 (9戦術):
+戦術候補 (10戦術):
   - ic_sell       : Iron Condor 売り（低ボラ・方向感なし・IVR中〜高）
   - butterfly     : ATM Long Butterfly（低IVR・レンジ環境・IV拡張期待なし）
   - calendar_sell : Calendar Spread 売り（高IVR・VIX20〜50・front IV crush狙い）
   - strangle_sell : OTMストラングル売り（高IVR・方向感なし・中〜高ボラ）
-  - cs_sell       : Credit Spread 売り（中低ボラ・方向性あり or やや高ボラ）
+  - cs_sell       : Credit Spread 売り 0DTE（中低ボラ・方向性あり or やや高ボラ）
+  - cs_sell_1dte  : Credit Spread 売り 1DTE（PDT残≤2 かつ VIX<25 で自動切替）
   - orb_buy       : Opening Range Breakout 買い・0DTE（方向性あり・値動き十分）
   - orb_1dte      : ORB 買い・翌日満期（delta 0.40 OTM・TP+30/SL-50・theta緩和）
   - straddle_buy  : ストラドル買い（高ボラ・方向不明）
@@ -30,6 +31,9 @@ strategy_selector.py — 環境適応型 戦術選択エンジン
   gap_pct        : float  — 前日からのギャップ率 (%)
   vix_history    : list   — 過去60日のVIX日次値（動的閾値算出に使用）
   bias           : str    — "bull" / "bear" / "neutral"（プレマーケットバイアス）
+  pdt_remaining  : int | float — PDT残取引回数（int: $25K未満の残数 / inf: 制限なし）
+                    省略時は float('inf')（制限なし）として扱う
+  account_equity : float  — 口座資産額USD（PDT判定・choose_cs_variant に使用）
 
 出力:
   {
@@ -382,6 +386,95 @@ def calc_environment_score(
     return round(score, 1)
 
 
+# ── CS 0DTE vs 1DTE バリアント選択ヘルパー ──────────────────────────────────
+#
+# 1DTE CS パラメータ（BT実績根拠: data/atlas_20pct_improvement_10measures_20260420.md）
+#   width=3 / delta=0.20 / size_mult=2x / take_profit=50%
+#   月利+32.4%（0DTE +0.3%） / VIX<15でも1DTE優位(+96.1% vs 40.7%)
+CS_1DTE_PARAMS: dict = {
+    "width":        3,     # ストライク幅 ($3）
+    "delta":        0.20,  # OTM delta（保守的）
+    "size_mult":    2.0,   # 0DTEに対する枚数倍率（PDT回避で稼働日数増）
+    "take_profit":  0.50,  # プレミアムの50%でTP
+    "dte":          1,     # 翌営業日満期
+}
+
+# VIX閾値: この水準以上なら0DTE優先（高ボラ=当日収束期待）
+# BT根拠: VIX>25で0DTE CSの勝率が回復（収束バイアス強まる）
+CS_1DTE_VIX_THRESHOLD = 25.0
+
+# PDT残数がこの値以下なら1DTEに切り替える（0=使い切り・1=残1本・2=残2本）
+CS_1DTE_PDT_TRIGGER = 2
+
+
+def choose_cs_variant(env: dict) -> str:
+    """CS を選ぶ局面で "cs_sell" (0DTE) と "cs_sell_1dte" (翌日満期) を振り分ける。
+
+    1DTE CSを選ぶ根拠 (data/atlas_20pct_improvement_10measures_20260420.md 施策5):
+      - 1DTE CS は同一日に決済しないため FINRA PDT カウント対象外
+      - BT: 1DTE(w=3,d=0.20,sm=2x,tp=50%) 月利+32.4% vs 0DTE +0.3%
+      - PDT制限下で週3回制約が外れ、実効稼働日数が倍増 → 月利+4〜7.5%寄与
+      - VIX>25 は当日収束期待で0DTE優位（BT根拠） / VIX<=25 は1DTE優位
+
+    判断ロジック:
+      1. PDT残 <= CS_1DTE_PDT_TRIGGER (≤2) かつ VIX <= CS_1DTE_VIX_THRESHOLD (<=25):
+         → 1DTE 優先（PDT制限を物理回避）
+      2. account_equity < $25,000 かつ pdt_remaining == 0:
+         → 1DTE 強制（残枠ゼロ・0DTE不可）
+      3. VIX > 25:
+         → 0DTE 優先（高ボラ当日収束期待・BT根拠）
+      4. デフォルト: 0DTE
+
+    Args:
+      env: select_strategy() と同じ入力
+           - pdt_remaining  : int | float  (PDT残回数。float('inf') = 制限なし)
+           - account_equity : float        (口座資産USD。$25K未満でPDT制限あり)
+           - vix            : float        (現在のVIX)
+
+    Returns:
+      "cs_sell" または "cs_sell_1dte"
+    """
+    pdt_remaining  = env.get("pdt_remaining", float("inf"))
+    account_equity = env.get("account_equity", 25_001.0)
+    vix            = float(env.get("vix", 20.0))
+
+    # $25K以上: PDT制限なし → VIX判定のみ
+    if account_equity >= 25_000.0:
+        # VIX <= 25 でも0DTE可（PDT制限なし）→ デフォルト0DTE
+        return "cs_sell"
+
+    # $25K未満: PDT残数で判断
+    # PDT残0: 0DTE不可 → 1DTE強制
+    if pdt_remaining == 0:
+        log.info(
+            f"[CS variant] PDT残0 → cs_sell_1dte 強制切替 "
+            f"(equity=${account_equity:.0f}, VIX={vix:.1f})"
+        )
+        return "cs_sell_1dte"
+
+    # PDT残≤2 かつ VIX<=25: 1DTE優先（稼働日数最大化）
+    if pdt_remaining <= CS_1DTE_PDT_TRIGGER and vix <= CS_1DTE_VIX_THRESHOLD:
+        log.info(
+            f"[CS variant] PDT残{pdt_remaining}本 ≤ {CS_1DTE_PDT_TRIGGER} "
+            f"かつ VIX={vix:.1f} <= {CS_1DTE_VIX_THRESHOLD} → cs_sell_1dte"
+        )
+        return "cs_sell_1dte"
+
+    # VIX>25: 0DTE優先（高ボラ収束バイアス・BT根拠）
+    if vix > CS_1DTE_VIX_THRESHOLD:
+        log.info(
+            f"[CS variant] VIX={vix:.1f} > {CS_1DTE_VIX_THRESHOLD} → cs_sell 優先（0DTE）"
+        )
+        return "cs_sell"
+
+    # PDT残があり VIX<=25: 1DTE優先（BT月利+32.4% vs 0DTE +0.3%）
+    log.info(
+        f"[CS variant] PDT残{pdt_remaining}本・VIX={vix:.1f} ≤ {CS_1DTE_VIX_THRESHOLD} "
+        f"→ cs_sell_1dte（BTベース1DTE優位）"
+    )
+    return "cs_sell_1dte"
+
+
 # ── ORB 0DTE vs 1DTE バリアント選択ヘルパー ─────────────────────────────────
 
 def choose_orb_variant(env: dict) -> str:
@@ -450,7 +543,8 @@ def select_strategy(env: dict) -> dict:
         "butterfly"     — ATM Long Butterfly（低IVR・レンジ環境）
         "calendar_sell" — Calendar Spread 売り（高IVR・VIX20〜50・front IV crush狙い）
         "strangle_sell" — OTMストラングル売り（高IVR・中〜高ボラ・方向感なし）
-        "cs_sell"       — Credit Spread 売り（中低ボラ・方向性あり or やや高ボラ）
+        "cs_sell"       — Credit Spread 売り 0DTE（中低ボラ・方向性あり or やや高ボラ）
+        "cs_sell_1dte"  — Credit Spread 売り 1DTE（PDT残≤2 かつ VIX<=25 で自動選択）
         "orb_buy"       — Opening Range Breakout 買い・0DTE（方向性あり・値動き十分）
         "orb_1dte"      — ORB 買い・翌日満期（theta decay緩和・delta 0.40 OTM・TP+30/SL-50）
         "straddle_buy"  — ストラドル買い（高ボラ・方向不明）
@@ -470,6 +564,10 @@ def select_strategy(env: dict) -> dict:
     gap_pct      = env.get("gap_pct", 0.0)
     vix_history  = env.get("vix_history", [])
     bias         = env.get("bias", "neutral")  # "bull" / "bear" / "neutral"
+    # PDT関連 — choose_cs_variant() に渡すため展開
+    # pdt_remaining: int = PDT残回数 / float('inf') = 制限なし（$25K以上 or 省略時）
+    pdt_remaining  = env.get("pdt_remaining", float("inf"))
+    account_equity = float(env.get("account_equity", 25_001.0))
 
     # ── 動的閾値算出 ─────────────────────────────────────────────────────
     thresholds = compute_dynamic_vix_thresholds(vix_history)
@@ -623,7 +721,7 @@ def select_strategy(env: dict) -> dict:
             reason_parts.append("VRP強正+GEX正 → IC売り最適環境。両サイドからプレミアム収集。")
         elif vrp_positive:
             # 低ボラでVRP正 → CS売り（GEXが負でも低ボラなのでリスク低）
-            primary_strategy    = "cs_sell"
+            primary_strategy    = choose_cs_variant(env)
             primary_confidence  = 0.75
             primary_alloc       = 1.0
             if has_direction:
@@ -633,13 +731,13 @@ def select_strategy(env: dict) -> dict:
         elif vrp_negative and buy_regime:
             # 低VIXだがVRP負で方向性あり → ORBは低ボラで難しいがCSは不利
             # 資金縮小でCS売り（safety net）のみ
-            primary_strategy    = "cs_sell"
+            primary_strategy    = choose_cs_variant(env)
             primary_confidence  = 0.50
             primary_alloc       = 0.6
             reason_parts.append("VRP負だが低VIX帯。ORBは低ボラでfakeout多。縮小CS。")
         else:
             # VRPデータなし or 中立
-            primary_strategy    = "cs_sell"
+            primary_strategy    = choose_cs_variant(env)
             primary_confidence  = 0.60
             primary_alloc       = 1.0
             reason_parts.append("低VIX帯。VRPデータ不足だがCS売りがデフォルト優位。")
@@ -675,7 +773,7 @@ def select_strategy(env: dict) -> dict:
             primary_strategy   = "strangle_sell"
             primary_confidence = 0.72
             primary_alloc      = 0.8
-            secondary_strategy   = "cs_sell"
+            secondary_strategy   = choose_cs_variant(env)
             secondary_confidence = 0.45
             secondary_alloc      = 0.2
             reason_parts.append(
@@ -684,7 +782,7 @@ def select_strategy(env: dict) -> dict:
             )
         elif sell_regime and vrp_strongly_positive:
             # 方向性スコアが売り寄りかつVRP強正 → CS売り主体
-            primary_strategy    = "cs_sell"
+            primary_strategy    = choose_cs_variant(env)
             primary_confidence  = 0.70
             primary_alloc       = 0.8
             if buy_regime or has_direction:
@@ -702,7 +800,7 @@ def select_strategy(env: dict) -> dict:
             primary_strategy    = "orb_buy"
             primary_confidence  = 0.65
             primary_alloc       = 0.8
-            secondary_strategy    = "cs_sell"
+            secondary_strategy    = choose_cs_variant(env)
             secondary_confidence  = 0.50
             secondary_alloc       = 0.2
             reason_parts.append(
@@ -713,7 +811,7 @@ def select_strategy(env: dict) -> dict:
             primary_strategy    = "orb_buy"
             primary_confidence  = 0.62
             primary_alloc       = 0.6
-            secondary_strategy    = "cs_sell"
+            secondary_strategy    = choose_cs_variant(env)
             secondary_confidence  = 0.60
             secondary_alloc       = 0.4
             reason_parts.append(
@@ -722,7 +820,7 @@ def select_strategy(env: dict) -> dict:
         elif mixed_regime:
             # 方向感なし: バイアスで振り分け
             if has_direction and vrp_positive:
-                primary_strategy    = "cs_sell"
+                primary_strategy    = choose_cs_variant(env)
                 primary_confidence  = 0.58
                 primary_alloc       = 0.7
                 secondary_strategy    = "orb_buy"
@@ -735,14 +833,14 @@ def select_strategy(env: dict) -> dict:
                 primary_strategy    = "orb_buy"
                 primary_confidence  = 0.55
                 primary_alloc       = 0.7
-                secondary_strategy    = "cs_sell"
+                secondary_strategy    = choose_cs_variant(env)
                 secondary_confidence  = 0.40
                 secondary_alloc       = 0.3
                 reason_parts.append(
                     "中ボラ低帯・中立。VRP負 → ORB主体(70%)。CSは縮小。"
                 )
             else:
-                primary_strategy    = "cs_sell"
+                primary_strategy    = choose_cs_variant(env)
                 primary_confidence  = 0.55
                 primary_alloc       = 0.6
                 secondary_strategy    = "orb_buy"
@@ -753,7 +851,7 @@ def select_strategy(env: dict) -> dict:
                 )
         else:
             # フォールバック
-            primary_strategy    = "cs_sell"
+            primary_strategy    = choose_cs_variant(env)
             primary_confidence  = 0.55
             primary_alloc       = 0.6
             secondary_strategy    = "orb_buy"
@@ -804,7 +902,7 @@ def select_strategy(env: dict) -> dict:
             primary_strategy    = "orb_buy"
             primary_confidence  = 0.70
             primary_alloc       = 0.9
-            secondary_strategy    = "cs_sell"
+            secondary_strategy    = choose_cs_variant(env)
             secondary_confidence  = 0.35
             secondary_alloc       = 0.1
             reason_parts.append(
@@ -823,7 +921,7 @@ def select_strategy(env: dict) -> dict:
             )
         elif sell_regime and vrp_strongly_positive:
             # 高ボラだがVRP正かつ売り環境: 縮小CS（慎重）
-            primary_strategy    = "cs_sell"
+            primary_strategy    = choose_cs_variant(env)
             primary_confidence  = 0.45
             primary_alloc       = 0.5
             reason_parts.append(
