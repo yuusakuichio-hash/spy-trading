@@ -60,12 +60,18 @@ except ImportError:
     _EXT_PING_OK = False
     def _ext_ping(*a, **kw) -> bool: return False  # type: ignore[misc]
 
-# ── 共通 Pushover クライアント（SPOF解消・backoff/queue一元管理） ─────────────
+# ── 共通 Pushover クライアント（SPOF解消・backoff/queue一元管理・ゲートレイヤー） ──
 try:
     from common import pushover_client as _pc
     _PC_AVAILABLE = True
+    _LEVEL_CRITICAL = _pc.LEVEL_CRITICAL
+    _LEVEL_BATCHED  = _pc.LEVEL_BATCHED
+    _LEVEL_SILENT   = _pc.LEVEL_SILENT
 except ImportError:
     _PC_AVAILABLE = False
+    _LEVEL_CRITICAL = "critical"
+    _LEVEL_BATCHED  = "batched"
+    _LEVEL_SILENT   = "silent"
 
 # ── .env ロード ──────────────────────────────────────────────────────────────
 def _load_env_file():
@@ -273,6 +279,32 @@ _PATTERN_CONFIG: dict[str, dict[str, int]] = {
 }
 _DEFAULT_PATTERN_CFG = {"window_sec": 300, "threshold": 10, "cooldown_sec": 60}
 
+# ── Tradovate 認証失敗 silence ────────────────────────────────────────────────
+# TRADOVATE_USERNAME / TRADOVATE_PASSWORD 未設定 = MFFU購入前の初期状態。
+# この段階の "authentication failed" / "HTTP 400 auth/accessTokenRequest" は
+# 人間介入では解決できない（クレデンシャル設定まで待つだけ）。
+# → Pushover critical 飛ばさず INFO ログのみ。設定後は自動的に抑制解除される。
+_AUTH_SILENCE_PATTERNS: list[re.Pattern] = [
+    re.compile(r"authentication\s+failed", re.IGNORECASE),
+    re.compile(r"HTTP\s+400.*auth.*accessTokenRequest", re.IGNORECASE),
+    re.compile(r"accessTokenRequest.*HTTP\s+400", re.IGNORECASE),
+    re.compile(r"Tradovate.*auth.*fail|auth.*fail.*Tradovate", re.IGNORECASE),
+    re.compile(r"Invalid credentials|credentials.*invalid", re.IGNORECASE),
+]
+
+def _is_tradovate_auth_silence(line: str) -> bool:
+    """TRADOVATE_USERNAME/PASSWORD が未設定かつ行が認証失敗パターンなら True を返す。
+
+    クレデンシャルが設定済みの場合は通常の通知ルートに流す（設定済み=本物のエラー）。
+    """
+    has_creds = bool(
+        os.environ.get("TRADOVATE_USERNAME")
+        and os.environ.get("TRADOVATE_PASSWORD")
+    )
+    if has_creds:
+        return False  # 設定済み → 通常エラーとして通知する
+    return any(p.search(line) for p in _AUTH_SILENCE_PATTERNS)
+
 # ── ロギング設定 ─────────────────────────────────────────────────────────────
 WATCHDOG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
@@ -344,15 +376,35 @@ def _queue_pushover(title: str, message: str, priority: int) -> None:
 
 
 # ── Pushover（[Chronos]タグ付き） ────────────────────────────────────────────
-def pushover_send(title: str, message: str, priority: int = 1) -> None:
-    """Pushover通知を送信する。[Chronos/Watchdog]タグを強制付与する。
+def pushover_send(title: str, message: str, priority: int = 1,
+                  level: str | None = None) -> None:
+    """Pushover通知を送信する（ゲートレイヤー付き）。[Chronos/Watchdog]タグを強制付与する。
 
-    common.pushover_client 経由で送信することで backoff/queue を全スクリプト間で
-    共有し、429 連鎖 ban を防止する（SPOF解消）。
-    project_pushover_tag_convention.md のタグ規約（[Chronos]プレフィックス）に準拠。
+    level 省略時の自動判定:
+      priority >= 2 / CRITICAL/MFFU_NewsWindow → CRITICAL
+      回復不可/人間介入/HealthCheck異常         → CRITICAL（本番異常）
+      起動通知                                  → SILENT
+      自己回復 attempt 1-2                      → BATCHED
+      WARNING/ERROR等閾値超過                   → BATCHED（ログ確認レベル）
+
+    common.pushover_client 経由で送信（backoff/queue一元管理・SPOF解消）。
+    project_pushover_tag_convention.md タグ規約に準拠。
     """
     if not title.startswith("["):
         title = f"[Chronos/Watchdog] {title}"
+
+    if level is None:
+        if priority >= 2:
+            level = _LEVEL_CRITICAL
+        elif priority == 1 and any(kw in title for kw in ("CRITICAL", "MFFU_NewsWindow",
+                                                           "KillSwitch", "TradovateDisconnect",
+                                                           "回復不可", "人間介入",
+                                                           "HealthCheck異常")):
+            level = _LEVEL_CRITICAL
+        elif "起動" in title or "BOOT" in title:
+            level = _LEVEL_SILENT
+        else:
+            level = _LEVEL_BATCHED
 
     if _PC_AVAILABLE:
         _pc.send(
@@ -361,6 +413,7 @@ def pushover_send(title: str, message: str, priority: int = 1) -> None:
             priority=priority,
             token=PUSHOVER_TOKEN or None,
             app_tag="Chronos/Watchdog",
+            level=level,
         )
         return
 
@@ -778,6 +831,15 @@ def run() -> None:
                 log_positions[path_str] = new_pos
 
                 for line in new_lines:
+                    # Tradovate 認証失敗 silence: クレデンシャル未設定時は Pushover 飛ばさない
+                    # MFFU購入前の初期状態（attempt=39など）を黙認し iPhone 通知を止める
+                    if _is_tradovate_auth_silence(line):
+                        log.info(
+                            "[AUTH_SILENCE] Tradovate auth not configured — silencing: %s",
+                            line[:120],
+                        )
+                        continue
+
                     triggered = check_pattern(line, now)
                     for label, priority in triggered:
                         log.warning(

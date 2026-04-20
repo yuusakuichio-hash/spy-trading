@@ -132,12 +132,18 @@ PUSHOVER_ALERT_TOKEN = os.environ.get("PUSHOVER_ALERT_TOKEN", "")
 PUSHOVER_OPS_TOKEN   = os.environ.get("PUSHOVER_OPS_TOKEN", PUSHOVER_ALERT_TOKEN)
 GITHUB_TOKEN         = os.environ.get("GITHUB_TOKEN", "")
 
-# ── 共通 Pushover クライアント（SPOF解消・backoff/queue一元管理） ─────────────
+# ── 共通 Pushover クライアント（SPOF解消・backoff/queue一元管理・ゲートレイヤー） ──
 try:
     from common import pushover_client as _pc
     _PC_AVAILABLE = True
+    _LEVEL_CRITICAL = _pc.LEVEL_CRITICAL
+    _LEVEL_BATCHED  = _pc.LEVEL_BATCHED
+    _LEVEL_SILENT   = _pc.LEVEL_SILENT
 except ImportError:
     _PC_AVAILABLE = False
+    _LEVEL_CRITICAL = "critical"
+    _LEVEL_BATCHED  = "batched"
+    _LEVEL_SILENT   = "silent"
 
 
 # ── Logging ──────────────────────────────────────────────────────────────────
@@ -164,22 +170,53 @@ def log_action(entry: dict):
 
 
 # ── Pushover ─────────────────────────────────────────────────────────────────
-def pushover(title: str, msg: str, priority: int = 0, token: str | None = None):
-    """Pushover通知を送信する。
+# 通知ゲートルール (2026-04-20):
+#   CRITICAL: 資金毀損/アカウント停止/本番異常/市場機会喪失の4系統のみ即時送信
+#   BATCHED : 場中に知っておくと良いが即断不要な情報（30分バッチ）
+#   SILENT  : ログのみ・定型報告・完了通知・起動通知
+def pushover(title: str, msg: str, priority: int = 0, token: str | None = None,
+             level: str | None = None):
+    """Pushover通知を送信する（ゲートレイヤー付き）。
+
+    level 省略時はタイトルとpriorityから自動判定:
+      priority >= 2                  → CRITICAL
+      /HALT|ALERT|APPROVAL_REQUIRED/ → CRITICAL
+      /BOOT|INFO|AUTOFIX/            → BATCHED
+      それ以外                        → BATCHED
 
     common.pushover_client 経由で送信することで backoff/queue を全スクリプト間で
     共有し、429 連鎖 ban を防止する（SPOF解消）。
-    既存呼び出し元のシグネチャ（title, msg, priority, token）を保持。
     """
     tok = token or PUSHOVER_OPS_TOKEN or PUSHOVER_ALERT_TOKEN
 
+    # レベル自動判定
+    if level is None:
+        if priority >= 2:
+            level = _LEVEL_CRITICAL
+        elif any(kw in title for kw in ("HALT", "ALERT", "APPROVAL_REQUIRED")):
+            level = _LEVEL_CRITICAL
+        elif any(kw in title for kw in ("DEVIATION/SURGE", "PDT") ) and priority >= 1:
+            level = _LEVEL_CRITICAL
+        elif "BOOT" in title or "AUTOFIX" in title or "INFO" in title:
+            level = _LEVEL_BATCHED
+        else:
+            level = _LEVEL_BATCHED
+
     if _PC_AVAILABLE:
-        _pc.send(title, msg, priority=priority, token=tok or None, app_tag="Atlas")
+        _pc.send(title, msg, priority=priority, token=tok or None, app_tag="Atlas", level=level)
         return
 
-    # フォールバック: 共通クライアント import 失敗時は旧実装で送信
+    # フォールバック: 共通クライアント import 失敗時
+    # SILENTはフォールバック時もログのみ
+    if level == _LEVEL_SILENT:
+        log(f"[SILENT] {title} | {msg[:100]}")
+        return
     if not tok or not PUSHOVER_USER:
         log(f"[NOTIFY_SKIP] missing token/user. title={title}")
+        return
+    if level == _LEVEL_BATCHED:
+        # フォールバック時はbatchedも送信しない（ログのみ）
+        log(f"[BATCHED/FALLBACK] {title} | {msg[:100]}")
         return
     try:
         data = {
@@ -633,7 +670,8 @@ def dispatch(fired: dict, cfg: dict) -> dict:
     result: dict[str, Any] = {"rule_id": rid, "level": level}
 
     if level == 1:
-        pushover(f"{header} INFO", "\n".join(body), priority=0)
+        # Level1 INFO は判断不要 → SILENT（ログのみ）
+        pushover(f"{header} INFO", "\n".join(body), priority=0, level=_LEVEL_SILENT)
         result["action"] = "notify_only"
 
     elif level == 2:
@@ -644,7 +682,8 @@ def dispatch(fired: dict, cfg: dict) -> dict:
             body.append("pre_checks: " + "; ".join(notes))
         if pre and not ok:
             body.append("→ 対応スキップ (pre_check失敗)")
-            pushover(f"{header} AUTOFIX SKIP", "\n".join(body), priority=1)
+            # Level2 AUTOFIX SKIP はBATCHED（pre_check失敗の事実は把握しておく程度）
+            pushover(f"{header} AUTOFIX SKIP", "\n".join(body), priority=1, level=_LEVEL_BATCHED)
             result["action"] = "skipped_precheck"
         else:
             # C7修正: Level2 Two-Man Rule - ARMED + level2_approval_required の場合、
@@ -690,7 +729,9 @@ def dispatch(fired: dict, cfg: dict) -> dict:
                 body.append(f"action: {ar}")
                 tag = "AUTOFIX_DRY" if dry_run else "AUTOFIX"
                 pri = 1 if ar.get("status") in ("ERR",) else 0
-                pushover(f"[Atlas/{tag}] {rid}", "\n".join(body), priority=pri)
+                # Level2 AUTOFIX はBATCHED（自動修正の事実把握・即断不要）
+                pushover(f"[Atlas/{tag}] {rid}", "\n".join(body), priority=pri,
+                         level=_LEVEL_BATCHED)
                 result["action"] = ar
                 # builder 自動起動: Level2 は必ず atlas_builder.yml を dispatch
                 bw = trigger_builder_workflow(cfg, rid, hypo, matched)
@@ -832,6 +873,7 @@ def main():
     save_state(st)
 
     dry = bool(cfg.get("autofix", {}).get("dry_run_default", 1))
+    # BOOT通知はSILENT（定型起動報告は判断不要）
     pushover(
         "[Atlas/BOOT]",
         f"atlas_agent 起動\n"
@@ -839,6 +881,7 @@ def main():
         f"dry_run: {'ON (safe)' if dry else 'OFF (ARMED)'}\n"
         f"market: {cfg.get('market_window')}",
         priority=0,
+        level=_LEVEL_SILENT,
     )
     log(f"boot: rules={len(rules)} dry_run={dry} once={once_mode}")
 
@@ -957,50 +1000,63 @@ def main():
                     log(f"[DEV_SCAN_ERR] {_dse}")
 
             # PDT残数をatlas_state.jsonに保存 + 毎分ログ出力 + 残1で通知
+            # ペーパーモード判定: acc_type==SIMULATE or bot_launchagent に "paper" が含まれる場合は
+            # PDT制約はFINRA本番(live $25K未満)のみ有効 → ペーパーはスキップ
+            _is_paper_mode = (
+                st.get("acc_type", "").upper() == "SIMULATE"
+                or cfg.get("paper", False)
+                or "paper" in cfg.get("bot_launchagent", "")
+            )
             if _PDT_TRACKER_AGENT_OK and _pdt_tracker_agent is not None:
                 try:
                     # 口座残高（state.jsonから取得、不明時は保守的に$0扱い）
                     _pdt_capital = st.get("capital_usd", 0.0)
                     _pdt_status = _pdt_tracker_agent.get_status(_pdt_capital)
-                    # atlas_state.json に pdt_remaining を更新
+                    # atlas_state.json に pdt_remaining を更新（ペーパー含め常時記録）
                     st["pdt_remaining"]   = _pdt_status["pdt_remaining"]
                     st["pdt_rolling5"]    = _pdt_status["rolling5_count"]
                     st["pdt_constrained"] = _pdt_status["pdt_constrained"]
                     save_state(st)
-                    log(f"[PDT] rolling5={_pdt_status['rolling5_count']} "
-                        f"remaining={_pdt_status['pdt_remaining']} "
-                        f"constrained={_pdt_status['pdt_constrained']}")
-                    # PDT残1 → priority=1 通知（重複抑制: 残数変化時のみ）
-                    _pdt_rem = _pdt_status["pdt_remaining"]
-                    if (
-                        _pdt_status["pdt_constrained"]
-                        and isinstance(_pdt_rem, int)
-                        and _pdt_rem == 1
-                        and st.get("_pdt_notified_remaining1_date") != datetime.datetime.now(ET).strftime("%Y-%m-%d")
-                    ):
-                        pushover(
-                            "[Atlas/PDT] PDT残1件警告",
-                            f"直近5営業日 {_pdt_status['rolling5_count']}/{_PDT_LIMIT}件消費\n"
-                            f"本日の新規day_tradeは残1件のみ。4件目で90日停止。",
-                            priority=1,
-                        )
-                        st["_pdt_notified_remaining1_date"] = datetime.datetime.now(ET).strftime("%Y-%m-%d")
-                        save_state(st)
-                    # PDT残0 → 通常通知（手動判断を促す）
-                    elif (
-                        _pdt_status["pdt_constrained"]
-                        and isinstance(_pdt_rem, int)
-                        and _pdt_rem == 0
-                        and st.get("_pdt_notified_remaining0_date") != datetime.datetime.now(ET).strftime("%Y-%m-%d")
-                    ):
-                        pushover(
-                            "[Atlas/PDT] PDT上限到達 — 新規エントリー停止",
-                            f"直近5営業日 {_pdt_status['rolling5_count']}/{_PDT_LIMIT}件消費済み\n"
-                            f"新規day_tradeはpre_trade_checkでブロックされます。",
-                            priority=1,
-                        )
-                        st["_pdt_notified_remaining0_date"] = datetime.datetime.now(ET).strftime("%Y-%m-%d")
-                        save_state(st)
+                    if _is_paper_mode:
+                        # ペーパー($420K)はPhase2相当・PDT制約はFINRA本番のみ → ログはINFOで黙認
+                        log(f"[PDT] paper_mode=True → PDT制約スキップ "
+                            f"rolling5={_pdt_status['rolling5_count']} "
+                            f"remaining={_pdt_status['pdt_remaining']}")
+                    else:
+                        log(f"[PDT] rolling5={_pdt_status['rolling5_count']} "
+                            f"remaining={_pdt_status['pdt_remaining']} "
+                            f"constrained={_pdt_status['pdt_constrained']}")
+                        # PDT残1 → priority=1 通知（重複抑制: 残数変化時のみ・liveのみ）
+                        _pdt_rem = _pdt_status["pdt_remaining"]
+                        if (
+                            _pdt_status["pdt_constrained"]
+                            and isinstance(_pdt_rem, int)
+                            and _pdt_rem == 1
+                            and st.get("_pdt_notified_remaining1_date") != datetime.datetime.now(ET).strftime("%Y-%m-%d")
+                        ):
+                            pushover(
+                                "[Atlas/PDT] PDT残1件警告",
+                                f"直近5営業日 {_pdt_status['rolling5_count']}/{_PDT_LIMIT}件消費\n"
+                                f"本日の新規day_tradeは残1件のみ。4件目で90日停止。",
+                                priority=1,
+                            )
+                            st["_pdt_notified_remaining1_date"] = datetime.datetime.now(ET).strftime("%Y-%m-%d")
+                            save_state(st)
+                        # PDT残0 → 通常通知（手動判断を促す・liveのみ）
+                        elif (
+                            _pdt_status["pdt_constrained"]
+                            and isinstance(_pdt_rem, int)
+                            and _pdt_rem == 0
+                            and st.get("_pdt_notified_remaining0_date") != datetime.datetime.now(ET).strftime("%Y-%m-%d")
+                        ):
+                            pushover(
+                                "[Atlas/PDT] PDT上限到達 — 新規エントリー停止",
+                                f"直近5営業日 {_pdt_status['rolling5_count']}/{_PDT_LIMIT}件消費済み\n"
+                                f"新規day_tradeはpre_trade_checkでブロックされます。",
+                                priority=1,
+                            )
+                            st["_pdt_notified_remaining0_date"] = datetime.datetime.now(ET).strftime("%Y-%m-%d")
+                            save_state(st)
                 except Exception as _pdt_agent_e:
                     log(f"[PDT_AGENT_ERR] {_pdt_agent_e}")
 
