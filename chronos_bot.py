@@ -326,6 +326,9 @@ except Exception as _cdd_err:
     _CHRONOS_DEVIATION_DETECTOR_OK = False
     log.warning(f"bot_deviation_detector not available: {_cdd_err}")
 
+# ── MF-5α: common.plan_id (plan_id 正源統一) ──────────────────────────────────
+from common.plan_id import PlanID as _PlanID, from_yaml_plan_phase as _from_yaml_plan_phase
+
 # ── Phase A/B/C: プロップファーム安全層 ─────────────────────────────────────────
 # Layer PF-1: prop_firm_rules (chronos_pre_trade_check 経由で呼ぶが直接参照も必要)
 # Layer PF-2: CrossAccountGuard
@@ -1076,6 +1079,8 @@ class FuturesORBStrategy:
         open_pnl:        float = 0.0,
         now_et:          Optional[datetime.datetime] = None,
         prop_account_state: Optional[dict] = None,
+        est_pnl:         float = 0.0,
+        upcoming_events: Optional[list] = None,
     ) -> Optional[dict]:
         """
         ブレイクアウト判定とエントリー実行。
@@ -1086,7 +1091,12 @@ class FuturesORBStrategy:
                 cycle_daily_pnl / trades_today / peak_balance を含むことで
                 Layer PF-1 のハードコードデフォルト（[] / 0 / capital_usd）を上書きする。
                 None の場合は chronos_pre_trade_check.py のデフォルトが使われる。
+            est_pnl: MF-2α — 次取引の見込み PnL（T1 News Consistency チェックに使用）。
+            upcoming_events: MF-2α — 今後30分以内の経済イベントリスト（T1 blackout に使用）。
+                None の場合は空リストとして扱う。
         """
+        if upcoming_events is None:
+            upcoming_events = []
         if not self._or_complete or self._entry_done:
             return None
         if self._or_high is None or self._or_low is None:
@@ -1222,11 +1232,18 @@ class FuturesORBStrategy:
                 open_positions         = len(_existing_positions),
                 paper                  = (self.client is None),
                 mffu_account_balance   = current_balance,
-                mffu_daily_pnl         = open_pnl,
+                # MF-3α fix: open_pnl (unrealized) ではなく realized pnl を Consistency に渡す。
+                # ChronosBot が est_pnl=self._today_realized_pnl として渡してくる（MF-2α連携）。
+                # FuturesORBStrategy は独立クラスなので self._today_realized_pnl は参照不可。
+                # prop_account_state["cycle_daily_pnl"] の合算か est_pnl を使用する。
+                mffu_daily_pnl         = est_pnl,
                 existing_positions_list= _existing_positions,
                 firm                   = self.firm,
                 plan                   = self.plan,
                 phase                  = self.phase,
+                # MF-2α fix: est_pnl と upcoming_events を check_breakout 引数から渡す。
+                est_pnl                = est_pnl,
+                upcoming_events        = upcoming_events,
                 # MF-3 fix: 呼出側 (ChronosBot) から実値を受け取り Layer PF-1 の
                 # ハードコードデフォルト（cycle_daily_pnl=[], trades_today=0,
                 # peak_balance=capital_usd）を上書きする。
@@ -1261,13 +1278,17 @@ class FuturesORBStrategy:
                 return None
 
         # 発注
+        # MF-1α: idempotency key を生成して place_order に渡す（二重発注防止）
+        # retry 時は同じ key を使用することで Tradovate が重複を検知して拒否する。
+        _client_order_id = self._next_client_order_id() if hasattr(self, '_next_client_order_id') else None
         order = None
         if self.client is not None:
             order = self.client.place_order(
-                symbol     = symbol,
-                action     = action,
-                qty        = n_contracts,
-                order_type = "Market",
+                symbol           = symbol,
+                action           = action,
+                qty              = n_contracts,
+                order_type       = "Market",
+                client_order_id  = _client_order_id,
             )
             if not order:
                 log.error("[FuturesORB] entry order failed")
@@ -1296,6 +1317,10 @@ class FuturesORBStrategy:
         self._entry_side   = "Long" if action == "Buy" else "Short"
         self._entry_price  = current_price
         self._trade_id     = str(uuid.uuid4())[:8]
+
+        # MF-1α: 発注成功後に idempotency key を sent=1 にマーク
+        if _client_order_id and hasattr(self, '_mark_order_sent'):
+            self._mark_order_sent(_client_order_id)
 
         log.debug(
             "[FuturesORB] Layer PF-2: CrossAccountGuard.check_and_record 完了: "
@@ -1697,6 +1722,18 @@ class ChronosBot:
         self._winning_days:           int   = 0    # 勝利日カウンタ（Payout条件監視用）
         self._daily_trade_count:      int   = 0    # 当日取引数（HFT違反監視用・日次reset）
         self._news_window_violation_flag: bool = False  # News Window違反フラグ
+
+        # ── MF-1α: 二重発注防止 — persistent idempotency key ────────────────────
+        # orders.db に client_order_id を記録し、retry 時は同じ key を再利用する。
+        # _next_client_order_id() / _mark_order_sent() / _is_order_sent() を参照。
+        self._orders_db_path: Path = _get_base_dir() / "orders.db"
+        self._init_orders_db()
+
+        # ── MF-10α: 全期間 peak_balance 追跡 ──────────────────────────────────
+        # _session_balance はセッション開始時点の残高。
+        # _all_time_peak_balance はセッションを跨いで全期間の最大残高を保持する。
+        # Trailing DD 計算で全期間 peak を使用するため persistent に保存する。
+        self._all_time_peak_balance: float = self._load_all_time_peak()
 
         # ── F3: Daily Soft Stop (chronos_rules.yaml: daily_soft_stop) ──────────
         # 日次損失 $300 到達で size_pct を 50% 削減（発注禁止ではなくサイズ縮小）
@@ -2164,6 +2201,103 @@ class ChronosBot:
                 f"CME Globex maintenance window {start_t}-{end_t}"
             )
         return in_break
+
+    # ── MF-1α: 二重発注防止ヘルパー ────────────────────────────────────────────
+
+    def _init_orders_db(self) -> None:
+        """orders.db を初期化する（WAL モード + idempotency_keys テーブル）。"""
+        import sqlite3 as _sqlite3
+        try:
+            self._orders_db_path.parent.mkdir(parents=True, exist_ok=True)
+            conn = _sqlite3.connect(str(self._orders_db_path), timeout=3.0)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS idempotency_keys (
+                    key  TEXT PRIMARY KEY,
+                    ts   REAL NOT NULL,
+                    sent INTEGER NOT NULL DEFAULT 0
+                )
+            """)
+            conn.commit()
+            conn.close()
+        except Exception as _e:
+            log.warning("[MF-1α] _init_orders_db error: %s", _e)
+
+    def _next_client_order_id(self) -> str:
+        """新規 idempotency key を生成して orders.db に保存する。
+
+        MF-1α: retry 時は同じ key を再利用するため呼び出し元が key を保持すること。
+        key 形式: "chronos-<account_id>-<uuid8>"
+        """
+        import sqlite3 as _sqlite3
+        import time as _time_mod
+        key = f"chronos-{os.environ.get('MFFU_ACCOUNT_ID', 'default')}-{uuid.uuid4().hex[:8]}"
+        try:
+            conn = _sqlite3.connect(str(self._orders_db_path), timeout=3.0)
+            conn.execute(
+                "INSERT OR IGNORE INTO idempotency_keys(key, ts, sent) VALUES(?,?,0)",
+                (key, _time_mod.time()),
+            )
+            conn.commit()
+            conn.close()
+        except Exception as _e:
+            log.warning("[MF-1α] _next_client_order_id DB error: %s", _e)
+        return key
+
+    def _mark_order_sent(self, key: str) -> None:
+        """idempotency key を sent=1 にマークする。"""
+        import sqlite3 as _sqlite3
+        import time as _time_mod
+        try:
+            conn = _sqlite3.connect(str(self._orders_db_path), timeout=3.0)
+            conn.execute(
+                "UPDATE idempotency_keys SET sent=1, ts=? WHERE key=?",
+                (_time_mod.time(), key),
+            )
+            conn.commit()
+            conn.close()
+        except Exception as _e:
+            log.warning("[MF-1α] _mark_order_sent DB error: %s", _e)
+
+    def _is_order_sent(self, key: str) -> bool:
+        """key が既に sent=1 かチェックする（重複発注防止）。"""
+        import sqlite3 as _sqlite3
+        try:
+            conn = _sqlite3.connect(str(self._orders_db_path), timeout=3.0)
+            row = conn.execute(
+                "SELECT sent FROM idempotency_keys WHERE key=?", (key,)
+            ).fetchone()
+            conn.close()
+            return bool(row and row[0] == 1)
+        except Exception as _e:
+            log.warning("[MF-1α] _is_order_sent DB error: %s", _e)
+            return False
+
+    # ── MF-10α: 全期間 peak_balance 追跡ヘルパー ────────────────────────────────
+
+    def _load_all_time_peak(self) -> float:
+        """全期間 peak_balance を persistent store から読み込む。"""
+        _peak_file = _get_base_dir() / "all_time_peak_balance.json"
+        try:
+            if _peak_file.exists():
+                import json as _json
+                data = _json.loads(_peak_file.read_text(encoding="utf-8"))
+                return float(data.get("peak_balance", self._session_balance))
+        except Exception as _e:
+            log.warning("[MF-10α] _load_all_time_peak error: %s", _e)
+        return self._session_balance
+
+    def _save_all_time_peak(self) -> None:
+        """全期間 peak_balance を persistent store に書き込む。"""
+        _peak_file = _get_base_dir() / "all_time_peak_balance.json"
+        try:
+            import json as _json
+            _peak_file.write_text(
+                _json.dumps({"peak_balance": self._all_time_peak_balance}, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as _e:
+            log.warning("[MF-10α] _save_all_time_peak error: %s", _e)
 
     def _in_news_window(self, now_et: Optional[datetime.datetime] = None) -> bool:
         """
@@ -2938,30 +3072,17 @@ class ChronosBot:
 
     @property
     def _plan_id(self) -> str:
-        """Phase D plan_id 文字列を構築する。
+        """MF-5α: common.plan_id.PlanID enum 経由で plan_id 文字列を構築する。
+        ローカル _PLAN_SHORT / _PHASE_SUFFIX dict を除去し正源を一元管理する。
+
         例: firm=mffu, plan=flex_50k, phase=evaluation  →  "flex_eval"
             firm=mffu, plan=rapid_50k, phase=simulation  →  "rapid_sim"
+
+        _from_yaml_plan_phase() は未知の組み合わせに対して FLEX_EVAL にフォールバックし
+        ERROR ログを出力する（H-3 仕様）。
         """
-        _PHASE_SUFFIX = {
-            "evaluation": "eval",
-            "simulation": "sim",
-            "funded":     "funded",
-        }
-        _PLAN_SHORT: dict[str, str] = {
-            "flex_50k":     "flex",
-            "flex_100k":    "flex",
-            "rapid_50k":    "rapid",
-            "rapid_25k":    "rapid",
-            "pro_50k":      "pro",
-            "pro_100k":     "pro",
-            "builder_25k":  "builder",
-            "builder_50k":  "builder",
-            "tradeify":     "tradeify",
-            "apex":         "apex",
-        }
-        short = _PLAN_SHORT.get(self._plan, self._plan.split("_")[0])
-        suffix = _PHASE_SUFFIX.get(self._phase_for_prop, self._phase_for_prop)
-        return f"{short}_{suffix}"
+        plan_enum = _from_yaml_plan_phase(self._plan, self._phase_for_prop)
+        return plan_enum.value
 
     # ── メインループ ──────────────────────────────────────────────────────────
 
@@ -3097,6 +3218,17 @@ class ChronosBot:
                 now_et   = datetime.datetime.now(ET)
                 now_date = now_et.date()
                 t        = now_et.time()
+
+                # MF-10α: 全期間 peak_balance を tick loop で更新する
+                # _session_balance ではなく全期間のmax(残高)を追跡する。
+                # 例: 過去 peak $55K → $52K 復帰時も $55K を保持する。
+                try:
+                    _tick_balance, _ = self._get_current_balance_and_pnl()
+                    if _tick_balance > self._all_time_peak_balance:
+                        self._all_time_peak_balance = _tick_balance
+                        self._save_all_time_peak()
+                except Exception as _atpb_err:
+                    log.debug("[MF-10α] peak_balance update error: %s", _atpb_err)
 
                 # 日次リセット
                 if self._last_loop_date != now_date:
@@ -3250,8 +3382,14 @@ class ChronosBot:
                                             getattr(self.rule_guard.rules, "daily_pnl_history", [])
                                         ),
                                         "trades_today":    self._daily_trade_count,
-                                        "peak_balance":    max(balance, self._session_balance),
+                                        # MF-10α: 全期間 peak を使用（session_balance ではない）
+                                        "peak_balance":    self._all_time_peak_balance,
                                     }
+                                    # MF-2α: est_pnl と upcoming_events を渡す
+                                    _upcoming_ev = []
+                                    _nxt = self.news_filter.next_event(now_et)
+                                    if _nxt and _nxt.get("minutes_to", 999) <= 30:
+                                        _upcoming_ev = [_nxt]
                                     entry = self.orb.check_breakout(
                                         current_price      = price,
                                         current_balance    = balance,
@@ -3260,6 +3398,8 @@ class ChronosBot:
                                         open_pnl           = open_pnl,
                                         now_et             = now_et,
                                         prop_account_state = _prop_acct_state,
+                                        est_pnl            = self._today_realized_pnl,
+                                        upcoming_events    = _upcoming_ev,
                                     )
                                     if entry:
                                         self._survival_today_trades += 1
@@ -3315,8 +3455,14 @@ class ChronosBot:
                                         getattr(self.rule_guard.rules, "daily_pnl_history", [])
                                     ),
                                     "trades_today":    self._daily_trade_count,
-                                    "peak_balance":    max(balance, self._session_balance),
+                                    # MF-10α: 全期間 peak を使用（session_balance ではない）
+                                    "peak_balance":    self._all_time_peak_balance,
                                 }
+                                # MF-2α: est_pnl と upcoming_events を渡す
+                                _upcoming_ev2 = []
+                                _nxt2 = self.news_filter.next_event(now_et)
+                                if _nxt2 and _nxt2.get("minutes_to", 999) <= 30:
+                                    _upcoming_ev2 = [_nxt2]
                                 entry = self.orb.check_breakout(
                                     current_price      = price,
                                     current_balance    = balance,
@@ -3325,6 +3471,8 @@ class ChronosBot:
                                     open_pnl           = open_pnl,
                                     now_et             = now_et,
                                     prop_account_state = _prop_acct_state,
+                                    est_pnl            = self._today_realized_pnl,
+                                    upcoming_events    = _upcoming_ev2,
                                 )
                                 if entry:
                                     self._daily_trade_count += 1  # cycle2: HFT監視用

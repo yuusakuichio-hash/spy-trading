@@ -186,7 +186,10 @@ def check_order(ctx: FuturesOrderContext, limits: Optional[RiskLimits] = None) -
             "recent_trades":   [],
             "open_positions":  [
                 {
-                    "symbol":         p["symbol"],
+                    # MF-11α fix: p["symbol"] は KeyError を起こす可能性がある。
+                    # get_positions() が "symbol" を返さない場合の安全網として
+                    # p.get("symbol", "") を使用する。
+                    "symbol":         p.get("symbol", ""),
                     # MF-1 fix: get_positions() は net_pos のみ返す場合があり p["side"] は
                     # KeyError を起こす。get_positions_for_rules() 経由なら "side" が保証されるが、
                     # 呼出側が raw get_positions() を渡してきた場合の安全網として
@@ -196,7 +199,11 @@ def check_order(ctx: FuturesOrderContext, limits: Optional[RiskLimits] = None) -
                 }
                 for p in ctx.existing_positions_list
             ],
-            "last_trade_date": None,
+            # MF-12α fix: last_trade_date を固定 None から prop_account_state 経由の実値に変更。
+            # prop_account_state に "last_trade_date" が含まれない場合は None をデフォルトとして使用。
+            # account_state.update(ctx.prop_account_state) で上書きされるため、
+            # ここでは ctx.prop_account_state から先読みして設定する。
+            "last_trade_date": ctx.prop_account_state.get("last_trade_date", None),
             "payout_count":    0,
         }
         account_state.update(ctx.prop_account_state)

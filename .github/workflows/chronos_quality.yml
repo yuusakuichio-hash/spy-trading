@@ -42,17 +42,23 @@ jobs:
       - name: Run mutation testing
         id: mutation
         run: |
-          # MF-8 fix: || true でクラッシュ握り潰しを除去。mutmut 自体が失敗したら即 FAIL。
+          # MF-8α fix: mutmut 3.5.0 では --tsv オプションが存在しない。
+          # `mutmut results` の出力形式を直接パースする。
+          # 出力例:
+          #   1. [Survived] def foo(...):
+          #   2. [Killed] def bar(...):
+          # ": killed" / ": survived" のパターンは不正確なため、
+          # "[Survived]" / "[Killed]" タグで集計する。
           mutmut run --paths-to-mutate common/kelly_sizer.py,common/plan_id.py,common/prop_firm_rules.py,chronos_pre_trade_check.py
-          # MF-8 fix: `mutmut results` の最初の数値は mutation 総数であり score ではない。
-          # killed/total を計算して score 率を算出する。
-          mutmut results --tsv | tee mutation_results.txt
-          KILLED=$(grep -c "^Killed" mutation_results.txt || echo 0)
-          TOTAL=$(wc -l < mutation_results.txt || echo 1)
+          mutmut results 2>&1 | tee mutation_results.txt
+          # mutmut results 出力: "X. [Status] ..." 形式
+          KILLED=$(grep -c "\[Killed\]" mutation_results.txt || echo 0)
+          SURVIVED=$(grep -c "\[Survived\]" mutation_results.txt || echo 0)
+          TOTAL=$((KILLED + SURVIVED))
           # ゼロ除算防止
           if [ "$TOTAL" -eq 0 ]; then TOTAL=1; fi
           SCORE=$(( KILLED * 100 / TOTAL ))
-          echo "killed=$KILLED total=$TOTAL score=$SCORE"
+          echo "killed=$KILLED survived=$SURVIVED total=$TOTAL score=$SCORE"
           echo "score=$SCORE" >> $GITHUB_OUTPUT
       - name: Fail if mutation score < 50%
         run: |

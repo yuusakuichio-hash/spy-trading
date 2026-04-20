@@ -83,9 +83,67 @@ class CrossAccountGuard:
         self.min_delay_sec = min_delay_sec
         self._db_path = db_path
         self._lock = threading.Lock()  # プロセス内スレッド競合の追加保護
+        # MF-13α: fail-open 状態フラグ（DB全失敗時は True になる）
+        self._fail_open_active: bool = False
+        self._fail_open_reason: str = ""
 
     def _conn(self) -> sqlite3.Connection:
         return _get_db(self._db_path)
+
+    def _try_recover_db(self) -> bool:
+        """MF-13α: DB error 時の自動復旧を試みる。
+
+        復旧手順:
+          1. WAL journal ファイルのクリーンアップ（*.wal / *.shm 削除）
+          2. 再接続試行 3 回（1秒間隔）
+          3. 全部失敗時は Pushover critical 通知（インポート失敗時はログのみ）
+
+        Returns:
+            True = 復旧成功（fail-open 解除可能）
+            False = 復旧失敗
+        """
+        # WAL journal クリーンアップ
+        for suffix in (".wal", ".shm"):
+            _wal = Path(str(self._db_path) + suffix)
+            if _wal.exists():
+                try:
+                    _wal.unlink()
+                    log.info("[CrossAccountGuard] MF-13α: WAL cleanup: %s", _wal)
+                except Exception as _wal_err:
+                    log.warning("[CrossAccountGuard] MF-13α: WAL cleanup failed: %s", _wal_err)
+
+        # 再接続試行 3 回
+        for _attempt in range(1, 4):
+            try:
+                conn = _get_db(self._db_path)
+                conn.close()
+                log.info(
+                    "[CrossAccountGuard] MF-13α: DB recovery succeeded (attempt %d)", _attempt
+                )
+                return True
+            except Exception as _re:
+                log.warning(
+                    "[CrossAccountGuard] MF-13α: DB recovery attempt %d failed: %s",
+                    _attempt, _re,
+                )
+                _time.sleep(1.0)
+
+        # 全部失敗 → Pushover critical 通知
+        log.error("[CrossAccountGuard] MF-13α: DB recovery all 3 attempts FAILED")
+        try:
+            from pushover_client import send as _pushover_send
+            _pushover_send(
+                title   = "[CrossAccountGuard] DB復旧失敗",
+                message = (
+                    f"cross_account_state.db の復旧に失敗しました。\n"
+                    f"path={self._db_path}\n"
+                    "手動でファイルを確認してください。"
+                ),
+                priority = 2,  # critical
+            )
+        except Exception as _ps_err:
+            log.warning("[CrossAccountGuard] MF-13α: Pushover send failed: %s", _ps_err)
+        return False
 
     def check_before_order(
         self,
@@ -209,13 +267,26 @@ class CrossAccountGuard:
                 conn.execute("COMMIT")
                 conn.close()
             except Exception as e:
-                # MF-5 fix: DB 接続失敗時は fail-closed（発注拒否）。
-                # 旧実装は allow=True（fail-open）でクロスアカウントガードが無効化されていた。
-                # DB 障害時はクロスアカウントヘッジ検出が機能しないため安全側（拒否）に倒す。
+                # MF-13α: DB error 時に自動復旧を試みる。
+                # 復旧成功: fail-open 解除 → 今回は安全のため fail-closed で返す（次回試行で回復）。
+                # 復旧失敗: fail-open 状態を記録して Pushover 通知。
                 log.error(
-                    "[CrossAccountGuard] check_and_record DB error — fail-closed: %s", e
+                    "[CrossAccountGuard] check_and_record DB error — attempting recovery: %s", e
                 )
+                _recovered = self._try_recover_db()
+                if _recovered:
+                    self._fail_open_active = False
+                    self._fail_open_reason = ""
+                    log.info("[CrossAccountGuard] MF-13α: fail-open 解除")
+                else:
+                    self._fail_open_active = True
+                    self._fail_open_reason = str(e)
                 return False, f"CrossAccountGuard DB error (fail-closed): {e}"
+        # 復旧後 fail-open が解除されている場合は正常扱い
+        if self._fail_open_active:
+            log.warning(
+                "[CrossAccountGuard] fail-open 中につき check_and_record は fail-closed を継続"
+            )
         return True, ""
 
     def record_order(

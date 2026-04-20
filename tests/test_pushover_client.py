@@ -119,10 +119,12 @@ class TestPushoverClientSend(unittest.TestCase):
 
     # ── ケース1: send 成功 ────────────────────────────────────────────────────
     def test_1_send_success(self):
-        """正常な 200 レスポンスで True を返す。state は変化なし。"""
+        """正常な 200 レスポンスで True を返す。state は変化なし。
+        level=CRITICAL を指定して即時送信（BATCHED はキューへ追記するため requests.post を呼ばない）。
+        """
         _requests_mock.post.return_value = _make_resp(200)
 
-        result = pc.send("Test Title", "Test Message", priority=0)
+        result = pc.send("Test Title", "Test Message", priority=0, level=pc.LEVEL_CRITICAL)
 
         self.assertTrue(result)
         _requests_mock.post.assert_called_once()
@@ -131,10 +133,12 @@ class TestPushoverClientSend(unittest.TestCase):
 
     # ── ケース2: 429 で 1 回目 — backoff 発動せず ────────────────────────────
     def test_2_single_429_no_backoff(self):
-        """429 を 1 回受けても consecutive_429=1 になるが backoff は発動しない。"""
+        """429 を 1 回受けても consecutive_429=1 になるが backoff は発動しない。
+        level=CRITICAL を指定して即時送信。
+        """
         _requests_mock.post.return_value = _make_resp(429)
 
-        result = pc.send("Title", "Msg", priority=1)
+        result = pc.send("Title", "Msg", priority=1, level=pc.LEVEL_CRITICAL)
 
         self.assertFalse(result)
         state = pc._load_state()
@@ -145,11 +149,13 @@ class TestPushoverClientSend(unittest.TestCase):
 
     # ── ケース3: 429 連続 3 回で backoff 発動 ────────────────────────────────
     def test_3_three_consecutive_429_triggers_backoff(self):
-        """429 を 3 回連続で受けると backoff_until が未来に設定される。"""
+        """429 を 3 回連続で受けると backoff_until が未来に設定される。
+        level=CRITICAL を指定して即時送信。
+        """
         _requests_mock.post.return_value = _make_resp(429)
 
         for _ in range(pc._429_MAX_CONSECUTIVE):
-            pc.send("Title", "Msg", priority=1)
+            pc.send("Title", "Msg", priority=1, level=pc.LEVEL_CRITICAL)
 
         state = pc._load_state()
         self.assertEqual(state["consecutive_429"], pc._429_MAX_CONSECUTIVE)
@@ -161,7 +167,9 @@ class TestPushoverClientSend(unittest.TestCase):
 
     # ── ケース4: banned 文字列検知で backoff 発動 ────────────────────────────
     def test_4_banned_string_detection(self):
-        """レスポンスに 'banned' が含まれる場合も 429 と同扱い。3回でbackoff。"""
+        """レスポンスに 'banned' が含まれる場合も 429 と同扱い。3回でbackoff。
+        level=CRITICAL を指定して即時送信。
+        """
         banned_resp = _make_resp(200, text='{"status":0,"errors":["application is banned"]}')
         # banned でも ok=False と判定されるよう調整
         banned_resp.ok = False
@@ -170,7 +178,7 @@ class TestPushoverClientSend(unittest.TestCase):
 
         # 3 回送信
         for _ in range(pc._429_MAX_CONSECUTIVE):
-            pc.send("Title", "Msg", priority=1)
+            pc.send("Title", "Msg", priority=1, level=pc.LEVEL_CRITICAL)
 
         state = pc._load_state()
         self.assertEqual(state["consecutive_429"], pc._429_MAX_CONSECUTIVE)
@@ -178,12 +186,15 @@ class TestPushoverClientSend(unittest.TestCase):
 
     # ── ケース5: ban 中の send はキュー追記・False 返却 ──────────────────────
     def test_5_send_during_ban_queues_entry(self):
-        """backoff_until が未来に設定されている状態では HTTP を叩かずキューへ追記。"""
+        """backoff_until が未来に設定されている状態では HTTP を叩かずキューへ追記。
+        level=CRITICAL を指定して即時送信経路に入る。
+        """
         # 手動で ban 状態を作る
         pc._save_state(pc._429_MAX_CONSECUTIVE, time.time() + 1000)
         _requests_mock.post.reset_mock()
 
-        result = pc.send("Queued Title", "Queued Msg", priority=1, app_tag="TEST")
+        result = pc.send("Queued Title", "Queued Msg", priority=1, app_tag="TEST",
+                         level=pc.LEVEL_CRITICAL)
 
         self.assertFalse(result)
         # HTTP は叩かない
@@ -338,11 +349,13 @@ class TestFlushSkipDuringBan(unittest.TestCase):
         _requests_mock.post.assert_not_called()
 
     def test_success_resets_consecutive_counter(self):
-        """送信成功後は consecutive_429 がリセットされる。"""
+        """送信成功後は consecutive_429 がリセットされる。
+        level=CRITICAL を指定して即時送信経路に入る。
+        """
         pc._save_state(2, 0.0)  # ban 未発動・カウンタ 2
         _requests_mock.post.return_value = _make_resp(200)
 
-        result = pc.send("Title", "Msg", priority=0)
+        result = pc.send("Title", "Msg", priority=0, level=pc.LEVEL_CRITICAL)
 
         self.assertTrue(result)
         state = pc._load_state()
@@ -350,16 +363,17 @@ class TestFlushSkipDuringBan(unittest.TestCase):
         self.assertEqual(state["backoff_until"], 0.0)
 
     def test_token_override(self):
-        """token 引数で任意のトークンを指定できる。"""
+        """token 引数で任意のトークンを指定できる。
+        level=CRITICAL を指定して即時送信経路に入る。
+        """
         _requests_mock.post.return_value = _make_resp(200)
 
-        pc.send("Title", "Msg", priority=0, token="custom_token_zzz")
+        pc.send("Title", "Msg", priority=0, token="custom_token_zzz", level=pc.LEVEL_CRITICAL)
 
         call_kwargs = _requests_mock.post.call_args
-        sent_data = call_kwargs[1].get("data") or call_kwargs[0][1]  # positional or keyword
+        # call_args が None でないことを確認
+        self.assertIsNotNone(call_kwargs, "requests.post が呼ばれなかった（LEVEL_CRITICAL を指定したか確認）")
         # data dict に custom_token が渡っているか
-        # _http_post は data= で渡す
-        # call_args[1]["data"] or call_args.kwargs["data"]
         if call_kwargs.kwargs:
             sent_data = call_kwargs.kwargs.get("data", {})
         else:
