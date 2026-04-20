@@ -1,9 +1,14 @@
 {
   "memory_as_completion": {
-    "trigger": "memory file created without matching code commit within 30min",
+    "trigger": "memory file created without matching code commit within deadline",
     "severity": "HIGH",
-    "escalate_at": 2,
-    "description": "メモリ保存を対策完了扱いにする認知バイアス。コード変更なしにfeedback/project違反メモを作成した場合に発火。"
+    "description": "メモリ保存を対策完了扱いにする認知バイアス。コード変更なしにfeedback/project違反メモを作成した場合に発火。",
+    "deadline_minutes_market_hours": 10,
+    "deadline_minutes_daytime": 20,
+    "deadline_minutes_maintenance": 60,
+    "deadline_minutes_weekend": 120,
+    "escalate_at_market_hours": 3,
+    "escalate_at_default": 2
   },
   "schedule_delay": {
     "trigger": "phrases indicating postponement in agent prompts",

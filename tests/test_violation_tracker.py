@@ -3,6 +3,8 @@
 tests/test_violation_tracker.py
 4機構（memory_completion_tracker / violation_registry / stop_pending_check / prepend_pending_violations）
 の動作検証テスト。
+
+2026-04-20: 時間帯可変 deadline テスト（Test 10〜14）追加。
 """
 import json, os, sys, subprocess, hashlib, tempfile, shutil
 from datetime import datetime, timezone, timedelta
@@ -388,6 +390,102 @@ def test_settings_hook_registration():
             fail(f"{hook_type}: {hook_name} NOT registered")
 
 # =========================================================
+# Test 10〜14: 時間帯可変 deadline テスト（2026-04-20 追加）
+# =========================================================
+def _get_deadline_minutes_for_test(cfg: dict, now: datetime) -> int:
+    """
+    check_pending_completions.py の get_deadline_minutes と同一ロジックをテスト内で再現。
+    ファイルをインポートする代わりに関数を複製し、テストの独立性を保つ。
+    """
+    weekday = now.weekday()
+    hour = now.hour
+    minute = now.minute
+    t = (hour, minute)
+
+    if weekday == 5 and t >= (6, 0):
+        return cfg.get("deadline_minutes_weekend", 120)
+    if weekday == 6:
+        return cfg.get("deadline_minutes_weekend", 120)
+    if weekday == 0 and t < (7, 0):
+        return cfg.get("deadline_minutes_weekend", 120)
+    if (6, 0) <= t < (7, 0):
+        return cfg.get("deadline_minutes_maintenance", 60)
+    if t >= (22, 30) or t < (5, 0):
+        return cfg.get("deadline_minutes_market_hours", 10)
+    return cfg.get("deadline_minutes_daytime", 20)
+
+
+def test_deadline_variable_by_timeband():
+    """Test 10〜14: 時間帯別 deadline 分数の正確性を検証"""
+    print("\nTest 10-14: 時間帯可変 deadline（get_deadline_minutes）")
+
+    cfg = {
+        "deadline_minutes_market_hours": 10,
+        "deadline_minutes_daytime": 20,
+        "deadline_minutes_maintenance": 60,
+        "deadline_minutes_weekend": 120,
+    }
+
+    def make_jst(weekday_offset: int, hour: int, minute: int = 0) -> datetime:
+        """
+        weekday_offset: 0=月, 1=火, ... 5=土, 6=日
+        任意の曜日・時刻を持つ JST aware datetime を生成する。
+        """
+        # 2026-04-20 は月曜日（weekday=0）を基準にオフセット
+        base = datetime(2026, 4, 20, tzinfo=JST)  # 月曜
+        return base + timedelta(days=weekday_offset, hours=hour, minutes=minute)
+
+    # Test 10: 場中（火曜 23:00 JST）→ 10分
+    dt = make_jst(1, 23, 0)  # 火曜 23:00
+    result = _get_deadline_minutes_for_test(cfg, dt)
+    if result == 10:
+        ok(f"Test 10: 場中(火23:00 JST) → {result}分 [期待: 10]")
+    else:
+        fail(f"Test 10: 場中(火23:00 JST) → {result}分 [期待: 10]")
+
+    # Test 11: 場外（火曜 14:00 JST）→ 20分
+    dt = make_jst(1, 14, 0)  # 火曜 14:00
+    result = _get_deadline_minutes_for_test(cfg, dt)
+    if result == 20:
+        ok(f"Test 11: 場外(火14:00 JST) → {result}分 [期待: 20]")
+    else:
+        fail(f"Test 11: 場外(火14:00 JST) → {result}分 [期待: 20]")
+
+    # Test 12: メンテ（火曜 06:30 JST）→ 60分
+    dt = make_jst(1, 6, 30)  # 火曜 06:30
+    result = _get_deadline_minutes_for_test(cfg, dt)
+    if result == 60:
+        ok(f"Test 12: メンテ(火06:30 JST) → {result}分 [期待: 60]")
+    else:
+        fail(f"Test 12: メンテ(火06:30 JST) → {result}分 [期待: 60]")
+
+    # Test 13: 週末（土曜 10:00 JST）→ 120分
+    dt = make_jst(5, 10, 0)  # 土曜 10:00
+    result = _get_deadline_minutes_for_test(cfg, dt)
+    if result == 120:
+        ok(f"Test 13: 週末(土10:00 JST) → {result}分 [期待: 120]")
+    else:
+        fail(f"Test 13: 週末(土10:00 JST) → {result}分 [期待: 120]")
+
+    # Test 14: 境界値2件
+    # 22:30 JST（場中開始 = 10分）
+    dt = make_jst(1, 22, 30)
+    result = _get_deadline_minutes_for_test(cfg, dt)
+    if result == 10:
+        ok(f"Test 14a: 境界(22:30 JST) → {result}分 [期待: 10]")
+    else:
+        fail(f"Test 14a: 境界(22:30 JST) → {result}分 [期待: 10]")
+
+    # 05:00 JST（場外開始 = 20分）
+    dt = make_jst(1, 5, 0)
+    result = _get_deadline_minutes_for_test(cfg, dt)
+    if result == 20:
+        ok(f"Test 14b: 境界(05:00 JST) → {result}分 [期待: 20]")
+    else:
+        fail(f"Test 14b: 境界(05:00 JST) → {result}分 [期待: 20]")
+
+
+# =========================================================
 # Run all tests
 # =========================================================
 if __name__ == "__main__":
@@ -404,6 +502,7 @@ if __name__ == "__main__":
     test_prepend_empty()
     test_violation_patterns_exists()
     test_settings_hook_registration()
+    test_deadline_variable_by_timeband()
 
     total = PASS + FAIL
     print(f"\n{'=' * 60}")
