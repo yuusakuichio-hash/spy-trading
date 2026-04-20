@@ -76,15 +76,16 @@ PUSHOVER_TOKEN = os.environ.get("PUSHOVER_TOKEN", "")
 PUSHOVER_USER  = os.environ.get("PUSHOVER_USER", "")
 
 # CRIT-6: 5アカplist対応 — 旧単一ラベルから配列化
+# P-1 fix 2026-04-20: com.chronos.mffu_* → com.soralab.mffu_* (実plistに合わせる)
 LAUNCHAGENT_LABEL  = "com.chronos.bot"   # 後方互換（今は .disabled）
 LAUNCHAGENT_LABELS = [
     "com.chronos.bot",              # 旧 (退役済み .disabled)
-    "com.chronos.mffu_flex_A",
-    "com.chronos.mffu_rapid_B",
-    "com.chronos.mffu_pro_C",
-    "com.chronos.mffu_core_D",
-    "com.chronos.mffu_builder_E",
-    "com.chronos.fleet_watcher",
+    "com.soralab.mffu_flex_A",
+    "com.soralab.mffu_rapid_B",
+    "com.soralab.mffu_pro_C",
+    "com.soralab.mffu_core_D",
+    "com.soralab.mffu_builder_E",
+    "com.soralab.fleet_watcher",
 ]
 BOT_SCRIPT_NAME   = "chronos_bot.py"
 
