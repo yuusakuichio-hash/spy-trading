@@ -235,7 +235,7 @@ class TestChronosPushoverBackoff(unittest.TestCase):
         resp_429.status_code = 429
         resp_429.text = "rate limited"
 
-        # cw.requests.post を直接パッチ（他テストのモック差し替えとの干渉を回避）
+        # cw.requests.post を直接パッチ（全体pytest実行時の sys.modules 汚染を回避）
         with patch.object(cw.requests, "post", return_value=resp_429):
             for _ in range(cw.PUSHOVER_429_MAX_CONSECUTIVE):
                 cw.pushover_send("test title", "test message", priority=1)
@@ -260,8 +260,11 @@ class TestChronosPushoverBackoff(unittest.TestCase):
         resp_ok = MagicMock()
         resp_ok.ok = True
         resp_ok.status_code = 200
+        resp_ok.text = ""
 
-        with patch.object(_requests_mock, "post", return_value=resp_ok):
+        # γ-4 state isolation fix: cw.requests.post を直接パッチする
+        # （全体pytest実行時に sys.modules["requests"] が実モジュールの場合でも確実に動作）
+        with patch.object(cw.requests, "post", return_value=resp_ok):
             cw.pushover_send("ok title", "ok msg", priority=0)
 
         self.assertEqual(cw._pushover_consecutive_429, 0)
@@ -270,7 +273,8 @@ class TestChronosPushoverBackoff(unittest.TestCase):
         """backoff 期間中は HTTP を叩かずキューに追記する。"""
         cw._pushover_backoff_until = time.time() + 1000  # 未来
 
-        with patch.object(_requests_mock, "post") as mock_post:
+        # γ-4 state isolation fix: cw.requests.post を直接パッチする
+        with patch.object(cw.requests, "post") as mock_post:
             cw.pushover_send("skip title", "skip msg", priority=1)
             mock_post.assert_not_called()
 

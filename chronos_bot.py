@@ -1619,9 +1619,10 @@ class ChronosBot:
         _rules_yaml_for_firm = _load_chronos_rules()
         _env_firm  = os.environ.get("CHRONOS_FIRM",  "").strip()
         _env_plan  = os.environ.get("CHRONOS_PLAN",  "").strip()
-        _yaml_firm = _rules_yaml_for_firm.get("prop_firm", {}).get("firm", "mffu")
-        # β-7: "core_50k" default を除去 → 空文字 → _plan_id プロパティで fail-closed 発動
-        _yaml_plan = _rules_yaml_for_firm.get("prop_firm", {}).get("plan", "")
+        # γ-1: "prop_firm" キーは yaml に存在しない → "mffu_compliance" を参照する
+        _yaml_firm = _rules_yaml_for_firm.get("mffu_compliance", {}).get("firm", "mffu")
+        # γ-1: plan も mffu_compliance.plan から取得（chronos_rules.yaml 実構造に合わせる）
+        _yaml_plan = _rules_yaml_for_firm.get("mffu_compliance", {}).get("plan", "")
         self._firm: str = _env_firm  if _env_firm  else _yaml_firm
         self._plan: str = _env_plan  if _env_plan  else _yaml_plan
         # phase は _account_type から導出（下で _account_type 確定後に更新）
@@ -2233,15 +2234,27 @@ class ChronosBot:
         except Exception as _e:
             log.warning("[MF-1α] _init_orders_db error: %s", _e)
 
-    def _next_client_order_id(self) -> str:
-        """新規 idempotency key を生成して orders.db に保存する。
+    def _next_client_order_id(self, logical_order_id: Optional[str] = None) -> str:
+        """idempotency key を生成して orders.db に保存する。
 
-        MF-1α: retry 時は同じ key を再利用するため呼び出し元が key を保持すること。
-        key 形式: "chronos-<account_id>-<uuid8>"
+        γ-2: logical_order_id が指定された場合は決定的 hash key を返す。
+        同じ logical_order_id → 同じ key → _is_order_sent() で重複スキップ可。
+        logical_order_id 例: "{symbol}-{side}-{qty}-{timestamp_bucket_10s}"
+        logical_order_id=None（省略）の場合は従来通り uuid4 を使用。
+
+        MF-1α: retry 時は同じ logical_order_id を渡すことで重複発注を防ぐ。
+        key 形式: "chronos-<account_id>-<hash8>" or "chronos-<account_id>-<uuid8>"
         """
+        import hashlib as _hashlib
         import sqlite3 as _sqlite3
         import time as _time_mod
-        key = f"chronos-{os.environ.get('MFFU_ACCOUNT_ID', 'default')}-{uuid.uuid4().hex[:8]}"
+        _account_id = os.environ.get('MFFU_ACCOUNT_ID', 'default')
+        if logical_order_id is not None:
+            # 決定的 hash: 同じ logical_order_id → 同じ key（retry 安全）
+            _hash8 = _hashlib.sha256(logical_order_id.encode()).hexdigest()[:8]
+            key = f"chronos-{_account_id}-{_hash8}"
+        else:
+            key = f"chronos-{_account_id}-{uuid.uuid4().hex[:8]}"
         try:
             conn = _sqlite3.connect(str(self._orders_db_path), timeout=3.0)
             conn.execute(
@@ -3147,7 +3160,7 @@ class ChronosBot:
                     "peak_balance_intraday":          self._session_balance,
                     "current_balance_with_unrealized": self._session_balance,
                     "payout_count":                   0,
-                    "last_trade_date":                None,
+                    "last_trade_date":                self._last_trade_date_et,
                     "open_positions":                 [],
                     "runtime_constraints":            {},
                 }

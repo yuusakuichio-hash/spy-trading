@@ -27,7 +27,7 @@ jobs:
           python3 -m pytest tests/test_chronos_schema_contract.py -v --tb=short
       - name: Regression baseline
         run: |
-          python3 -m pytest tests/ --ignore=tests/test_tradeify --ignore=tests/test_pushover --ignore=tests/test_hmm_regime -q
+          python3 -m pytest tests/ -q
 
   mutation-testing:
     runs-on: ubuntu-latest
