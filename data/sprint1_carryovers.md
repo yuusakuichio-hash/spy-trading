@@ -524,6 +524,79 @@
 
 ---
 
+## C-013: Atlas A1 sps Redteam r3 残 CRITICAL/HIGH（Sprint 2 対応）
+
+**起票**: 2026-04-23 / Phase B Exit Criteria 適用で r4 対応外とした項目
+
+| 項目 | 内容 | 実害頻度 |
+|---|---|---|
+| R3-C1 | `should_enter` NaN/inf IVR で TypeError → 戦術ループ全停止 | 低 |
+| R3-C2 | `_count_nyse_business_days` 10 年先 expiration で無限ループ DoS | 極低 |
+| Navigator LoC | `should_enter` 134 行 / `should_exit` 79 行 規律超過 | なし |
+
+**Sprint 2 対応**:
+- R3-C1: market data 入力 sanitize layer（共通 Risk Engine の `_check_nan_inf_inputs` と統合）
+- R3-C2: `_count_nyse_business_days` に日数上限 365 日ガード追加
+- Navigator LoC: `_build_entry_decision` / `_exit_profit_check` 等に分割
+
+---
+
+## C-014: Risk Engine Redteam r3 残 CRITICAL/Navigator 軽微（Sprint 2 対応）
+
+**起票**: 2026-04-23 / Phase B Exit Criteria 適用で r4 対応外
+
+| 項目 | 内容 | 実害頻度 |
+|---|---|---|
+| CR-3 | inf 未 sanitize で `_kelly_sizing` OverflowError 漏出 | 低 |
+| Navigator PortfolioSnapshot 名前衝突 | B8 実装時に import 衝突 | 将来 |
+| Navigator spec 追記 | `max_var_ratio` / `returns_unit` / `bypass_approver_allowlist` が common_spec_v3 未記載 | なし（ドキュメント整合）|
+| Navigator LoC | `check_all` 129 行・`RiskEngine` 572 行規律超過 | なし |
+
+**Sprint 2 対応**:
+- CR-3: `avg_win_usd`/`avg_loss_usd` も `_check_nan_inf_inputs` に含める・Kelly except に OverflowError 追加
+- PortfolioSnapshot: `engine.py` 側を `RiskPortfolioSnapshot` に rename
+- spec 追記: `data/specs/v3/common_spec_v3_20260422.md` に B17 RiskEngine Interface 追記
+- LoC 分割: `_run_preflight`/`_run_var_and_sizing` 等のプライベートヘルパー
+
+---
+
+## C-015: Atlas 0DTE Redteam r3 残 CRITICAL/Navigator DIFFER（Sprint 2 対応）
+
+**起票**: 2026-04-23 / Phase B Exit Criteria 適用で r4 対応外
+
+| 項目 | 内容 | 実害頻度 |
+|---|---|---|
+| C-10 | `restore_state` で `daily_pnl` 日跨ぎリセット欠如 | 中 |
+| Navigator silent except L387 | `_observe_gamma` GEX 取得失敗で silent 継続 | 低 |
+| Navigator `_evaluate_entry` LoC 74 | 規律超過 | なし |
+| Navigator A3 カタログ未登録 | `atlas_spec_v3` 10 戦術表に `zero_dte_system` 未記載 | なし |
+
+**Sprint 2 対応**:
+- C-10: `persisted_at` の ET 日付を検証・前日なら `daily_pnl=0.0` リセット
+- silent except L387: `raise` 追加 + `log.error` 併記・fallback は呼出側で明示
+- LoC 分割: `_observe_entry_ctx` / `_select_structure_by_regime` 等
+- A3 追記: `atlas_spec_v3_20260422.md` A3 戦術カタログに `zero_dte_system (Type C)` 追記
+
+---
+
+## C-016: Sprint 閉鎖 gate hook 物理強制（本 Sprint 内実装予定）
+
+**起票**: 2026-04-23 / Strategist/Gemini/o3 3 者統合推奨
+
+**背景**:
+- sprint1_carryovers 記録が自発的フォロー依存で C-001〜C-015 解消進度に懸念
+- 3 者統合「Sprint 閉鎖 gate 物理化」推奨（carryover 残件 > 0 で次 Sprint 着手 block）
+
+**実装**:
+- `.claude/hooks/sprint_close_gate.sh` 新設
+- 入力: `.claude/hooks/sprint_meta.json`（現在 Sprint 番号・閉鎖条件）
+- 処理: carryover 残件チェック・Exit Criteria（CRITICAL 実害高 == 0 / HIGH <= 5 / Navigator PASS）物理化
+- BLOCK 条件: 残件 > 0 or Exit Criteria 未達で次 Sprint 着手 block
+
+**関連**: Redteam Round limit 2・Severity cap・Risk Budget の運用ルール明文化も同時実施
+
+---
+
 ## 確認手順（次セッション開始時）
 
 このファイルを `memory/CURRENT_STATE.md` から参照させ、Sprint 1 着手時に必ず読む。
