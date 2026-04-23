@@ -177,6 +177,18 @@ class MonitorConfig:
     hysteresis_upper: Optional[float] = None  # None → drawdown_pct（後方互換）
     hysteresis_lower: Optional[float] = None  # None → drawdown_pct * 0.8 (Schmitt margin)
 
+    # C-023 (Sprint 2 carryover): LogRotator を _run_loop から定期的に呼び出す
+    # Builder r6 で log_rotator.py を新設したが、_run_loop に配線されておらず「作っただけ」状態だった
+    # Sprint 2 前倒しで配線: log_rotate_enabled=True (デフォルト) で log_rotate_interval_secs ごとに rotate_all()
+    log_rotate_enabled: bool = True  # LogRotator 自動実行（False で無効化可）
+    log_rotate_interval_secs: float = 300.0  # 5 分ごとに log rotation チェック
+
+    # C-022 Sprint 2 carryover: _probe_recovery 自動 KillSwitch 解除 設計見直し
+    # Redteam r7 指摘: probe 成功で global + 全 firm を自動解除 = LTCM/Therac-25 型自動復旧暴走
+    # デフォルト True = 後方互換（従来挙動維持）
+    # False にすると probe 成功しても deactivate を呼ばず・手動 scripts/kill_switch_recover.py 実行必須
+    probe_auto_deactivate: bool = True
+
     def __post_init__(self) -> None:
         if self.check_interval_secs <= 0:
             raise ValueError(f"check_interval_secs must be > 0, got {self.check_interval_secs}")
@@ -316,6 +328,15 @@ class MonitorDaemon:
         self._pushover_send = pushover_send
         # HIGH-R4-3: drawdown hysteresis カウンター（連続超過 N 回でKillSwitch）
         self._drawdown_breach_counter: int = 0
+        # C-023 (Sprint 2): LogRotator 配線
+        self._log_rotator = None
+        self._last_log_rotate: float = time.monotonic()
+        if self._config.log_rotate_enabled:
+            try:
+                from atlas_v3.ops.log_rotator import LogRotator
+                self._log_rotator = LogRotator()
+            except ImportError as e:
+                log.warning("[Monitor] LogRotator import failed: %s. Log rotation disabled.", e)
 
     @property
     def config(self) -> MonitorConfig:
@@ -1063,6 +1084,18 @@ class MonitorDaemon:
                     self._stop_event.set()
                     break
 
+            # C-023: LogRotator 定期呼出（log_rotate_interval_secs ごと）
+            if self._log_rotator is not None:
+                now_rotate = time.monotonic()
+                if now_rotate - self._last_log_rotate >= self._config.log_rotate_interval_secs:
+                    try:
+                        rotated = self._log_rotator.rotate_all()
+                        if rotated:
+                            log.info("[Monitor] log rotated: %d files", len(rotated))
+                    except Exception as e:
+                        log.warning("[Monitor] log_rotator.rotate_all failed: %s", e)
+                    self._last_log_rotate = now_rotate
+
             self._stop_event.wait(timeout=self._config.check_interval_secs)
         log.info("[Monitor] loop stopped")
 
@@ -1134,8 +1167,12 @@ class MonitorDaemon:
                             zero_count += 1
                         else:
                             break  # 非ゼロ値があれば実 provider
-                    except Exception:
-                        break  # 例外が出たら実 provider（Dummy は例外を出さない）
+                    except Exception as _probe_err:  # noqa: BLE001
+                        # C-020 Sprint 2 carryover: silent except 明示化
+                        # 意図: zero-value detection の probe で例外が出たら実 provider と判定（Dummy は
+                        # 定義上例外を出さない）。log.debug で記録しつつ break して実 provider 判定に落とす。
+                        log.debug("[Monitor] zero-detection probe exception (treated as real provider): %s", _probe_err)
+                        break
                 if zero_count >= zero_detection_n:
                     log.warning(
                         "[Monitor] _is_dummy_provider: zero-value detection triggered "
@@ -1210,6 +1247,15 @@ class MonitorDaemon:
 
             # CRIT-R6-2 fix: per-firm flag を全 firm で解除（FirmScopedKillSwitch.deactivate_all）
             # global deactivate とは独立して試みる（失敗でも probe は True を返す）
+            # C-022 fix: probe_auto_deactivate=False なら手動復旧必須化
+            if not self._config.probe_auto_deactivate:
+                log.warning(
+                    "[Monitor] probe_recovery: probe_auto_deactivate=False so KillSwitch is NOT "
+                    "automatically deactivated. Manual recovery required: "
+                    "python3 scripts/kill_switch_recover.py"
+                )
+                return True
+
             try:
                 from common_v3.risk.kill_switch import FirmScopedKillSwitch
                 firm_results = FirmScopedKillSwitch.deactivate_all(

@@ -734,10 +734,16 @@ class RiskEngine:
         # send を calling thread（= with patch(...) コンテキスト内）でキャプチャする。
         # これにより test の with patch("common.pushover_client.send", ...) が有効な間に
         # mock が取得され、Thread が patch context 外で実行されても mock が使われる。
+        # C-020 Sprint 2 carryover: silent except 明示化（raise なし・意図的 fallback）
+        # 意図: common.pushover_client が unavailable でも dead-man escalation 経路は機能させる。
+        # mock patch context 外で使えなくなる可能性があるため import 失敗は None fallback で継続。
         try:
             import common.pushover_client as _pushover_mod
             _pushover_send = _pushover_mod.send
-        except Exception:
+        except Exception as _import_err:  # noqa: BLE001
+            # 意図的 silent except: log は出さず（startup 時の一時的な import 失敗は通常発生しない）、
+            # _send() 内で _pushover_send is None なら ImportError raise する設計。
+            log.debug("[RiskEngine] pushover_client import failed, using None fallback: %s", _import_err)
             _pushover_send = None
 
         def _send() -> None:
