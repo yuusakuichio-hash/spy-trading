@@ -1,120 +1,140 @@
-#!/usr/bin/env python3
-"""PreToolUse hook: 規律違反パターン検知。違反時はstderr+exit 2でClaudeに反省促す。"""
-import sys, json, re, os
-from datetime import datetime
+#!/bin/bash
+# 規律違反リアルタイム検出hook
+# 秘書の発話・tool_input内の禁止語句をPreToolUse/UserPromptSubmitで検出
+# 参照: memory/feedback_*.md
 
-log_file = "/Users/yuusakuichio/trading/data/logs/discipline_violations.log"
-timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S JST")
+set -u
 
+# Fix 2: テスト環境フラグ — hook自身のテストや開発環境では記録せずexit 0
+if [ "${DISCIPLINE_GUARD_TEST:-0}" = "1" ]; then
+  exit 0
+fi
+
+# Fix (2026-04-21): stdin JSON から payload 抽出
+# 旧: CLAUDE_TOOL_INPUT / CLAUDE_USER_PROMPT env var 参照 (→ Claude Code hook 仕様違反で dead hook)
+INPUT_JSON=$(cat)
+PAYLOAD=$(echo "$INPUT_JSON" | python3 -c "
+import json, sys
 try:
-    data = json.load(sys.stdin)
+    d = json.load(sys.stdin)
+    ti = d.get('tool_input', {})
+    parts = []
+    for k in ['prompt','content','new_string','description','command','old_string','file_path']:
+        v = ti.get(k, '') if isinstance(ti, dict) else ''
+        if isinstance(v, str):
+            parts.append(v)
+    up = d.get('user_prompt', '')
+    if isinstance(up, str): parts.append(up)
+    msg = d.get('message', {})
+    if isinstance(msg, dict):
+        c = msg.get('content', '')
+        if isinstance(c, str): parts.append(c)
+    print(' '.join(parts))
 except Exception:
-    sys.exit(0)
+    pass
+" 2>/dev/null)
 
-tool_name = data.get("tool_name", "")
-tool_input = data.get("tool_input", {})
+[ -z "$PAYLOAD" ] && exit 0
 
-# Read系はスキップ
-if tool_name in ("Read", "Grep", "Glob"):
-    sys.exit(0)
+LOG=/Users/yuusakuichio/trading/data/logs/discipline_violations.log
+RELOAD_LOG=/Users/yuusakuichio/trading/data/logs/discipline_memory_reloads.log
+mkdir -p "$(dirname "$LOG")"
 
-# 規律/メモリ関連ファイル編集時はbypass（文書内に規律語彙を記載するのが正当用途）
-file_path = tool_input.get("file_path", "") if isinstance(tool_input, dict) else ""
-bypass_paths = [
-    "/memory/",
-    "/.claude/hooks/",
-    "/CLAUDE.md",
-    "discipline_",
-    "recent_corrections",
-    "/data/discipline_",
-    "/data/violation_",
-    "/data/pending_",
-    "feedback_cognitive",
-    "feedback_no_schedule",
-    "feedback_market_hours",
-    "violation_patterns.json",
-    "violation_physical_prevention",
-    "/scripts/",
-    "/tests/test_violation",
-]
-if file_path and any(p in file_path for p in bypass_paths):
-    sys.exit(0)
+# Fix 3: MEMORY_RELOAD_TRIGGERED は別ログへ分離（VIOLATION件数カウント精度向上）
+if echo "$PAYLOAD" | grep -qE 'MEMORY_RELOAD_TRIGGERED'; then
+  ts=$(date '+%Y-%m-%d %H:%M:%S')
+  {
+    echo "[$ts] MEMORY_RELOAD_TRIGGERED (discipline_guard skip)"
+    echo "  payload_head: $(echo "$PAYLOAD" | head -c 200 | tr '\n' ' ')"
+    echo "---"
+  } >> "$RELOAD_LOG"
+  exit 0
+fi
 
-check_text = json.dumps(tool_input, ensure_ascii=False).lower()
-violations = []
+violations=()
 
-# 先延ばし語彙
-procrastination = [
-    "月曜から稼働", "月曜から", "週末に", "週末まで",
-    "後日別タスク", "後日実装", "後日対応", "後日",
-    "クローズ後に修正", "クローズ後に",
-    "本番移行前に", "本番移行後に",
-    "翌営業日に", "翌日やる",
-    "来週", "明日やる", "明日対応",
-    "後で", "あとで",
-]
-for p in procrastination:
-    if p.lower() in check_text:
-        violations.append(f"[先延ばし] \"{p}\"")
-        break
+# 規律説明文脈: rule context の payload は skip (hook自己参照回避)
+if echo "$PAYLOAD" | grep -qE "(禁句|deferral_language|先延ばし規律|feedback_no_schedule_delay|feedback_cycle_complete_today|discipline_guard)"; then
+  exit 0
+fi
 
-# 不要な確認質問
-unnecessary_confirm = [
-    "進めていい？", "進めていいですか",
-    "どれからやる？", "どれからやりますか",
-    "実施してもよろしいでしょうか", "承認をお願い",
-    "判断くれ", "判断してください",
-    "続ける？", "続けますか",
-    "それとも",
-    "どっちする？", "どっちにする", "どれにする",
-    "どっちから", "どちらから",
-    "や、する？", "で進める？",
-    "どうする？", "何やる？", "何する？",
-    "ok？", "okでしょうか", "大丈夫ですか",
-    "実行していい", "発動していい",
-]
-for p in unnecessary_confirm:
-    if p.lower() in check_text:
-        violations.append(f"[不要確認] \"{p}\"")
-        break
+check() {
+  local pattern="$1"
+  local category="$2"
+  local memory="$3"
+  if echo "$PAYLOAD" | grep -qE "$pattern"; then
+    violations+=("[$category] matched '$pattern' (see memory/$memory)")
+  fi
+}
 
-# 場中停止提案（ET market hours: JST 22:30-05:00 相当）
-now = datetime.now()
-current_min = now.hour * 60 + now.minute
-if current_min >= 22 * 60 + 30 or current_min <= 5 * 60:
-    for p in ["bot停止", "停止を推奨", "停止してください", "botを止めて", "停止を提案"]:
-        if p.lower() in check_text:
-            violations.append(f"[場中停止提案] \"{p}\" (市場時間中)")
-            break
+# 先延ばし（feedback_no_schedule_delay.md / feedback_cycle_complete_today.md）
+check '明日' '先延ばし' 'feedback_no_schedule_delay.md'
+check '朝にする|朝に対応|朝チェック' '先延ばし' 'feedback_no_schedule_delay.md'
+check '後日|週末に|クローズ後に|本番移行前に|別タスクで|来週|後ほど' '先延ばし' 'feedback_no_schedule_delay.md'
+check '2-3日|2〜3日|3-7日|数日後|明日以降' '先延ばし' 'feedback_cycle_complete_today.md'
 
-# 銘柄専用化
-if tool_name in ("Write", "Edit", "Bash"):
-    symbol_lock_patterns = [
-        r'if\s+symbol\s*!=\s*["\']us\.spy["\']',
-        r'if\s+ticker\s*!=\s*["\']spy["\']',
-        r'return\s+#.*spy.*専用',
-    ]
-    for p in symbol_lock_patterns:
-        if re.search(p, check_text, re.IGNORECASE):
-            violations.append(f"[銘柄専用化] Atlasはマルチ銘柄")
-            break
+# 確認癖（feedback_no_confirmation_execute_now.md / feedback_recommend_means_execute.md）
+check '進めていい？|GOなら|どれからやる？|大丈夫？進める|全部Yes？' '確認癖' 'feedback_no_confirmation_execute_now.md'
 
-# 違反があれば記録+stderr出力+exit 2
-if violations:
-    os.makedirs(os.path.dirname(log_file), exist_ok=True)
-    with open(log_file, "a", encoding="utf-8") as f:
-        f.write(f"=== DISCIPLINE VIOLATION ===\n")
-        f.write(f"Timestamp: {timestamp}\n")
-        f.write(f"Tool: {tool_name}\n")
-        for v in violations:
-            f.write(f"  {v}\n")
-        f.write(f"  Input(first 200): {check_text[:200]}\n")
-        f.write("---\n")
-    sys.stderr.write(f"\n[DISCIPLINE GUARD] 規律違反パターン検知:\n")
-    for v in violations:
-        sys.stderr.write(f"  {v}\n")
-    sys.stderr.write(f"[DISCIPLINE GUARD] 「なぜ今やらない？」に答えられないなら今やれ。\n")
-    sys.stderr.write(f"[DISCIPLINE GUARD] ログ: {log_file}\n\n")
-    sys.exit(2)
+# 桁違い見積（feedback_builder_time_estimate_minutes.md）
+check '[234]-?[356]h|[234]〜[356]時間|4-6時間|半日' '桁違い見積' 'feedback_builder_time_estimate_minutes.md'
 
-sys.exit(0)
+# 虚偽完了（feedback_false_completion_5th_governance.md）
+# "完了"単独ではなく証跡なし文脈でのみ警告（簡易判定）
+if echo "$PAYLOAD" | grep -qE '全件?合格|全テストpass|全PASS|完了宣言' && ! echo "$PAYLOAD" | grep -qE 'grep.*result|AST.*verify|実grep|mutation.*score'; then
+  violations+=("[虚偽完了] 証跡4点セットなし完了宣言 (see memory/feedback_false_completion_5th_governance.md)")
+fi
+
+# 保守設計違反（feedback_paper_aggressive_config.md）
+if echo "$PAYLOAD" | grep -qE 'ペーパー.*保守|ペーパー.*PDT|paper.*conservative|ペーパー.*$25K'; then
+  violations+=("[保守設計] ペーパー環境に保守/本番制約を適用 (see memory/feedback_paper_aggressive_config.md)")
+fi
+
+# 銘柄固定化（feedback_atlas_naming_discipline.md）
+if echo "$PAYLOAD" | grep -qE 'SPY専用|SPY only|SPY限定'; then
+  violations+=("[銘柄固定] Atlasはマルチ銘柄・SPY固定化禁止 (see memory/feedback_atlas_naming_discipline.md)")
+fi
+
+# 場中バグ早期Bot停止（feedback_market_hours_are_precious.md）
+if echo "$PAYLOAD" | grep -qE 'Bot停止.*推奨|停止してから.*修正|クローズ.*待って'; then
+  violations+=("[場中時間浪費] 場中修正サイクル回せ (see memory/feedback_market_hours_are_precious.md)")
+fi
+
+# メモリだけで完了扱い（feedback_cognitive_limit_design.md）
+if echo "$PAYLOAD" | grep -qE 'メモリに保存.*対策|メモリ化.*解決|メモ.*刻印.*完了'; then
+  violations+=("[認知限界放置] メモリだけで完了扱い禁止・hook/物理実装まで (see memory/feedback_cognitive_limit_design.md)")
+fi
+
+# 違反なしなら通過
+[ ${#violations[@]} -eq 0 ] && exit 0
+
+# 違反検知
+ts=$(date '+%Y-%m-%d %H:%M:%S')
+{
+  echo "[$ts] discipline violations:"
+  for v in "${violations[@]}"; do echo "  - $v"; done
+  echo "  payload_head: $(echo "$PAYLOAD" | head -c 200 | tr '\n' ' ')"
+  echo "---"
+} >> "$LOG"
+
+# stderr警告（2回目以降はHARD BLOCK）
+registry=/Users/yuusakuichio/trading/data/logs/violation_registry.jsonl
+mkdir -p "$(dirname "$registry")"
+cat_key=$(printf '%s\n' "${violations[@]}" | head -1 | grep -oE '\[[^]]+\]' | head -1)
+count=$(grep -c "$cat_key" "$registry" 2>/dev/null || echo 0)
+echo "{\"ts\":\"$ts\",\"category\":\"$cat_key\",\"count\":$((count+1))}" >> "$registry"
+
+cat >&2 <<EOF
+[DISCIPLINE GUARD] 規律違反検知 (カテゴリ再発回数: $((count+1))):
+$(printf '  %s\n' "${violations[@]}")
+[DISCIPLINE GUARD] 過去違反累計 $count 件同カテゴリ。メモリは機能してない＝構造でブロック必要。
+[DISCIPLINE GUARD] ログ: $LOG
+EOF
+
+# 3回目以降はexit 2でblock
+if [ "$count" -ge 2 ]; then
+  echo "[DISCIPLINE GUARD] HARD BLOCK: 同カテゴリ3回目・物理ブロック発動" >&2
+  exit 2
+fi
+
+exit 0
