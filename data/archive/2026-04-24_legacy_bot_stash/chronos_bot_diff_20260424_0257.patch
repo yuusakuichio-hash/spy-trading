@@ -1,0 +1,430 @@
+diff --git a/chronos_bot.py b/chronos_bot.py
+index ed903fa..d46393b 100644
+--- a/chronos_bot.py
++++ b/chronos_bot.py
+@@ -94,6 +94,36 @@ JST = zoneinfo.ZoneInfo("Asia/Tokyo")
+ #       設計違反防止のため False 固定。
+ STRATEGY_SELECTOR_AVAILABLE = False
+ 
++# ── Chronos state.json ハードニング (2026-04-21 redteam致命5件対応) ─────────────
++# state.json の改ざん可能フィールドを起動時に実ログから再集計する。
++# state.json は「速度向上のためのキャッシュ」位置付け。真実の源は trade_log / audit log。
++try:
++    from common.chronos_state_rebuild import (
++        rebuild_all as _rebuild_state,
++        append_news_violation as _append_news_violation,
++        set_kill_switch_day as _set_kill_switch_day_flag,
++        clear_kill_switch_day as _clear_kill_switch_day_flag,
++        is_kill_switch_day_active as _is_kill_switch_day_active,
++    )
++    CHRONOS_STATE_REBUILD_AVAILABLE = True
++    log.info("chronos_state_rebuild: loaded (state.json hardening active)")
++except ImportError as e:
++    CHRONOS_STATE_REBUILD_AVAILABLE = False
++    log.warning("chronos_state_rebuild not available: %s — state.json hardening DISABLED", e)
++    # フォールバック: 機能なしのスタブ（起動は継続するが改ざん耐性なし）
++    def _rebuild_state(account_id, today=None):  # type: ignore[misc]
++        return {"total_profit_usd": 0.0, "winning_days_count": 0,
++                "best_single_day_profit_usd": 0.0, "news_window_violation": False,
++                "kill_switch_day": False}
++    def _append_news_violation(account_id, reason):  # type: ignore[misc]
++        pass
++    def _set_kill_switch_day_flag(account_id, reason):  # type: ignore[misc]
++        pass
++    def _clear_kill_switch_day_flag(account_id, reason):  # type: ignore[misc]
++        pass
++    def _is_kill_switch_day_active(account_id):  # type: ignore[misc]
++        return False
++
+ try:
+     from portfolio_risk import (
+         can_take_risk, update_positions, clear_positions,
+@@ -617,6 +647,7 @@ class NewsTradingFilter:
+     def __init__(self, calendar_path: Optional[Path] = None):
+         self.calendar_path = calendar_path or (_BASE_DIR / "econ_calendar.json")
+         self._events: list[dict] = []
++        self._load_succeeded: bool = False  # C-11 fail-closed flag
+         self._load_calendar()
+ 
+     def _load_calendar(self):
+@@ -624,6 +655,9 @@ class NewsTradingFilter:
+ 
+         CRIT-1: "event" フィールドと "name" フィールドの両方をサポート。
+         econ_calendar.json は "name" を使用（"event" は旧フォーマット後方互換）。
++
++        C-11 fail-closed: file missing / parse error で _load_succeeded=False に保つ。
++        is_blackout() で False の場合は blocked=True を返し MFFU DQ を防ぐ。
+         """
+         if self.calendar_path.exists():
+             try:
+@@ -643,12 +677,15 @@ class NewsTradingFilter:
+                         self._events.append(e_normalized)
+                 log.info(f"[NewsTradingFilter] loaded {len(self._events)} events "
+                          f"from {self.calendar_path}")
++                self._load_succeeded = True  # C-11: 正常ロード完了
+             except Exception as e:
+-                log.warning(f"[NewsTradingFilter] calendar load error: {e}")
++                log.error(f"[NewsTradingFilter] calendar load error → fail-closed: {e}")
+                 self._events = []
++                self._load_succeeded = False  # C-11: fail-closed
+         else:
+-            log.info(f"[NewsTradingFilter] no calendar file found at {self.calendar_path}")
++            log.error(f"[NewsTradingFilter] no calendar file found at {self.calendar_path} → fail-closed")
+             self._events = []
++            self._load_succeeded = False  # C-11: fail-closed
+ 
+     def reload(self):
+         """カレンダーを再ロードする（毎朝呼び出す）。"""
+@@ -669,6 +706,17 @@ class NewsTradingFilter:
+         if now_et is None:
+             now_et = datetime.datetime.now(ET)
+ 
++        # C-11 fail-closed: calendar ロード失敗時は blocked=True を返す
++        # econ_calendar.json が欠落/破損した状態で MFFU T1 window 発注 → DQ を防ぐ
++        if not self._load_succeeded:
++            log.warning("[NewsTradingFilter] fail-closed blackout (calendar unavailable)")
++            return {
++                "blocked":    True,
++                "event":      "CALENDAR_UNAVAILABLE",
++                "event_time": None,
++                "minutes_to": None,
++            }
++
+         blackout_delta = datetime.timedelta(minutes=self.BLACKOUT_MINUTES)
+ 
+         for event in self._events:
+@@ -2390,10 +2438,19 @@ class ChronosBot:
+         streak_3_pct   = clg.get("streak_3_size_pct", 0.25)
+ 
+         if self._consecutive_losses >= halt_streak:
+-            self._kill_switch_day = True
++            self._kill_switch_day = True  # in-memory flag 維持
++            # 2026-04-21 hardening: flag ファイルにも記録（再起動でも状態維持）
++            _acct_id_ks = os.environ.get(
++                "MFFU_ACCOUNT_ID",
++                f"mffu_{self.product.lower()}_{'paper' if self.paper else 'live'}",
++            )
++            _set_kill_switch_day_flag(
++                _acct_id_ks,
++                f"{self._consecutive_losses}連敗到達 (halt_streak={halt_streak})",
++            )
+             log.error(
+                 f"[LossGuard] {self._consecutive_losses}連敗 → 当日完全停止 "
+-                f"(kill_switch_day=True)"
++                f"(kill_switch_day=True, flag file written)"
+             )
+             pushover(
+                 "[Chronos] LOSS GUARD: 当日停止",
+@@ -2645,7 +2702,13 @@ class ChronosBot:
+             )
+             log.warning(reason)
+             if kill_on_loss:
+-                self._kill_switch_day = True
++                self._kill_switch_day = True  # in-memory flag 維持
++                # 2026-04-21 hardening: flag ファイルにも記録
++                _acct_id_sm = os.environ.get(
++                    "MFFU_ACCOUNT_ID",
++                    f"mffu_{self.product.lower()}_{'paper' if self.paper else 'live'}",
++                )
++                _set_kill_switch_day_flag(_acct_id_sm, reason)
+             return False, reason
+ 
+         # ② 1日最大トレード数チェック
+@@ -2925,15 +2988,21 @@ class ChronosBot:
+             log.warning(f"[SaveState] write failed: {e}")
+ 
+     def _load_state(self) -> None:
+-        """BUG-1 cycle3: data/accounts/<account_id>/state.json から永続状態を復元する。
+-
+-        __init__ 末尾で呼出。state.json 不在はフレッシュ起動として扱い warning なし。
+-        state.json が存在する場合は以下の5フィールドを復元する:
+-          - _best_single_day_profit
+-          - _total_profit
+-          - _winning_days
+-          - _daily_trade_count
+-          - _news_window_violation_flag
++        """BUG-1 cycle3 + 2026-04-21 hardening: 状態を復元する。
++
++        __init__ 末尾で呼出。
++
++        ハードニング設計 (2026-04-21 redteam致命5件対応):
++          - state.json の改ざん可能5フィールドは実ログから再集計して上書きする
++          - 真実の源（SSOT）:
++              total_profit_usd / winning_days_count / best_single_day_profit_usd
++                → data/trade_log/*.jsonl から日次P&L集計
++              news_window_violation
++                → data/audit/news_violations.jsonl スキャン（当日分）
++              kill_switch_day
++                → data/halt/chronos_kill_switch_day_<account_id>.flag 存在判定
++          - state.json を手で書き換えても次回起動時に正しい値で上書きされる
++          - daily_trade_count のみ state.json から復元（当日カウントはロール不可）
+ 
+         欠損フィールドはデフォルト値（0 / False）のまま + warning ログ出力。
+         """
+@@ -2943,57 +3012,63 @@ class ChronosBot:
+         )
+         state_path = _get_base_dir() / "accounts" / account_id / "state.json"
+ 
++        # ── STEP 1: 実ログから5フィールドを再集計（改ざん耐性の核心） ──────────
++        if CHRONOS_STATE_REBUILD_AVAILABLE:
++            try:
++                rebuilt = _rebuild_state(account_id)
++                self._total_profit           = float(rebuilt.get("total_profit_usd", 0.0))
++                self._winning_days           = int(rebuilt.get("winning_days_count", 0))
++                self._best_single_day_profit = float(rebuilt.get("best_single_day_profit_usd", 0.0))
++                self._news_window_violation_flag = bool(rebuilt.get("news_window_violation", False))
++                self._kill_switch_day        = bool(rebuilt.get("kill_switch_day", False))
++                log.info(
++                    "[LoadState] HARDENED: account=%s total=%.2f winning_days=%d "
++                    "best_day=%.2f news_violation=%s kill_switch=%s",
++                    account_id,
++                    self._total_profit, self._winning_days, self._best_single_day_profit,
++                    self._news_window_violation_flag, self._kill_switch_day,
++                )
++            except Exception as e:
++                log.error("[LoadState] rebuild_state FAILED: %s — falling back to state.json", e)
++        else:
++            log.warning("[LoadState] chronos_state_rebuild unavailable — state.json fallback (tamper-susceptible)")
++
++        # ── STEP 2: daily_trade_count のみ state.json から復元 ───────────────
++        # daily_trade_count は当日カウントのため取引ログから再集計困難
++        # （起動日のトレードが state.json に記録されている場合のみ有効）
+         if not state_path.exists():
+-            log.info("[LoadState] state.json 不在 → フレッシュ起動: %s", state_path)
++            log.info("[LoadState] state.json 不在 → daily_trade_count=0: %s", state_path)
+             return
+ 
+         try:
+             raw = state_path.read_text(encoding="utf-8")
+             state = json.loads(raw)
+         except Exception as e:
+-            log.warning("[LoadState] state.json パース失敗 → フレッシュ起動: %s", e)
++            log.warning("[LoadState] state.json パース失敗: %s", e)
+             return
+ 
+-        # 5フィールド復元（欠損は警告のみ・デフォルト値維持）
+-        _FIELDS = [
+-            ("best_single_day_profit_usd", "_best_single_day_profit", float, 0.0),
+-            ("total_profit_usd",           "_total_profit",           float, 0.0),
+-            ("winning_days_count",         "_winning_days",           int,   0),
+-            ("daily_trade_count",          "_daily_trade_count",      int,   0),
+-        ]
+-        for json_key, attr, typ, default in _FIELDS:
+-            if json_key in state:
+-                try:
+-                    setattr(self, attr, typ(state[json_key]))
+-                except (ValueError, TypeError) as e:
+-                    log.warning("[LoadState] %s 変換失敗(%s) → デフォルト %s", json_key, e, default)
+-                    setattr(self, attr, default)
+-            else:
+-                log.warning("[LoadState] %s 欠損 → デフォルト %s", json_key, default)
+-                setattr(self, attr, default)
+-
+-        # news_window_violation_flag は phase_flags 内にある
+-        phase_flags = state.get("phase_flags", {})
+-        if "news_window_violation" in phase_flags:
++        # daily_trade_count のみ state.json から復元（他フィールドは STEP 1 で上書き済み）
++        if "daily_trade_count" in state:
+             try:
+-                self._news_window_violation_flag = bool(phase_flags["news_window_violation"])
++                self._daily_trade_count = int(state["daily_trade_count"])
+             except (ValueError, TypeError) as e:
+-                log.warning("[LoadState] news_window_violation 変換失敗(%s) → False", e)
+-                self._news_window_violation_flag = False
++                log.warning("[LoadState] daily_trade_count 変換失敗(%s) → 0", e)
++                self._daily_trade_count = 0
+         else:
+-            log.warning("[LoadState] news_window_violation 欠損 → False")
+-            self._news_window_violation_flag = False
++            log.warning("[LoadState] daily_trade_count 欠損 → 0")
++            self._daily_trade_count = 0
+ 
+         log.info(
+             "[LoadState] 状態復元完了: account=%s "
+             "total_profit=%.2f winning_days=%d best_day=%.2f "
+-            "daily_trades=%d news_violation=%s",
++            "daily_trades=%d news_violation=%s kill_switch=%s",
+             account_id,
+             self._total_profit,
+             self._winning_days,
+             self._best_single_day_profit,
+             self._daily_trade_count,
+             self._news_window_violation_flag,
++            self._kill_switch_day,
+         )
+ 
+     def _get_current_balance_and_pnl(self) -> tuple[float, float]:
+@@ -3410,8 +3485,17 @@ class ChronosBot:
+                                         "[MFFUBot][SurvivalMode] NewsGuard: T1ニュース前後2分窓 → "
+                                         "新規エントリースキップ"
+                                     )
+-                                    # BUG-NEW-1 cycle3: 違反フラグ設定（agent L4 検知用）
+-                                    self._news_window_violation_flag = True
++                                    # 2026-04-21 hardening: state.json ではなく audit log に記録
++                                    # → 起動時に news_violations.jsonl をスキャンして判定
++                                    _acct_id_nw = os.environ.get(
++                                        "MFFU_ACCOUNT_ID",
++                                        f"mffu_{self.product.lower()}_{'paper' if self.paper else 'live'}",
++                                    )
++                                    self._news_window_violation_flag = True  # in-memory flag 維持
++                                    _append_news_violation(
++                                        _acct_id_nw,
++                                        f"SurvivalMode NewsGuard at {now_et.isoformat()}",
++                                    )
+                                 elif not self.orb._entry_done:
+                                     # MF-3 fix: ChronosBot 実値を prop_account_state に設定して
+                                     # Layer PF-1 の cycle_daily_pnl=[] / trades_today=0 を上書き
+@@ -3627,13 +3711,34 @@ class ChronosBot:
+                                         f"tp={result['tp']:.2f} sl={result['sl']:.2f}",
+                                     )
+                                 elif result and result.get("action") == "close":
++                                    _close_reason = result.get("reason", "asia_range_fade_close")
+                                     log.info(
+                                         f"[MFFUBot] ASIA RANGE FADE CLOSE: "
+-                                        f"reason={result.get('reason')}"
++                                        f"reason={_close_reason}"
+                                     )
++                                    # C-17 fix: 実際にポジションクローズ発注する
++                                    # 以前は log + pushover のみで建玉残存 → 月跨ぎ DD 超過 DQ のリスクがあった
++                                    if not self.dry_run and self.client:
++                                        try:
++                                            _close_symbol = self.client.get_front_month_symbol(self.product)
++                                            _close_order  = self.client.close_position(_close_symbol)
++                                            if _close_order:
++                                                log.info(
++                                                    f"[MFFUBot] ASIA RANGE FADE close executed: "
++                                                    f"symbol={_close_symbol} order={_close_order}"
++                                                )
++                                            else:
++                                                log.error(
++                                                    f"[MFFUBot] ASIA RANGE FADE close FAILED: "
++                                                    f"symbol={_close_symbol} reason={_close_reason}"
++                                                )
++                                        except Exception as _ce:
++                                            log.exception(
++                                                f"[MFFUBot] ASIA RANGE FADE close exception: {_ce}"
++                                            )
+                                     pushover(
+                                         f"MFFU Bot: Asia Range Fadeクローズ "
+-                                        f"({result.get('reason')})",
++                                        f"({_close_reason})",
+                                         f"price={result.get('price', 0):.2f}",
+                                     )
+ 
+@@ -3662,13 +3767,34 @@ class ChronosBot:
+                                     f"tp={result['tp']:.2f} sl={result['sl']:.2f}",
+                                 )
+                             elif result and result.get("action") == "close":
++                                _close_reason = result.get("reason", "gap_fill_close")
+                                 log.info(
+                                     f"[MFFUBot] GAP FILL ADVANCED CLOSE: "
+-                                    f"reason={result.get('reason')}"
++                                    f"reason={_close_reason}"
+                                 )
++                                # C-17 fix: 実際にポジションクローズ発注する
++                                # 以前は log + pushover のみで建玉残存 → 月跨ぎ DD 超過 DQ のリスクがあった
++                                if not self.dry_run and self.client:
++                                    try:
++                                        _close_symbol = self.client.get_front_month_symbol(self.product)
++                                        _close_order  = self.client.close_position(_close_symbol)
++                                        if _close_order:
++                                            log.info(
++                                                f"[MFFUBot] GAP FILL ADVANCED close executed: "
++                                                f"symbol={_close_symbol} order={_close_order}"
++                                            )
++                                        else:
++                                            log.error(
++                                                f"[MFFUBot] GAP FILL ADVANCED close FAILED: "
++                                                f"symbol={_close_symbol} reason={_close_reason}"
++                                            )
++                                    except Exception as _ce:
++                                        log.exception(
++                                            f"[MFFUBot] GAP FILL ADVANCED close exception: {_ce}"
++                                        )
+                                 pushover(
+                                     f"MFFU Bot: Gap Fill Advancedクローズ "
+-                                    f"({result.get('reason')})",
++                                    f"({_close_reason})",
+                                     f"price={result.get('price', 0):.2f}",
+                                 )
+ 
+@@ -4182,6 +4308,12 @@ class ChronosBot:
+         prev_consecutive = self._consecutive_losses
+         self._consecutive_losses = 0
+         self._kill_switch_day    = False
++        # 2026-04-21 hardening: 日次リセット時に flag ファイルも削除
++        _acct_id_dr = os.environ.get(
++            "MFFU_ACCOUNT_ID",
++            f"mffu_{self.product.lower()}_{'paper' if self.paper else 'live'}",
++        )
++        _clear_kill_switch_day_flag(_acct_id_dr, f"daily_reset for {today}")
+         if prev_consecutive > 0:
+             log.info(
+                 f"[LossGuard] daily reset: consecutive_losses {prev_consecutive} → 0"
+@@ -4440,10 +4572,31 @@ def main():
+                         help=f"先物製品コード（デフォルト: {DEFAULT_PRODUCT}）")
+     parser.add_argument("--test-connect", action="store_true",
+                         help="接続テストのみ実行して終了")
++    # 2026-04-21 hardening: kill_switch_day 解除 CLI
++    parser.add_argument("--unhalt-day",   action="store_true",
++                        help="5連敗停止（kill_switch_day）を手動解除する（audit記録あり）")
++    parser.add_argument("--unhalt-reason", type=str, default="manual_operator_override",
++                        help="--unhalt-day 時の解除理由（audit log に記録）")
++    parser.add_argument("--account-id",   type=str, default="",
++                        help="対象アカウントID（--unhalt-day 時に指定）")
+     args = parser.parse_args()
+ 
+     paper = not args.live
+ 
++    # ── --unhalt-day: Bot起動せず kill_switch_day を解除して終了 ──────────────
++    if args.unhalt_day:
++        account_id = args.account_id or os.environ.get(
++            "MFFU_ACCOUNT_ID",
++            f"mffu_{args.product.lower()}_{'paper' if paper else 'live'}",
++        )
++        print(f"[unhalt-day] account_id={account_id} reason={args.unhalt_reason}")
++        _clear_kill_switch_day_flag(account_id, args.unhalt_reason)
++        # audit log のパスを表示
++        from common.chronos_state_rebuild import _get_base_dir as _rbd
++        audit_log = _rbd() / "audit" / "kill_switch_events.jsonl"
++        print(f"[unhalt-day] 完了。audit log: {audit_log}")
++        return
++
+     if args.test_connect:
+         client = TradovateClient(env="DEMO" if paper else "LIVE")
+         result = client.test_connection()
+@@ -4497,11 +4650,29 @@ class ChronosClient:
+         log.warning("[ChronosClient] get_quote(%s) stub called", symbol)
+         return {}
+ 
+-    def place_order(self, symbol: str, side: str, qty: int,
+-                    order_type: str = "MARKET", limit_price: float | None = None) -> dict:
+-        """インターフェーススタブ — TradovateClient 接続後に実装する。"""
+-        log.warning("[ChronosClient] place_order(%s %s %d) stub called", symbol, side, qty)
+-        return {}
++    def place_order(
++        self,
++        symbol: str,
++        action: str,                           # "Buy" | "Sell" (TradovateClient と一致)
++        qty: int,
++        order_type: str = "Market",
++        price: float | None = None,
++        stop_price: float | None = None,
++        time_in_force: str = "Day",
++        bypass_rate_limit: bool = False,
++        client_order_id: str | None = None,
++    ) -> dict:
++        """インターフェーススタブ — TradovateClient 接続後に実装する。
++        C-1 fix: signature を tradovate_client.TradovateClient.place_order と一致させる。
++        以前は `side=` kwarg で呼出側 (chronos_bot.py:1347 `action=`) と不整合だった。
++        """
++        log.warning(
++            "[ChronosClient] place_order(%s %s %d) stub called — TradovateClient 未接続 → None 返却",
++            symbol, action, qty,
++        )
++        # C-1: 明示的 None を返す (TradovateClient が失敗時に None を返すのと同じ契約)
++        # 呼出側は `if not order` で失敗処理に入る
++        return None
+ 
+     def cancel_order(self, order_id: str) -> bool:
+         """インターフェーススタブ — TradovateClient 接続後に実装する。"""
