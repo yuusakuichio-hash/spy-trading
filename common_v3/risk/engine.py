@@ -475,6 +475,9 @@ class RiskEngine:
             True  — 上限以内（発注許可）
             False — 上限超過（発注拒否）
         """
+        # C-025 Sprint 2 carryover: 境界条件 assert（runtime invariant 検証）
+        assert not math.isnan(request_notional), "check_max_notional: request_notional must not be NaN"
+        assert not math.isinf(request_notional), "check_max_notional: request_notional must not be inf"
         return request_notional <= self._config.max_notional_usd
 
     def check_max_daily_loss(self, pnl_day: float) -> bool:
@@ -490,6 +493,9 @@ class RiskEngine:
             True  — 損失が上限より大きい（発注許可）
             False — 損失が上限以下（発注拒否・ちょうど上限も含む）
         """
+        # C-025 Sprint 2 carryover: 境界条件 assert（runtime invariant 検証）
+        assert not math.isnan(pnl_day), "check_max_daily_loss: pnl_day must not be NaN"
+        assert not math.isinf(pnl_day), "check_max_daily_loss: pnl_day must not be inf"
         return pnl_day > self._config.max_daily_loss_usd
 
     def check_max_drawdown(self, drawdown_pct: float) -> bool:
@@ -502,6 +508,9 @@ class RiskEngine:
             True  — 上限以内（発注許可）
             False — 上限超過（発注拒否）
         """
+        # C-025 Sprint 2 carryover: 境界条件 assert（runtime invariant 検証）
+        assert not math.isnan(drawdown_pct), "check_max_drawdown: drawdown_pct must not be NaN"
+        assert 0.0 <= drawdown_pct <= 1.0, f"check_max_drawdown: drawdown_pct must be in [0, 1], got {drawdown_pct}"
         return drawdown_pct <= self._config.max_drawdown_pct
 
     def check_assignment_risk(self, option_request: OptionRequest) -> bool:

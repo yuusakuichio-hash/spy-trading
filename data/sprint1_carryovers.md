@@ -740,3 +740,39 @@ grep -l "Sprint 1" /Users/yuusakuichio/trading/data/sprint1_carryovers.md && \
 
 **対応**: stash pop で復元すべきか、そのまま破棄すべきか Sprint 2 で精査
 
+
+---
+
+## C-021 決定（2026-04-24）: common/ 未コミット差分は作業ツリー放置
+
+**判定日**: 2026-04-24（本セッション）
+
+**決定**:
+- `git stash drop` 済・spy_bot.py / chronos_bot.py は 9141243 相当に復元
+- `common/kill_switch.py` 他 11 ファイルの未コミット差分は 4fa008d 以前の別 cycle 由来（今 Sprint 無関係）
+- legacy_write_block 対象で触れない = **Sprint 2 冒頭の allowlist hook (C-018) 適用後に精査**
+
+---
+
+## C-025 進捗（2026-04-24）: 境界条件 assert 部分実装
+
+**実装済**（commit 待ち）:
+- `common_v3/risk/engine.py` `check_max_notional` / `check_max_daily_loss` / `check_max_drawdown` に NaN/inf ガード追加
+- pytest 199 tests（risk_engine + kill_switch 関連）全 pass / 回帰 0
+
+**Sprint 2 本体で継続**:
+- `RiskEngine.check_var` / `_check_kill_switch` / `_check_nan_inf_inputs` 等への境界条件 assert 追加
+- `FirmScopedKillSwitch` / `store.py` への assert 追加
+
+---
+
+## C-026 決定（2026-04-24）: spy_bot / chronos_bot stash 扱い
+
+**判定日**: 2026-04-24（本セッション）
+
+**決定**:
+- stash `spy_bot chronos_bot legacy_write_block 調査用 20260424_0257` は **drop 済**（本セッション 07:30 頃）
+- 復元用 patch は `/tmp/spy_bot_diff_20260424_0257.patch` (86295 bytes) / `/tmp/chronos_bot_diff_20260424_0257.patch` (24050 bytes) に保管
+- `/tmp` は再起動で消える可能性あり → Sprint 2 冒頭で `data/archive/` に移動するか最終判断
+- 現時点の作業ツリーは 9141243 相当（HEAD 4fa008d に対する legitimate な変更なし）
+
