@@ -100,6 +100,16 @@ def send_pushover(title: str, message: str, priority: int = 0) -> bool:
 # データロード
 # ---------------------------------------------------------------------------
 
+# Fix 1: ファイル名 → tactic のデフォルトマッピング（古いログに tactic が欠落している場合の後方互換）
+_SOURCE_TACTIC_MAP: dict[str, str] = {
+    "condor_pnl":    "ic_sell",
+    "momentum_pnl":  "orb_buy",
+    "straddle_pnl":  "straddle_buy",
+    "butterfly_pnl": "butterfly",
+    "calendar_pnl":  "calendar_sell",
+}
+
+
 def load_all_trades() -> list[dict]:
     """condor_pnl.json などを結合して全トレードリストを返す"""
     pnl_files = [
@@ -116,9 +126,13 @@ def load_all_trades() -> list[dict]:
         try:
             raw = json.loads(f.read_text(encoding="utf-8"))
             trades = raw.get("trades", []) if isinstance(raw, dict) else raw
+            default_tactic = _SOURCE_TACTIC_MAP.get(f.stem, "unknown")
             for t in trades:
                 if isinstance(t, dict):
                     t.setdefault("_source", f.stem)
+                    # Fix 1: tactic が欠落している場合はファイル名から推定して補完
+                    if not t.get("tactic"):
+                        t["tactic"] = default_tactic
             all_trades.extend(trades)
         except Exception as e:
             print(f"[load] {f.name}: {e}", file=sys.stderr)
@@ -283,7 +297,9 @@ def _daily_pnl_series(paired: list[dict]) -> list[float]:
 
 
 def calc_m6_sortino(paired: list[dict], rf_daily: float = 0.0) -> Optional[float]:
-    """M6: Sortino Ratio = (avg_return - rf) / 下方偏差"""
+    """M6: Sortino Ratio = (avg_return - rf) / 下方偏差
+    Fix 2: 損失日がない場合(downside_dev=0)は float('inf') を返す（完璧な成績）。
+    """
     series = _daily_pnl_series(paired)
     if len(series) < 3:
         return None
@@ -292,7 +308,8 @@ def calc_m6_sortino(paired: list[dict], rf_daily: float = 0.0) -> Optional[float
     downside_sq = [(min(r - rf_daily, 0)) ** 2 for r in series]
     downside_dev = math.sqrt(sum(downside_sq) / n)
     if downside_dev == 0:
-        return None
+        # 損失日ゼロ = 下方リスクなし = Sortino は理論上 +∞
+        return float("inf") if avg > 0 else None
     return round((avg - rf_daily) / downside_dev, 3)
 
 
@@ -315,7 +332,9 @@ def calc_m7_calmar(paired: list[dict]) -> Optional[float]:
         if dd > max_dd:
             max_dd = dd
     if max_dd == 0:
-        return None
+        # Fix 2: DD=0 = ドローダウンなし = Calmar は理論上 +∞
+        annual_return = cumulative[-1] * (252 / len(series))
+        return float("inf") if annual_return > 0 else None
     annual_return = cumulative[-1] * (252 / len(series))
     return round(annual_return / max_dd, 3)
 
@@ -345,7 +364,9 @@ def calc_m8_mar(paired: list[dict]) -> Optional[float]:
         if dd > max_dd:
             max_dd = dd
     if max_dd == 0:
-        return None
+        # Fix 2: DD=0 = ドローダウンなし = MAR は理論上 +∞
+        annual_return = cumulative[-1] * (12 / len(monthly))
+        return float("inf") if annual_return > 0 else None
     annual_return = cumulative[-1] * (12 / len(monthly))
     return round(annual_return / max_dd, 3)
 
@@ -824,15 +845,22 @@ def run_evaluation(
     trades_in_period = filter_by_date_range(all_trades, start, end)
     paired = pair_trades(trades_in_period)
 
+    # Fix 2: M6-M9はドローダウン時系列が必要。日次評価(1日分)では系列長<3で
+    # 必ずNullになるため、全期間のpairedを使って算出する。
+    # 直近90日分を上限として使用（十分な時系列長を確保）
+    _dd_start = today - timedelta(days=89)  # 90日間の時系列
+    _dd_trades = filter_by_date_range(all_trades, _dd_start, today)
+    _dd_paired = pair_trades(_dd_trades)
+
     m1 = calc_m1_profit_factor(paired)
     m2 = calc_m2_win_rate(paired)
     m3 = calc_m3_expected_value(paired)
     m4 = calc_m4_rom(paired, margin_usd)
     m5 = calc_m5_monthly_consistency(all_trades)
-    m6 = calc_m6_sortino(paired)
-    m7 = calc_m7_calmar(paired)
-    m8 = calc_m8_mar(paired)
-    m9 = calc_m9_ulcer_index(paired)
+    m6 = calc_m6_sortino(_dd_paired)   # Fix 2: 全期間で計算
+    m7 = calc_m7_calmar(_dd_paired)    # Fix 2: 全期間で計算
+    m8 = calc_m8_mar(_dd_paired)       # Fix 2: 全期間で計算
+    m9 = calc_m9_ulcer_index(_dd_paired)  # Fix 2: 全期間で計算
     m10 = calc_m10_e_ratio(paired)
     m11 = calc_m11_slippage_rate(paired)
     m12 = calc_m12_naked_leg_rate(trades_in_period)

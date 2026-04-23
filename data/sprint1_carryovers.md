@@ -606,3 +606,137 @@
 grep -l "Sprint 1" /Users/yuusakuichio/trading/data/sprint1_carryovers.md && \
   echo "Sprint 1 持ち越し項目あり・必読"
 ```
+
+---
+
+## C-017: moomoo paper API 実接続実装（Sprint 2 最優先）
+
+**起票**: 2026-04-24（Sprint 1-B Phase B 終局・Redteam r7 指摘受領）
+
+**背景**:
+- atlas_v3/ops/yfinance_provider.py は SPY 騰落率 × _PROXY_NOTIONAL_USD の代理 PnL
+- atlas_v3/main.py の moomoo 経路は NotImplementedError のまま
+- 30 日ペーパー運用しても代理指標監視では戦術検証不能（Redteam r7 戦略的致命指摘）
+
+**対応**:
+- moomoo OpenD API 接続実装（authentication / order / position / PnL）
+- atlas_v3/ops/moomoo_provider.py 新設
+- main.py `--provider moomoo` を production default に昇格
+- yfinance_provider は emergency fallback として保持
+
+**Sprint 2 優先度**: 最上位（paper 開始の前提条件）
+
+---
+
+## C-018: allowlist hook 設計（Sprint 2 冒頭）
+
+**起票**: 2026-04-24（Redteam r7 指摘）
+
+**背景**:
+- legacy_write_block.sh / bash_write_guard.sh は blacklist 方式
+- r1-r7 で Builder が複数の回避経路を発見（python -c, git apply, patch, install, ln, tee, dd, vim :write 等）
+- Redteam r7 実測: 15 攻撃中 13 件 bypass
+
+**対応**:
+- allowlist 設計への転換: 保護対象ファイル（spy_bot.py, chronos_bot.py, common/, atlas_agent.py 等）を read-only marker で物理保護
+- 専用 Edit tool 経由のみ書き換え許可
+- あるいは chmod 0444 + immutable flag（chflags schg）で OS 層で保護
+
+---
+
+## C-019: AST inspection テスト 4 箇所の実動作化
+
+**起票**: 2026-04-24（Navigator r7 最終再監査指摘）
+
+**背景**:
+- tests/test_atlas_v3_r7_fixes.py 行 286/416/441/556 で inspect.getsource() 文字列検索残存
+- ファイルヘッダー「AST inspection 禁止」宣言と実装矛盾
+
+**対応**: 実動作テスト化（subprocess.run 等で実挙動検証）
+
+---
+
+## C-020: silent except 明示化
+
+**起票**: 2026-04-24（Navigator r7 指摘）
+
+**背景**:
+- common_v3/risk/engine.py:740 / atlas_v3/ops/monitor.py:1137 に raise なし except Exception
+- 機能上意図的だが規律上要明示化
+
+**対応**: 明示コメント追加 + `_e` 変数でログ残留
+
+---
+
+## C-021: common/ 未コミット差分の整理
+
+**起票**: 2026-04-24
+
+**背景**:
+- common/kill_switch.py, common/pushover_client.py 等 11 ファイルに r7 以前からの未コミット変更 蓄積
+- legacy_write_block 保護対象ファイルへの変更が pending 状態
+
+**対応**: commit するか revert するかの判断・git history 整理
+
+---
+
+## C-022: _probe_recovery 自動 KillSwitch 解除 設計見直し
+
+**起票**: 2026-04-24（Redteam r7 CRITICAL 指摘）
+
+**背景**:
+- monitor.py:1192-1229 _probe_recovery は probe 成功時に global + 全 firm flag を自動解除
+- 1 回 probe 通っただけで自動復活 = LTCM/Therac-25 型自動復旧暴走
+
+**対応**: 手動 deactivate 必須化 or 連続 N 回 probe 成功後のみ解除
+
+---
+
+## C-023: LogRotator の MonitorDaemon 配線
+
+**起票**: 2026-04-24（Redteam r7 HIGH 指摘）
+
+**背景**:
+- atlas_v3/ops/log_rotator.py 新設したが MonitorDaemon の loop に未配線
+- 単なる「作っただけコード」状態
+
+**対応**: MonitorDaemon._run_loop で定期的に log_rotator.rotate_if_needed() を呼出
+
+---
+
+## C-024: bash_write_guard の攻撃ベクトル拡張
+
+**起票**: 2026-04-24（Redteam r7 実測 15攻撃中 13 件 bypass）
+
+**背景**: C-018 allowlist 設計で根治するまでの暫定対応
+
+**対応**:
+- python -c "...open(...,'w').write(...)" 検知
+- git apply / patch 検知
+- install / cp / mv / tee / dd 検知
+- ln -sf 検知
+- vim/nano/emacs --batch 検知
+
+---
+
+## C-025: assert 境界条件検査導入
+
+**起票**: 2026-04-24（Redteam r7 HIGH 指摘）
+
+**背景**: common_v3/risk/ 配下で assert 0 件・runtime invariant 検証欠落
+
+**対応**: capital > 0, firm is not None 等の境界条件 assert 追加
+
+---
+
+## C-026: spy_bot.py / chronos_bot.py stash 扱い決定
+
+**起票**: 2026-04-24
+
+**背景**:
+- r1-r7 調査中に stash: "spy_bot chronos_bot legacy_write_block 調査用 20260424_0257"
+- 元の作業ツリー diff (spy_bot +993 / chronos_bot +225 行) が stash に退避
+- patch は /tmp/*_diff_20260424_0257.patch にバックアップ済
+
+**対応**: stash pop で復元すべきか、そのまま破棄すべきか Sprint 2 で精査
+

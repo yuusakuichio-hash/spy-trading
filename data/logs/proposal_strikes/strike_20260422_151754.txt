@@ -1,0 +1,19 @@
+[2026-04-22 15:17:53 JST] Proposal bottleneck violation #16
+Pattern matched in assistant response without research evidence.
+Response excerpt (first 500 chars):
+推奨値です。
+
+| 項目 | 推奨 |
+|---|---|
+| Owned by | **You**（そのまま） |
+| Name | **`sora_lab_main`**（Gemini と同じ命名） |
+| Project | **Default project**（そのまま） |
+| Permissions | **All**（シンプル優先）／ セキュリティ重視なら **Restricted** |
+
+### Permissions の選び方
+
+- **All**: 全機能使える。動作確認が楽。**初回はこれで OK**
+- **Restricted**: 最小権限。key 流出時の被害限定。慎重派向け
+
+**推奨
+...

@@ -1,0 +1,13 @@
+[2026-04-22 05:37:56 JST] Proposal bottleneck violation #3
+Pattern matched in assistant response without research evidence.
+Response excerpt (first 500 chars):
+次の市場オープン（22:20 JST）まで ≈ 17h。月利を上げる lever を影響度順に並べます。
+
+## 影響度×工数マトリクス
+
+| # | Lever | 期待インパクト | 工数 | リスク |
+|---|---|---|---|---|
+| 1 | **Task #9 close pipeline fix** (fill poll 追加・state reconcile) | +0.5〜1.5%/月 | 3h | 低 (paper で即検証可) |
+| 2 | **SPX whitelist 追加** (TOP100 C-4・risk_limits.py) | +0.5〜2%/月 | 1h | 低 |
+| 3 | **Kelly sizer / qty scaling audit** (qty=
+...

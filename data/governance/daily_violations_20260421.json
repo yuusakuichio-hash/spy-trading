@@ -1,0 +1,26 @@
+{
+  "date": "2026-04-21",
+  "timestamp": "2026-04-21T06:00:01.811875+09:00",
+  "total_today": 287,
+  "yesterday_total": 0,
+  "delta_vs_yesterday": 287,
+  "delta_ratio": null,
+  "counts_by_log": {
+    "discipline_violations.log": 216,
+    "sns_truth_violations.log": 2,
+    "state_safety_violations.log": 2,
+    "pace_violations.log": 0,
+    "service_recommend_violations.log": 0,
+    "peer_review.log": 67,
+    "violation_registry.jsonl": 0
+  },
+  "top_patterns": {
+    "STOP_CHECK": 32,
+    "MARK_COMPLETION": 16,
+    "SYS": 1,
+    "ALERT": 1
+  },
+  "top_pattern": "STOP_CHECK",
+  "escalated": true,
+  "escalation_reason": "単日287件超(閾値100)"
+}

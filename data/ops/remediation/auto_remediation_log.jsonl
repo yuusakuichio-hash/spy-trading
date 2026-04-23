@@ -1,0 +1,5 @@
+{"ts": "2026-04-21T14:40:55.748823+00:00", "action": "launchctl_kickstart", "target": "atlas_agent", "result": "ok", "details": "plist=com.soralab.market_hours_atlas_monitor"}
+{"ts": "2026-04-21T20:11:33.835362+00:00", "action": "launchctl_kickstart", "target": "atlas_agent", "result": "ok", "details": "plist=com.soralab.market_hours_atlas_monitor"}
+{"ts": "2026-04-22T20:29:04.381335+00:00", "action": "launchctl_kickstart", "target": "atlas_agent", "result": "ok", "details": "plist=com.soralab.market_hours_atlas_monitor"}
+{"ts": "2026-04-22T20:59:12.849812+00:00", "action": "launchctl_kickstart", "target": "atlas_agent", "result": "ok", "details": "plist=com.soralab.market_hours_atlas_monitor"}
+{"ts": "2026-04-22T21:29:21.616930+00:00", "action": "launchctl_kickstart", "target": "atlas_agent", "result": "ok", "details": "plist=com.soralab.market_hours_atlas_monitor"}

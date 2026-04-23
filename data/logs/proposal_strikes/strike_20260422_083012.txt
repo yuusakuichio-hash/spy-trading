@@ -1,0 +1,13 @@
+[2026-04-22 08:30:12 JST] Proposal bottleneck violation #4
+Pattern matched in assistant response without research evidence.
+Response excerpt (first 500 chars):
+詳しく答えます。まず仕組み、次に現実的な代替手段。
+
+## なぜ起こるか
+
+Anthropic API の **prompt cache** 機構が原因:
+
+1. Claude Code は会話履歴の末尾に `cache_control: ephemeral` を付けて送る（cache 再利用で高速化）
+2. context 圧迫で history が内部 truncation されると、**cache_control を付けた text block の中身が空になる**ケースがある
+3. API 仕様上「empty text block に cache_control は設定不可」→
+...

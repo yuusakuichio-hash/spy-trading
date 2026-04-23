@@ -1,0 +1,13 @@
+[2026-04-22 11:11:44 JST] Proposal bottleneck violation #11
+Pattern matched in assistant response without research evidence.
+Response excerpt (first 500 chars):
+規律刻印完了。MEMORY.md 先頭に「★★ バグなし絶対最優先 ★★」として配置。以降の全判断はこれが最上位。
+
+## 確約（一度も間違えないための自己規律）
+
+| 項目 | 私が守る |
+|---|---|
+| 並列 | DAG 独立性が証明できた範囲のみ（依存あれば直列強制） |
+| 速度 vs バグなし | 葛藤時は必ずバグなし優先・バグリスク受容は選択肢に入れない |
+| 完了宣言 | 実在確認（ls/cat）+ red
+...

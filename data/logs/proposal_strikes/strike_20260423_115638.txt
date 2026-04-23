@@ -1,0 +1,12 @@
+[2026-04-23 11:56:38 JST] Proposal bottleneck violation #48
+Pattern matched in assistant response without research evidence.
+Response excerpt (first 500 chars):
+Sprint 1 計画 draft 完成（`data/decisions/ADR-012-phase2-sprint1-plan.md`）。次は o3 先行レビューですが、実装方法を決める必要があります。
+
+## ★ o3 レビュー実装方法（判断必要事項）
+
+| 案 | 内容 | バグ発生率 | ゆうさくさんの手間 |
+|---|---|---|---|
+| A | ADR-012 をゆうさくさんが ChatGPT/o3 Web UI にペースト → 結果を私に返す | 極低 | 5-10 分（ペースト + 結果コピー）|
+| B | `scripts/openai_o3_ve
+...

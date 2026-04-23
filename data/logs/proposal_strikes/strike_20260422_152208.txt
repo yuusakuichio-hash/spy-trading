@@ -1,0 +1,18 @@
+[2026-04-22 15:22:07 JST] Proposal bottleneck violation #18
+Pattern matched in assistant response without research evidence.
+Response excerpt (first 500 chars):
+次の操作です。
+
+## 手順
+
+### 1. クレカ登録（Add payment details ボタン）
+左下の **「Add payment details」** ボタンをクリック → クレカ情報入力
+
+### 2. 残高チャージ
+クレカ登録完了すると、同じ画面に **「Add to credit balance」** or **「Add credits」** ボタンが出ます。
+
+- **チャージ額: $5-10**（最小）
+- 「Auto recharge」「Auto refill」**OFF**（チェックを外す or ボタン Disabled 側に）
+
+### 3. Usage l
+...

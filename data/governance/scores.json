@@ -1,0 +1,34 @@
+{
+  "timestamp": "2026-04-21T05:54:45.055421+09:00",
+  "target_file": "smoke_test_full",
+  "overall_pass": true,
+  "checks": {
+    "grep": {
+      "checked": true,
+      "pass": true,
+      "content": "test grep output"
+    },
+    "ast": {
+      "checked": true,
+      "pass": true,
+      "last_line": "OK - all symbols defined",
+      "has_error_keyword": false,
+      "content": "OK - all symbols defined\n"
+    },
+    "pytest": {
+      "parsed": false,
+      "reason": "file not found: None"
+    },
+    "mutation": {
+      "checked": true,
+      "pass": true,
+      "score": 65.0,
+      "threshold": 50
+    }
+  },
+  "thresholds": {
+    "mutation_score_min": 50,
+    "pytest_fail_max": 0
+  },
+  "allow_missing": true
+}

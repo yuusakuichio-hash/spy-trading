@@ -1,0 +1,13 @@
+[2026-04-22 10:34:11 JST] Proposal bottleneck violation #6
+Pattern matched in assistant response without research evidence.
+Response excerpt (first 500 chars):
+正しい指摘。Red Team の「分解 85% 推奨」を鵜呑みにしてました。**目的が違う**。Red Team は「リスク最小化」の 85%、ゆうさくさんの目標は「**95% 完成の autonomous**」。別物です。数値化します。
+
+## 🎯 「95% 完成」到達確率の数値化
+
+### 内部実測（14 レポートから）
+| 現状項目 | 実測値 | 根拠 |
+|---|---|---|
+| spy_bot.py 行数 | 18858 | codebase_metrics_20260422.md |
+| silent except（raise なし） 
+...

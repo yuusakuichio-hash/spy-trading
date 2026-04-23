@@ -1,0 +1,3 @@
+usage: python3.14 -m common.pushover_client [-h] [--flush] [--status]
+                                            [--send TITLE MSG]
+python3.14 -m common.pushover_client: error: unrecognized arguments: --flush-batch

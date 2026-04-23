@@ -1,0 +1,105 @@
+# data/configs/atlas_paper_risk.yaml — Atlas Paper 運用リスクパラメータ
+#
+# 用途: common_v3/risk/engine.py の RiskConfig に対応するペーパー取引専用設定。
+#       本番設定（atlas_production_small.yaml）より緩い制限でペーパー実績を積む。
+#
+# 読込方法:
+#   from atlas_v3.ops.risk_config_loader import load_paper_risk_config
+#   config = load_paper_risk_config()  # -> common_v3.risk.engine.RiskConfig
+#
+# 作成日: 2026-04-23
+# 担当: builder (Sora Lab)
+#
+# 【注意】このファイルを変更した場合は以下を必ず実行すること:
+#   pytest tests/test_atlas_v3_paper_ops.py -v
+#   (atlas_paper_risk.yaml 読み込み / RiskConfig 変換テスト)
+
+mode: "paper"
+description: "Atlas Paper モード専用リスク設定 — ペーパー実績蓄積フェーズ"
+
+# ── 想定元本制限 ────────────────────────────────────────────────────────────────
+# 1 発注あたりの最大想定元本 (USD)
+# Paper 口座は仮想 $100,000 だが、本番移行時のギャップを最小化するため
+# 本番小額モードの max_notional に合わせた制限を設定する。
+max_notional:
+  usd: 10000.0
+  # 根拠: ペーパーでは 10 倍の想定元本を許容して戦術多様性を確認する
+
+# ── 日次損失上限 ────────────────────────────────────────────────────────────────
+# 1 日の最大損失 (USD・負値で設定)
+# RiskConfig.max_daily_loss_usd に対応
+max_daily_loss:
+  usd: -500.0
+  # 根拠: ペーパー口座 $100,000 の 0.5%。実績収集中のため保守的に設定。
+  # 本番移行後は atlas_production_small.yaml の max_daily_loss_usd (-67) を参照。
+
+# ── 最大ドローダウン ────────────────────────────────────────────────────────────
+# 0.0–1.0 の比率で設定
+# RiskConfig.max_drawdown_pct に対応
+max_drawdown:
+  pct: 0.15
+  # 根拠: ペーパーでは 15% まで許容してリカバリー能力を検証する
+
+# ── プレミアム支払い上限 ────────────────────────────────────────────────────────
+# ロングオプション 1 発注あたりのプレミアム支払い上限 (USD)
+# RiskConfig.max_premium_notional に対応
+max_premium_notional:
+  usd: 2000.0
+  # 根拠: ORB Buy 等ロングオプション戦術のプレミアム上限
+
+# ── VaR 上限 ────────────────────────────────────────────────────────────────────
+# ポジション単位の VaR 上限 (USD)
+# RiskConfig.max_var_usd に対応
+max_var:
+  usd: 3000.0
+  # 根拠: max_daily_loss の 6 倍 (VaR ≒ 99% 信頼水準・1 日損失の想定最大値)
+
+# ── ショートオプション行使リスク上限 ────────────────────────────────────────────
+# RiskConfig.max_assignment_risk_usd に対応
+max_assignment_risk:
+  usd: 15000.0
+  # 根拠: ペーパー口座 $100,000 の 15%
+
+# ── ポジションサイジング ────────────────────────────────────────────────────────
+sizing:
+  method: "FIXED"                       # FIXED / KELLY / VIX_LINKED
+  fixed_size_contracts: 1               # ペーパーでも 1 枚固定（本番移行時との整合性確保）
+  kelly_fraction: 0.25                  # Kelly 比率縮小係数（KELLY 方式時のみ有効）
+  vix_size_base: 20.0                   # VIX_LINKED の基準 VIX
+
+# ── Kill Switch 連動設定 ────────────────────────────────────────────────────────
+kill_switch:
+  # ペーパーでも kill_switch は有効にする（本番移行後との整合性確保）
+  enabled: true
+  # bypass_approver: null  # ペーパーでは bypass 不可（本番でも原則不可）
+
+# ── 自動停止トリガー ────────────────────────────────────────────────────────────
+auto_halt:
+  # 日次損失が max_daily_loss.usd に到達 → その日の発注を停止
+  on_daily_loss_limit: true
+  # 累計ドローダウンが max_drawdown.pct を超過 → kill_switch 発動
+  on_drawdown_breach: true
+  # VaR が max_var.usd を超過 → 新規発注を停止（既存ポジションは保持）
+  on_var_breach: true
+
+# ── 戦術制限 ────────────────────────────────────────────────────────────────────
+# ペーパーでは全戦術を有効にして実績を蓄積する
+tactics:
+  enabled:
+    - "cs_sell"           # Credit Spread Sell
+    - "orb_buy"           # ORB Buy
+    - "ic_sell"           # Iron Condor（ペーパーで検証中）
+    - "straddle_buy"      # Straddle（IV crush 前後で検証中）
+  disabled:
+    - "butterfly"         # 流動性課題のため一時停止
+    - "calendar_sell"     # 複雑さによる誤発注リスクのため一時停止
+    - "strangle_sell"     # ロールコスト最適化未完のため一時停止
+
+# ── Pushover 通知設定 ────────────────────────────────────────────────────────────
+notifications:
+  tag: "[Atlas-Paper]"
+  entry_trade: false                    # ペーパーエントリーは通知しない
+  exit_trade: false                     # ペーパーイグジットは通知しない
+  daily_summary: true                   # 日次サマリーは通知する
+  risk_breach: true                     # リスク制限超過は必ず通知する (priority=1)
+  kill_switch_trigger: true             # Kill Switch 発動は必ず通知する (priority=2)

@@ -1,0 +1,63 @@
+{
+  "properties": {
+    "timestamp": {
+      "description": "Unix epoch (秒)",
+      "title": "Timestamp",
+      "type": "integer"
+    },
+    "nonce": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Nonce",
+      "type": "string"
+    },
+    "symbol": {
+      "enum": [
+        "MES",
+        "MNQ",
+        "ES",
+        "NQ"
+      ],
+      "title": "Symbol",
+      "type": "string"
+    },
+    "action": {
+      "enum": [
+        "BUY",
+        "SELL",
+        "CLOSE"
+      ],
+      "title": "Action",
+      "type": "string"
+    },
+    "qty": {
+      "maximum": 50,
+      "minimum": 1,
+      "title": "Qty",
+      "type": "integer"
+    },
+    "strategy_id": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Strategy Id",
+      "type": "string"
+    },
+    "hmac": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Hmac",
+      "type": "string"
+    }
+  },
+  "required": [
+    "timestamp",
+    "nonce",
+    "symbol",
+    "action",
+    "qty",
+    "strategy_id",
+    "hmac"
+  ],
+  "title": "SignalPayload",
+  "type": "object"
+}

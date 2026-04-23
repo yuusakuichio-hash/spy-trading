@@ -1,0 +1,12 @@
+[2026-04-23 06:12:00 JST] Proposal bottleneck violation #42
+Pattern matched in assistant response without research evidence.
+Response excerpt (first 500 chars):
+すみません、Redteam 結果と質問の両方に答えます。
+
+## Redteam #7/#8 結果（両方 FAIL）
+
+| # | 判定 | 主要発見 | 修正コスト |
+|---|---|---|---|
+| #7 executor_sync_only_guard | **FAIL** | 10件のbypass経路（lambda/変数/getattr/`__import__`等）+ tool_input非dictでrc=1 fail-open（Boeing 737MAX MCAS型） | ~30分でCONDITIONAL-PASS |
+| #8 mffu_dry_run_guard | **FAIL** | 17件中12件素通り（絶対パスでstring match回避・`**kwargs`展開・neste
+...

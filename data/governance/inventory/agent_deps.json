@@ -1,0 +1,182 @@
+{
+  "redteam.md": {
+    "stem": "redteam",
+    "size_bytes": 4380,
+    "mtime": 1776464478.3979468,
+    "ref_count": 216,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_independent_verification_mandatory.md",
+      "/Users/yuusakuichio/trading/data/premortem_reports/20260421_230505_CRITICAL_6_fixes_from_redteam_audit_toni_cb7b3a.json",
+      "/Users/yuusakuichio/trading/CLAUDE.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/349b128e-47ab-447e-8bad-257466d1d7b8/subagents/agent-a75c6a5f230553e3a.meta.json",
+      "/Users/yuusakuichio/trading/tests/test_continuous_redteam.py",
+      "/Users/yuusakuichio/trading/data/governance/inventory/agent_deps.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/a1e8f7d2-488f-4bc3-b37d-0db100ba5e33/subagents/agent-a37939ebff3b2163f.meta.json",
+      "/Users/yuusakuichio/trading/mutants/tests/redteam_fixtures/README.md",
+      "/Users/yuusakuichio/trading/data/research/org_hro_nasa_20260422.md",
+      "/Users/yuusakuichio/trading/data/premortem_reports/20260419_102820_Fix_8_CRITICAL_issues_from_redteam_and_M_0215a7.json"
+    ]
+  },
+  "ops.md": {
+    "stem": "ops",
+    "size_bytes": 1591,
+    "mtime": 1776515125.9924893,
+    "ref_count": 177,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/backups/phase_c_2day_20260421_0550/scripts_snapshot/backtest_validator.py",
+      "/Users/yuusakuichio/trading/data/research_prop_firms_corporate_account_20260420.md",
+      "/Users/yuusakuichio/trading/data/premortem_reports/20260420_123840_4並列Agent投入_1_停止処理再開確認_ops_2_Pushover通知抜本_cff37a.md",
+      "/Users/yuusakuichio/trading/tests/test_pushover_client.py",
+      "/Users/yuusakuichio/trading/data/research/top100_traders_gap_analysis_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/ef7649f9-4604-4b84-b598-be8ca4b26fc1/subagents/agent-aae1eb2527ae4229d.meta.json",
+      "/Users/yuusakuichio/trading/data/governance/inventory/agent_deps.json",
+      "/Users/yuusakuichio/trading/data/research/org_hro_nasa_20260422.md",
+      "/Users/yuusakuichio/trading/.agents/skills/install-opend/SKILL.md",
+      "/Users/yuusakuichio/trading/scripts/backtest_validator.py"
+    ]
+  },
+  "builder.md": {
+    "stem": "builder",
+    "size_bytes": 5455,
+    "mtime": 1776849480.4902842,
+    "ref_count": 672,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/premortem_reports/20260421_133501_結論_推奨出力の物理強制hook構築_recommendation_guard_d94620.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_independent_verification_mandatory.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/bb970578-9d6d-415f-8367-7f99b4fed2d1/subagents/agent-aa41d3af038b8b159.meta.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/a1e8f7d2-488f-4bc3-b37d-0db100ba5e33/subagents/agent-a5af7a699b0b24b1c.meta.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/bb970578-9d6d-415f-8367-7f99b4fed2d1/subagents/agent-a12fb8585ca6170a0.meta.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/a9653710-df88-463e-9883-f7c0374e7d34/subagents/agent-ace7ab823c1a966b3.meta.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/fd4daf70-9933-4ddd-883b-c2cd382420e1/subagents/agent-aa7b2daf7c0c200bb.meta.json",
+      "/Users/yuusakuichio/trading/data/governance/inventory/agent_deps.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/a1cbcc58-4002-4b3f-90d7-84623690a186/subagents/agent-a1ea9676a096faedf.meta.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/fe67ee2a-c3f1-4bba-a45d-a253c60255f6/subagents/agent-a5ce4bfb4c9650bd9.meta.json"
+    ]
+  },
+  "analyst.md": {
+    "stem": "analyst",
+    "size_bytes": 1829,
+    "mtime": 1776515125.9919426,
+    "ref_count": 92,
+    "refs": [
+      "/Users/yuusakuichio/trading/common/model_router.py",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/56d17011-c7c0-40ae-ac09-67d170843876/subagents/agent-a5fd24cd40e1dff89.meta.json",
+      "/Users/yuusakuichio/trading/data/atlas_monthly_verification_20260420.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/agent_deps.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/bb970578-9d6d-415f-8367-7f99b4fed2d1/subagents/agent-a640e80b4f61004d7.meta.json",
+      "/Users/yuusakuichio/trading/data/research/org_hro_nasa_20260422.md",
+      "/Users/yuusakuichio/trading/data/research/minimum_spec_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_token_management.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_decisions_20260418.md",
+      "/Users/yuusakuichio/trading/agent_log.py"
+    ]
+  },
+  "navigator.md": {
+    "stem": "navigator",
+    "size_bytes": 5714,
+    "mtime": 1776843877.4289625,
+    "ref_count": 28,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_navigator_mandatory_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/spy_screener.py",
+      "/Users/yuusakuichio/trading/CLAUDE.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/agent_deps.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_agent_organization_20260422.md",
+      "/Users/yuusakuichio/trading/.claude/settings.local.json",
+      "/Users/yuusakuichio/trading/data/ops/20jst_readiness_check_20260421.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/claudemd_classification_20260422.md",
+      "/Users/yuusakuichio/trading/scripts/gemini_verify_phase0.py"
+    ]
+  },
+  "governance.md": {
+    "stem": "governance",
+    "size_bytes": 2453,
+    "mtime": 1776675992.9745347,
+    "ref_count": 62,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_navigator_mandatory_20260422.md",
+      "/Users/yuusakuichio/trading/scripts/gemini_verify_v3.py",
+      "/Users/yuusakuichio/trading/data/governance/purple_cell_latest.json",
+      "/Users/yuusakuichio/trading/data/redteam_reports/chronos_final_cycle3_redteam_20260420.md",
+      "/Users/yuusakuichio/trading/.claude/hooks/andon_multichannel.py",
+      "/Users/yuusakuichio/trading/data/research/rewrite_case_studies_20260422.md",
+      "/Users/yuusakuichio/trading/.claude/hooks/auditor_required_gate.sh",
+      "/Users/yuusakuichio/trading/data/discipline_external_research.md",
+      "/Users/yuusakuichio/trading/scripts/gemini_verify_v3_with_context.py",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md"
+    ]
+  },
+  "sns.md": {
+    "stem": "sns",
+    "size_bytes": 3844,
+    "mtime": 1776045133.00899,
+    "ref_count": 116,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/d1c834b9-7dcd-4cc8-86ed-d60ca06be6a1/subagents/agent-ad3402bf247bae4f1.meta.json",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/agent_deps.json",
+      "/Users/yuusakuichio/trading/data/research/org_hro_nasa_20260422.md",
+      "/Users/yuusakuichio/trading/.agents/skills/install-opend/SKILL.md",
+      "/Users/yuusakuichio/trading/data/journal_20260420.md",
+      "/Users/yuusakuichio/trading/data/research/minimum_spec_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_sns_setup.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_token_management.md",
+      "/Users/yuusakuichio/trading/sns_scheduled_post.py"
+    ]
+  },
+  "strategist.md": {
+    "stem": "strategist",
+    "size_bytes": 1767,
+    "mtime": 1776515125.9926815,
+    "ref_count": 249,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/a1cbcc58-4002-4b3f-90d7-84623690a186/subagents/agent-a24e6ac9c6ee28a11.meta.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/a1cbcc58-4002-4b3f-90d7-84623690a186/subagents/agent-a607d1e056ef81cb7.meta.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/a1cbcc58-4002-4b3f-90d7-84623690a186/subagents/agent-a7c80753868ae0e9e.meta.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/bb970578-9d6d-415f-8367-7f99b4fed2d1/subagents/agent-a0bae634dc8f3f56f.meta.json",
+      "/Users/yuusakuichio/trading/data/atlas_monthly_verification_20260420.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/7a633d78-1a4e-4645-b3b0-fd39ec7ee3f6/subagents/agent-aae3e00cfbe8536c1.meta.json",
+      "/Users/yuusakuichio/trading/data/governance/inventory/agent_deps.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_bot_performance.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/bb970578-9d6d-415f-8367-7f99b4fed2d1/subagents/agent-ad791cff3b6f0a8d1.meta.json",
+      "/Users/yuusakuichio/trading/data/research/org_hro_nasa_20260422.md"
+    ]
+  },
+  "journal.md": {
+    "stem": "journal",
+    "size_bytes": 3179,
+    "mtime": 1776125767.1756701,
+    "ref_count": 76,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/bb970578-9d6d-415f-8367-7f99b4fed2d1/subagents/agent-a5e7873b3005a8146.meta.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/2ef12a14-5911-43c7-8d01-22136b27acf8/subagents/agent-a29f748be1b04f5c5.meta.json",
+      "/Users/yuusakuichio/trading/data/research_blindspot_analysis.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/agent_deps.json",
+      "/Users/yuusakuichio/trading/data/research/org_hro_nasa_20260422.md",
+      "/Users/yuusakuichio/trading/data/research/minimum_spec_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/bb970578-9d6d-415f-8367-7f99b4fed2d1/subagents/agent-a3b1ce318d296a35a.meta.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_token_management.md",
+      "/Users/yuusakuichio/trading/data/specs/chronos_demo_smoke_test.md"
+    ]
+  },
+  "secretary.md": {
+    "stem": "secretary",
+    "size_bytes": 1555,
+    "mtime": 1776515125.9925914,
+    "ref_count": 67,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/audit_report_20260417_v3.md",
+      "/Users/yuusakuichio/trading/data/premortem_reports/20260421_133501_結論_推奨出力の物理強制hook構築_recommendation_guard_d94620.md",
+      "/Users/yuusakuichio/trading/data/gumroad_template_feasibility.md",
+      "/Users/yuusakuichio/trading/data/redteam_reports/chronos_final_cycle3_redteam_20260420.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_navigator_mandatory_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/d263ff76-79c5-415a-8c44-e5c40acfb94a/subagents/agent-a959e5e88e1abfd4c.meta.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_agent_naming.md",
+      "/Users/yuusakuichio/trading/data/discipline_external_research.md",
+      "/Users/yuusakuichio/trading/data/premortem_reports/20260421_133501_結論_推奨出力の物理強制hook構築_recommendation_guard_d94620.json",
+      "/Users/yuusakuichio/trading/CLAUDE.md"
+    ]
+  }
+}

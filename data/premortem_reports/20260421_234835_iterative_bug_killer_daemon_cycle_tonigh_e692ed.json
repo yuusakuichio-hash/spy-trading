@@ -1,0 +1,166 @@
+{
+  "task": "iterative bug killer daemon cycle tonight: take bug from inventory fix diagnose verify update log move next continuous cycle 100 iterations possible complete all fixes",
+  "files": [],
+  "generated_at": "2026-04-21T23:48:35",
+  "source": "fallback",
+  "data": {
+    "scenarios": [
+      {
+        "id": "F01",
+        "title": "デプロイ先に旧バージョンが残存し新旧混在で動作",
+        "scenario": "iterative bug killer daemon cycle tonight: take bug from inv... に対し『デプロイ先に旧バージョンが残存し新旧混在で動作』が発生し、復旧不能または無音で不正動作する。",
+        "probability": "medium",
+        "impact": "high",
+        "detection": "ログ監視 / smoke test / assert",
+        "mitigation": "事前バックアップ・DRY_RUN・pre-check・段階リリース"
+      },
+      {
+        "id": "F02",
+        "title": "systemd service が ExecStart パス誤りで即死",
+        "scenario": "iterative bug killer daemon cycle tonight: take bug from inv... に対し『systemd service が ExecStart パス誤りで即死』が発生し、復旧不能または無音で不正動作する。",
+        "probability": "high",
+        "impact": "high",
+        "detection": "ログ監視 / smoke test / assert",
+        "mitigation": "事前バックアップ・DRY_RUN・pre-check・段階リリース"
+      },
+      {
+        "id": "F03",
+        "title": "SSH key 権限が 644 で認証失敗",
+        "scenario": "iterative bug killer daemon cycle tonight: take bug from inv... に対し『SSH key 権限が 644 で認証失敗』が発生し、復旧不能または無音で不正動作する。",
+        "probability": "medium",
+        "impact": "high",
+        "detection": "ログ監視 / smoke test / assert",
+        "mitigation": "事前バックアップ・DRY_RUN・pre-check・段階リリース"
+      },
+      {
+        "id": "F04",
+        "title": "デプロイ後の動作確認なしで本番バグ放置",
+        "scenario": "iterative bug killer daemon cycle tonight: take bug from inv... に対し『デプロイ後の動作確認なしで本番バグ放置』が発生し、復旧不能または無音で不正動作する。",
+        "probability": "high",
+        "impact": "catastrophic",
+        "detection": "ログ監視 / smoke test / assert",
+        "mitigation": "事前バックアップ・DRY_RUN・pre-check・段階リリース"
+      },
+      {
+        "id": "F05",
+        "title": "旧プロセスが残留して二重起動",
+        "scenario": "iterative bug killer daemon cycle tonight: take bug from inv... に対し『旧プロセスが残留して二重起動』が発生し、復旧不能または無音で不正動作する。",
+        "probability": "medium",
+        "impact": "high",
+        "detection": "ログ監視 / smoke test / assert",
+        "mitigation": "事前バックアップ・DRY_RUN・pre-check・段階リリース"
+      },
+      {
+        "id": "F06",
+        "title": "ログディレクトリ未作成でサービス起動失敗",
+        "scenario": "iterative bug killer daemon cycle tonight: take bug from inv... に対し『ログディレクトリ未作成でサービス起動失敗』が発生し、復旧不能または無音で不正動作する。",
+        "probability": "medium",
+        "impact": "medium",
+        "detection": "ログ監視 / smoke test / assert",
+        "mitigation": "事前バックアップ・DRY_RUN・pre-check・段階リリース"
+      },
+      {
+        "id": "F07",
+        "title": "環境変数 .env 未転送で本番 API key なし",
+        "scenario": "iterative bug killer daemon cycle tonight: take bug from inv... に対し『環境変数 .env 未転送で本番 API key なし』が発生し、復旧不能または無音で不正動作する。",
+        "probability": "medium",
+        "impact": "catastrophic",
+        "detection": "ログ監視 / smoke test / assert",
+        "mitigation": "事前バックアップ・DRY_RUN・pre-check・段階リリース"
+      }
+    ],
+    "hazop": [
+      {
+        "word": "No/None",
+        "risk": "No/None適用時の逸脱",
+        "mitigation": "その要素が完全に欠落したら？"
+      },
+      {
+        "word": "More",
+        "risk": "More適用時の逸脱",
+        "mitigation": "想定より多すぎる/大きすぎる/速すぎる場合は？"
+      },
+      {
+        "word": "Less",
+        "risk": "Less適用時の逸脱",
+        "mitigation": "想定より少ない/小さい/遅い場合は？"
+      },
+      {
+        "word": "As well as",
+        "risk": "As well as適用時の逸脱",
+        "mitigation": "想定外の追加が混入したら？"
+      },
+      {
+        "word": "Part of",
+        "risk": "Part of適用時の逸脱",
+        "mitigation": "一部だけ成立・残りが欠落したら？"
+      },
+      {
+        "word": "Reverse",
+        "risk": "Reverse適用時の逸脱",
+        "mitigation": "逆方向・真逆の動作が起きたら？"
+      },
+      {
+        "word": "Other than / Instead of",
+        "risk": "Other than / Instead of適用時の逸脱",
+        "mitigation": "全く別のものに置き換わったら？"
+      },
+      {
+        "word": "Early",
+        "risk": "Early適用時の逸脱",
+        "mitigation": "想定より早く起きたら？"
+      },
+      {
+        "word": "Late",
+        "risk": "Late適用時の逸脱",
+        "mitigation": "想定より遅く起きたら？"
+      },
+      {
+        "word": "Before",
+        "risk": "Before適用時の逸脱",
+        "mitigation": "前工程より前に発火したら？"
+      },
+      {
+        "word": "After",
+        "risk": "After適用時の逸脱",
+        "mitigation": "後続が先に終わったら？"
+      }
+    ],
+    "competing_hypotheses": [
+      {
+        "hypothesis": "実装は意図通り動く",
+        "evidence_for": "仕様書通り",
+        "evidence_against": "本番未検証",
+        "test": "smoke test"
+      },
+      {
+        "hypothesis": "隠れた副作用がある",
+        "evidence_for": "既存コードとの結合部",
+        "evidence_against": "なし",
+        "test": "既存回帰テスト"
+      },
+      {
+        "hypothesis": "前提条件が既に壊れている",
+        "evidence_for": "依存サービスの稼働状況不明",
+        "evidence_against": "直近稼働ログあり",
+        "test": "依存 healthcheck"
+      }
+    ],
+    "judgment": {
+      "overall_risk": "medium",
+      "go_no_go": "CONDITIONAL_GO",
+      "top3_blockers": [
+        "F01",
+        "F04",
+        "F07"
+      ],
+      "required_gates": [
+        "デプロイ後 status 確認",
+        "旧プロセス停止確認",
+        ".env 転送確認"
+      ]
+    },
+    "_fallback_reason": "no_api_key",
+    "_category": "deploy_vps"
+  }
+}

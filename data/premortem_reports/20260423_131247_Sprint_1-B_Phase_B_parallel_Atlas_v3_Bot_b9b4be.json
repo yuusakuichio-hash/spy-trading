@@ -1,0 +1,178 @@
+{
+  "task": "Sprint 1-B Phase B parallel: Atlas v3 Bot logic + paper ops requirements",
+  "files": [
+    "atlas_v3/strategies/",
+    "data/configs/paper_ops.yaml"
+  ],
+  "generated_at": "2026-04-23T13:12:47",
+  "source": "fallback",
+  "data": {
+    "scenarios": [
+      {
+        "id": "F01",
+        "title": "PDT違反で口座が90日ロック",
+        "scenario": "Sprint 1-B Phase B parallel: Atlas v3 Bot logic + paper ops ... に対し『PDT違反で口座が90日ロック』が発生し、復旧不能または無音で不正動作する。",
+        "probability": "medium",
+        "impact": "catastrophic",
+        "detection": "ログ監視 / smoke test / assert",
+        "mitigation": "事前バックアップ・DRY_RUN・pre-check・段階リリース"
+      },
+      {
+        "id": "F02",
+        "title": "資金管理ロジックのバグで証拠金超過発注",
+        "scenario": "Sprint 1-B Phase B parallel: Atlas v3 Bot logic + paper ops ... に対し『資金管理ロジックのバグで証拠金超過発注』が発生し、復旧不能または無音で不正動作する。",
+        "probability": "low",
+        "impact": "catastrophic",
+        "detection": "ログ監視 / smoke test / assert",
+        "mitigation": "事前バックアップ・DRY_RUN・pre-check・段階リリース"
+      },
+      {
+        "id": "F03",
+        "title": "DD上限超過後もエントリー継続で連鎖損失",
+        "scenario": "Sprint 1-B Phase B parallel: Atlas v3 Bot logic + paper ops ... に対し『DD上限超過後もエントリー継続で連鎖損失』が発生し、復旧不能または無音で不正動作する。",
+        "probability": "low",
+        "impact": "catastrophic",
+        "detection": "ログ監視 / smoke test / assert",
+        "mitigation": "事前バックアップ・DRY_RUN・pre-check・段階リリース"
+      },
+      {
+        "id": "F04",
+        "title": "市場クローズ直前に発注→約定できずポジション持ち越し",
+        "scenario": "Sprint 1-B Phase B parallel: Atlas v3 Bot logic + paper ops ... に対し『市場クローズ直前に発注→約定できずポジション持ち越し』が発生し、復旧不能または無音で不正動作する。",
+        "probability": "medium",
+        "impact": "high",
+        "detection": "ログ監視 / smoke test / assert",
+        "mitigation": "事前バックアップ・DRY_RUN・pre-check・段階リリース"
+      },
+      {
+        "id": "F05",
+        "title": "VIX急騰時に戦術切替が遅延し最悪タイミングで発注",
+        "scenario": "Sprint 1-B Phase B parallel: Atlas v3 Bot logic + paper ops ... に対し『VIX急騰時に戦術切替が遅延し最悪タイミングで発注』が発生し、復旧不能または無音で不正動作する。",
+        "probability": "medium",
+        "impact": "high",
+        "detection": "ログ監視 / smoke test / assert",
+        "mitigation": "事前バックアップ・DRY_RUN・pre-check・段階リリース"
+      },
+      {
+        "id": "F06",
+        "title": "二重発注防止ロジックのバグで同一シグナルを複数回発注",
+        "scenario": "Sprint 1-B Phase B parallel: Atlas v3 Bot logic + paper ops ... に対し『二重発注防止ロジックのバグで同一シグナルを複数回発注』が発生し、復旧不能または無音で不正動作する。",
+        "probability": "low",
+        "impact": "catastrophic",
+        "detection": "ログ監視 / smoke test / assert",
+        "mitigation": "事前バックアップ・DRY_RUN・pre-check・段階リリース"
+      },
+      {
+        "id": "F07",
+        "title": "fill 確認なしで損切注文が未執行のまま放置",
+        "scenario": "Sprint 1-B Phase B parallel: Atlas v3 Bot logic + paper ops ... に対し『fill 確認なしで損切注文が未執行のまま放置』が発生し、復旧不能または無音で不正動作する。",
+        "probability": "medium",
+        "impact": "high",
+        "detection": "ログ監視 / smoke test / assert",
+        "mitigation": "事前バックアップ・DRY_RUN・pre-check・段階リリース"
+      },
+      {
+        "id": "F08",
+        "title": "タイムゾーン誤りで場外に発注ループが走る",
+        "scenario": "Sprint 1-B Phase B parallel: Atlas v3 Bot logic + paper ops ... に対し『タイムゾーン誤りで場外に発注ループが走る』が発生し、復旧不能または無音で不正動作する。",
+        "probability": "low",
+        "impact": "high",
+        "detection": "ログ監視 / smoke test / assert",
+        "mitigation": "事前バックアップ・DRY_RUN・pre-check・段階リリース"
+      }
+    ],
+    "hazop": [
+      {
+        "word": "No/None",
+        "risk": "No/None適用時の逸脱",
+        "mitigation": "その要素が完全に欠落したら？"
+      },
+      {
+        "word": "More",
+        "risk": "More適用時の逸脱",
+        "mitigation": "想定より多すぎる/大きすぎる/速すぎる場合は？"
+      },
+      {
+        "word": "Less",
+        "risk": "Less適用時の逸脱",
+        "mitigation": "想定より少ない/小さい/遅い場合は？"
+      },
+      {
+        "word": "As well as",
+        "risk": "As well as適用時の逸脱",
+        "mitigation": "想定外の追加が混入したら？"
+      },
+      {
+        "word": "Part of",
+        "risk": "Part of適用時の逸脱",
+        "mitigation": "一部だけ成立・残りが欠落したら？"
+      },
+      {
+        "word": "Reverse",
+        "risk": "Reverse適用時の逸脱",
+        "mitigation": "逆方向・真逆の動作が起きたら？"
+      },
+      {
+        "word": "Other than / Instead of",
+        "risk": "Other than / Instead of適用時の逸脱",
+        "mitigation": "全く別のものに置き換わったら？"
+      },
+      {
+        "word": "Early",
+        "risk": "Early適用時の逸脱",
+        "mitigation": "想定より早く起きたら？"
+      },
+      {
+        "word": "Late",
+        "risk": "Late適用時の逸脱",
+        "mitigation": "想定より遅く起きたら？"
+      },
+      {
+        "word": "Before",
+        "risk": "Before適用時の逸脱",
+        "mitigation": "前工程より前に発火したら？"
+      },
+      {
+        "word": "After",
+        "risk": "After適用時の逸脱",
+        "mitigation": "後続が先に終わったら？"
+      }
+    ],
+    "competing_hypotheses": [
+      {
+        "hypothesis": "実装は意図通り動く",
+        "evidence_for": "仕様書通り",
+        "evidence_against": "本番未検証",
+        "test": "smoke test"
+      },
+      {
+        "hypothesis": "隠れた副作用がある",
+        "evidence_for": "既存コードとの結合部",
+        "evidence_against": "なし",
+        "test": "既存回帰テスト"
+      },
+      {
+        "hypothesis": "前提条件が既に壊れている",
+        "evidence_for": "依存サービスの稼働状況不明",
+        "evidence_against": "直近稼働ログあり",
+        "test": "依存 healthcheck"
+      }
+    ],
+    "judgment": {
+      "overall_risk": "medium",
+      "go_no_go": "CONDITIONAL_GO",
+      "top3_blockers": [
+        "F01",
+        "F02",
+        "F06"
+      ],
+      "required_gates": [
+        "PDT制約チェック実装確認",
+        "証拠金超過ガード確認",
+        "DD上限 kill switch 動作確認"
+      ]
+    },
+    "_fallback_reason": "no_api_key",
+    "_category": "strategy_trading"
+  }
+}

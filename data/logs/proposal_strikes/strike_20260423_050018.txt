@@ -1,0 +1,15 @@
+[2026-04-23 05:00:18 JST] Proposal bottleneck violation #41
+Pattern matched in assistant response without research evidence.
+Response excerpt (first 500 chars):
+## ★ jsonl の実態（正直報告）
+
+| 項目 | 値 |
+|---|---|
+| 保存場所 | `~/.claude/projects/-Users-yuusakuichio-trading/*.jsonl` |
+| ファイル数 | **78 個**（過去セッション分全部） |
+| 総サイズ | **701 MB** |
+| アクセス | ソラが `grep` で普通に読める・検索指示でヒット |
+| 内容 | 全発言・tool結果・思考が平文で保存 |
+
+**つまり memory より大きな穴でした**。今セッションの jsonl にも、終了後「本音5
+...

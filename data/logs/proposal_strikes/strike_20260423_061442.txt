@@ -1,0 +1,15 @@
+[2026-04-23 06:14:42 JST] Proposal bottleneck violation #43
+Pattern matched in assistant response without research evidence.
+Response excerpt (first 500 chars):
+理解しました。「バグ根治のための実装手法・点検手法」全般を 50 個調査ですね。
+
+## 既存メモリで関連あるもの確認
+
+| 既知 | 内容 |
+|---|---|
+| `feedback_code_audit_methodology.md` | 失敗パターン駆動監査 |
+| `feedback_total_audit_after_every_change.md` | 変更毎8ステップ |
+| `feedback_schema_contract_test_mandatory.md` | CI組込schema契約テスト |
+| `feedback_independent_verification_mandatory.md` | redteam必須 |
+| `feedback
+...

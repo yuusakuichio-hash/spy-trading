@@ -1,0 +1,2692 @@
+{
+  "feedback_language.md": {
+    "stem": "feedback_language",
+    "size_bytes": 873,
+    "mtime": 1776093611.2426486,
+    "ref_count": 9,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/journal/journal_20260414.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_no_private_life_intrusion_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_session_20260422_major_redesign.md",
+      "/Users/yuusakuichio/trading/.claude/hooks/pronoun_guard.sh",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/data/research/org_hro_nasa_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/inventory_summary.md"
+    ]
+  },
+  "feedback_preflight_check.md": {
+    "stem": "feedback_preflight_check",
+    "size_bytes": 2111,
+    "mtime": 1776290598.8083136,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_bottleneck_before_proposal.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_retirement_schedule.md": {
+    "stem": "project_retirement_schedule",
+    "size_bytes": 1285,
+    "mtime": 1775947788.6067746,
+    "ref_count": 10,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/mffu_multi_strategy_design.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_retirement_llc_integrated_20260421.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_phase_c_2day_sprint_20260421.md",
+      "/Users/yuusakuichio/trading/data/prop_farm_research_deep_20260417.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_memory_over_assumption.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/user_family_structure.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/inventory_summary.md"
+    ]
+  },
+  "project_chronos_monthly_schedule_latest.md": {
+    "stem": "project_chronos_monthly_schedule_latest",
+    "size_bytes": 3858,
+    "mtime": 1776585866.6971061,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/trading/data/research_tax_simulation_atlas_chronos_20260420.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_no_private_life_intrusion_20260422.md": {
+    "stem": "feedback_no_private_life_intrusion_20260422",
+    "size_bytes": 2316,
+    "mtime": 1776841187.2627392,
+    "ref_count": 9,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/claudemd_classification_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/CLAUDE_md_v3_draft_20260422.md",
+      "/Users/yuusakuichio/trading/scripts/gemini_verify_phase0.py",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/CLAUDE.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_user_judgment_scope_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/data/governance/navigator_audit_phase0_20260422.md"
+    ]
+  },
+  "project_session_20260417_summary.md": {
+    "stem": "project_session_20260417_summary",
+    "size_bytes": 4316,
+    "mtime": 1776410149.7714186,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/data/atlas_comprehensive_audit_20260418.md"
+    ]
+  },
+  "project_decisions_20260410.md": {
+    "stem": "project_decisions_20260410",
+    "size_bytes": 1601,
+    "mtime": 1775823903.5099542,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_journal_flow.md": {
+    "stem": "project_journal_flow",
+    "size_bytes": 717,
+    "mtime": 1775898219.101724,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_model_router_deviation_3tier.md": {
+    "stem": "project_model_router_deviation_3tier",
+    "size_bytes": 2954,
+    "mtime": 1776482420.682698,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/agent_deps.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_decisions_20260418.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_sora_lab_first_mover_20260419.md": {
+    "stem": "project_sora_lab_first_mover_20260419",
+    "size_bytes": 2419,
+    "mtime": 1776624960.6022656,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_memory_update_rules.md": {
+    "stem": "feedback_memory_update_rules",
+    "size_bytes": 829,
+    "mtime": 1776755750.2722456,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_jsonl_priority.md": {
+    "stem": "feedback_jsonl_priority",
+    "size_bytes": 1985,
+    "mtime": 1776476826.5838423,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_atlas_schedule.md": {
+    "stem": "project_atlas_schedule",
+    "size_bytes": 1579,
+    "mtime": 1776254467.1733022,
+    "ref_count": 5,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/research/autonomous_trading_systems_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/tests/test_violation_tracker.py",
+      "/Users/yuusakuichio/trading/mutants/tests/test_violation_tracker.py"
+    ]
+  },
+  "feedback_goal_acceleration_first.md": {
+    "stem": "feedback_goal_acceleration_first",
+    "size_bytes": 2986,
+    "mtime": 1776563065.9879289,
+    "ref_count": 12,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_cycle_complete_today.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_always_update_memory.md",
+      "/Users/yuusakuichio/trading/.claude/hooks/pace_check_guard.sh",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_retirement_timing_comparison_20260419.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_full_score_cycle_no_shortcut.md",
+      "/Users/yuusakuichio/trading/.claude/hooks/session_start_discipline_reload.sh",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_chronos_monthly_schedule_latest.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_sns_setup.md": {
+    "stem": "project_sns_setup",
+    "size_bytes": 1628,
+    "mtime": 1775980784.7770097,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_user_directives_20260420_0825.md": {
+    "stem": "project_user_directives_20260420_0825",
+    "size_bytes": 4009,
+    "mtime": 1776641915.8510284,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "user_wife_personality.md": {
+    "stem": "user_wife_personality",
+    "size_bytes": 2544,
+    "mtime": 1776407718.6266305,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/user_family_structure.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_manual_toggle_audit_20260421.md": {
+    "stem": "project_manual_toggle_audit_20260421",
+    "size_bytes": 1731,
+    "mtime": 1776712876.3288074,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/hook_deps.json",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_decisions_20260414.md": {
+    "stem": "project_decisions_20260414",
+    "size_bytes": 2569,
+    "mtime": 1776176490.3891926,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_wife_sharing_plan.md": {
+    "stem": "project_wife_sharing_plan",
+    "size_bytes": 2310,
+    "mtime": 1776398316.0797043,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/user_family_structure.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_today_config.md": {
+    "stem": "project_today_config",
+    "size_bytes": 2585,
+    "mtime": 1775832473.2091377,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_wife_officer_incorporation_20260420.md": {
+    "stem": "project_wife_officer_incorporation_20260420",
+    "size_bytes": 2308,
+    "mtime": 1776710722.3130262,
+    "ref_count": 5,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_session_20260420_to_0421_summary.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/data/journal_20260421.md"
+    ]
+  },
+  "project_session_20260421_night_complete.md": {
+    "stem": "project_session_20260421_night_complete",
+    "size_bytes": 5097,
+    "mtime": 1776775986.648818,
+    "ref_count": 8,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_chronos_not_running_20260422.md",
+      "/Users/yuusakuichio/trading/chronos_v3/README.md",
+      "/Users/yuusakuichio/trading/data/specs/v3/chronos_spec_v3_20260422.md",
+      "/Users/yuusakuichio/trading/data/ops/morning_report_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/hook_deps.json",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/data/specs/v2/chronos_spec_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/inventory_summary.md"
+    ]
+  },
+  "project_private_fund_timing_20260419.md": {
+    "stem": "project_private_fund_timing_20260419",
+    "size_bytes": 2631,
+    "mtime": 1776568336.1191585,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_session_20260421night_to_0422morning.md": {
+    "stem": "project_session_20260421night_to_0422morning",
+    "size_bytes": 3965,
+    "mtime": 1776813697.3836625,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/research/bottleneck_datadriven_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_atlas_monthly_rate_v6.md": {
+    "stem": "project_atlas_monthly_rate_v6",
+    "size_bytes": 2892,
+    "mtime": 1776733405.4091237,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_300m_roadmap_20260421_v6.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_schema_contract_test_mandatory.md": {
+    "stem": "feedback_schema_contract_test_mandatory",
+    "size_bytes": 2691,
+    "mtime": 1776600761.7748115,
+    "ref_count": 13,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/journal_20260420.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/CLAUDE_md_v3_draft_20260422.md",
+      "/Users/yuusakuichio/trading/.claude/agents/governance.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/CLAUDE.md",
+      "/Users/yuusakuichio/trading/data/redteam_reports/chronos_final_redteam_20260420.md",
+      "/Users/yuusakuichio/trading/tests/redteam_fixtures/README.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_false_completion_4th_20260420.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_journal_update_flow.md": {
+    "stem": "feedback_journal_update_flow",
+    "size_bytes": 2886,
+    "mtime": 1776717491.5379086,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_decisions_20260415.md": {
+    "stem": "project_decisions_20260415",
+    "size_bytes": 5461,
+    "mtime": 1776234148.6341555,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_total_audit_after_every_change.md": {
+    "stem": "feedback_total_audit_after_every_change",
+    "size_bytes": 2663,
+    "mtime": 1776515915.1476734,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/work_queue.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_use_yen_plain.md": {
+    "stem": "feedback_use_yen_plain",
+    "size_bytes": 845,
+    "mtime": 1776288653.2681124,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_report_format_user_focus.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_team_ops_memo.md": {
+    "stem": "project_team_ops_memo",
+    "size_bytes": 1761,
+    "mtime": 1775881713.3097222,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_atlas_naming_discipline.md": {
+    "stem": "feedback_atlas_naming_discipline",
+    "size_bytes": 2037,
+    "mtime": 1776454363.7873204,
+    "ref_count": 5,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_no_exclude_efficient_assets.md",
+      "/Users/yuusakuichio/trading/.claude/hooks/discipline_guard.sh"
+    ]
+  },
+  "feedback_recommend_means_execute.md": {
+    "stem": "feedback_recommend_means_execute",
+    "size_bytes": 1317,
+    "mtime": 1776658698.489321,
+    "ref_count": 5,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_user_judgment_scope_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/.claude/hooks/discipline_guard.sh"
+    ]
+  },
+  "project_bot_performance.md": {
+    "stem": "project_bot_performance",
+    "size_bytes": 1743,
+    "mtime": 1775947800.1726587,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_word_choice_kudasai.md": {
+    "stem": "feedback_word_choice_kudasai",
+    "size_bytes": 866,
+    "mtime": 1776482486.536378,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_decisions_20260418.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_expense_optimization.md": {
+    "stem": "project_expense_optimization",
+    "size_bytes": 3161,
+    "mtime": 1776407698.0559702,
+    "ref_count": 5,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_llc_revenue_required_for_tax_benefit.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/research_tax_simulation_atlas_chronos_20260420.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_llc_establishment_20260419.md"
+    ]
+  },
+  "feedback_aar_improvement_cycle.md": {
+    "stem": "feedback_aar_improvement_cycle",
+    "size_bytes": 2892,
+    "mtime": 1776475179.8148663,
+    "ref_count": 9,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_model_router_deviation_3tier.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_total_audit_after_every_change.md",
+      "/Users/yuusakuichio/trading/data/atlas_comprehensive_audit_20260418.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/hook_deps.json",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_watchdog_self_recovery_gap_20260420.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/inventory_summary.md"
+    ]
+  },
+  "feedback_peer_review_3violations_20260420.md": {
+    "stem": "feedback_peer_review_3violations_20260420",
+    "size_bytes": 2483,
+    "mtime": 1776638650.822201,
+    "ref_count": 5,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/tests/test_violation_tracker.py",
+      "/Users/yuusakuichio/trading/mutants/tests/test_violation_tracker.py"
+    ]
+  },
+  "project_income_structure.md": {
+    "stem": "project_income_structure",
+    "size_bytes": 2504,
+    "mtime": 1776400270.1720884,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/retirement_timing_comparison_20260419.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_remote_control.md": {
+    "stem": "project_remote_control",
+    "size_bytes": 1414,
+    "mtime": 1775891692.4487085,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/claudemd_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_effort_estimate_2_3h.md": {
+    "stem": "feedback_effort_estimate_2_3h",
+    "size_bytes": 1502,
+    "mtime": 1776560917.7132378,
+    "ref_count": 7,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_builder_time_estimate_minutes.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/data/research/flow_audit_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/data/governance/navigator_audit_phase0_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_time_awareness_20260422.md"
+    ]
+  },
+  "feedback_instruction_principles.md": {
+    "stem": "feedback_instruction_principles",
+    "size_bytes": 1971,
+    "mtime": 1776375381.0254107,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_prompt_cache_crash_on_image_20260422.md": {
+    "stem": "project_prompt_cache_crash_on_image_20260422",
+    "size_bytes": 2738,
+    "mtime": 1776813837.4106145,
+    "ref_count": 1,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_bug_zero_absolute_20260422.md": {
+    "stem": "feedback_bug_zero_absolute_20260422",
+    "size_bytes": 3668,
+    "mtime": 1776823887.643202,
+    "ref_count": 22,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_navigator_mandatory_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/CLAUDE.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_agent_organization_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_time_awareness_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/claudemd_classification_20260422.md",
+      "/Users/yuusakuichio/trading/scripts/gemini_verify_phase0.py",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_session_20260422_major_redesign.md",
+      "/Users/yuusakuichio/trading/data/journal/growth_report_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/navigator_audit_phase0_20260422.md"
+    ]
+  },
+  "feedback_market_hours_are_precious.md": {
+    "stem": "feedback_market_hours_are_precious",
+    "size_bytes": 1841,
+    "mtime": 1776453903.1655445,
+    "ref_count": 5,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/discipline_rootcause_analysis.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/.claude/hooks/discipline_guard.sh"
+    ]
+  },
+  "project_tradovate_api_registration_20260421.md": {
+    "stem": "project_tradovate_api_registration_20260421",
+    "size_bytes": 2632,
+    "mtime": 1776715041.3211143,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_pdt_blocker.md": {
+    "stem": "project_pdt_blocker",
+    "size_bytes": 2680,
+    "mtime": 1776375393.6813264,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/data/atlas_comprehensive_audit_20260418.md"
+    ]
+  },
+  "feedback_opus_no_implementation.md": {
+    "stem": "feedback_opus_no_implementation",
+    "size_bytes": 1002,
+    "mtime": 1776109504.5867958,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_decision_criteria.md": {
+    "stem": "feedback_decision_criteria",
+    "size_bytes": 1732,
+    "mtime": 1775959952.8861156,
+    "ref_count": 6,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/claudemd_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_research_before_service_recommend.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/CLAUDE_md_v3_draft_20260422.md",
+      "/Users/yuusakuichio/trading/CLAUDE.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_credit_card_strategy.md": {
+    "stem": "project_credit_card_strategy",
+    "size_bytes": 3427,
+    "mtime": 1776399288.065428,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_llc_establishment_20260419.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_no_numeric_citation.md": {
+    "stem": "feedback_no_numeric_citation",
+    "size_bytes": 2458,
+    "mtime": 1776853980.342418,
+    "ref_count": 14,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/claudemd_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/CLAUDE_md_v3_draft_20260422.md",
+      "/Users/yuusakuichio/trading/scripts/gemini_verify_phase0.py",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/CLAUDE.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_session_20260422_major_redesign.md",
+      "/Users/yuusakuichio/trading/.claude/agents/builder.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_bug_zero_absolute_20260422.md"
+    ]
+  },
+  "feedback_memory_over_assumption.md": {
+    "stem": "feedback_memory_over_assumption",
+    "size_bytes": 1644,
+    "mtime": 1776667357.4777691,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/data/research/org_tps_xp_medical_20260422.md"
+    ]
+  },
+  "project_quiet_hours_20260421.md": {
+    "stem": "project_quiet_hours_20260421",
+    "size_bytes": 1340,
+    "mtime": 1776717399.8205347,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_strategy_tagging.md": {
+    "stem": "feedback_strategy_tagging",
+    "size_bytes": 1359,
+    "mtime": 1776036458.582975,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_spec_cache.md": {
+    "stem": "feedback_spec_cache",
+    "size_bytes": 2277,
+    "mtime": 1776122596.8985097,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_false_completion_5th_governance.md": {
+    "stem": "feedback_false_completion_5th_governance",
+    "size_bytes": 1964,
+    "mtime": 1776676154.1485522,
+    "ref_count": 19,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_navigator_mandatory_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/CLAUDE.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/agent_deps.json",
+      "/Users/yuusakuichio/trading/.claude/hooks/selective_test_detector.sh",
+      "/Users/yuusakuichio/trading/data/research/mlops_self_retraining_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_session_20260422_major_redesign.md",
+      "/Users/yuusakuichio/trading/data/backups/governance_phase1_20260421_0508/blue_team_bias_detector.sh",
+      "/Users/yuusakuichio/trading/data/governance/navigator_audit_phase0_20260422.md",
+      "/Users/yuusakuichio/trading/.claude/agents/governance.md"
+    ]
+  },
+  "feedback_no_schedule_delay.md": {
+    "stem": "feedback_no_schedule_delay",
+    "size_bytes": 2097,
+    "mtime": 1776455214.7684057,
+    "ref_count": 13,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_cycle_complete_today.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/.claude/hooks/pace_check_guard.sh",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_goal_acceleration_first.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/.claude/hooks/session_start_discipline_reload.sh",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_chronos_monthly_schedule_latest.md",
+      "/Users/yuusakuichio/trading/data/atlas_comprehensive_audit_20260418.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_time_awareness_20260422.md"
+    ]
+  },
+  "feedback_no_unnecessary_questions.md": {
+    "stem": "feedback_no_unnecessary_questions",
+    "size_bytes": 1636,
+    "mtime": 1776380373.4438896,
+    "ref_count": 7,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/discipline_rootcause_analysis.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_no_confirmation_execute_now.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_user_judgment_scope_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_recommend_means_execute.md"
+    ]
+  },
+  "project_decisions_20260416_pm.md": {
+    "stem": "project_decisions_20260416_pm",
+    "size_bytes": 2450,
+    "mtime": 1776375354.2622876,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/roadmap_post_tax_20260419_v3.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/data/roadmap_post_tax_20260419_v2.md"
+    ]
+  },
+  "feedback_trader_design_standard.md": {
+    "stem": "feedback_trader_design_standard",
+    "size_bytes": 1823,
+    "mtime": 1776121759.6533237,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_tradovate_endpoint_fix_20260421.md": {
+    "stem": "project_tradovate_endpoint_fix_20260421",
+    "size_bytes": 1235,
+    "mtime": 1776735726.087342,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_restart_after_changes.md": {
+    "stem": "feedback_restart_after_changes",
+    "size_bytes": 1205,
+    "mtime": 1776200691.0174754,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/test_gap_analysis.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_false_completion_4th_20260420.md": {
+    "stem": "project_false_completion_4th_20260420",
+    "size_bytes": 2287,
+    "mtime": 1776659983.9635127,
+    "ref_count": 5,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/.claude/agents/governance.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_sns_anonymity.md": {
+    "stem": "feedback_sns_anonymity",
+    "size_bytes": 2124,
+    "mtime": 1776544167.2217505,
+    "ref_count": 5,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_sns_truth_guard_20260421.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/user_family_structure.md"
+    ]
+  },
+  "project_prop_firm_dual_layer_20260420.md": {
+    "stem": "project_prop_firm_dual_layer_20260420",
+    "size_bytes": 2123,
+    "mtime": 1776670819.332283,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_wife_officer_incorporation_20260420.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "user_profile.md": {
+    "stem": "user_profile",
+    "size_bytes": 10568,
+    "mtime": 1776285756.5919125,
+    "ref_count": 7,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/.claude/agents/journal.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/d1c834b9-7dcd-4cc8-86ed-d60ca06be6a1/subagents/agent-a0cd467ad8755996d.meta.json",
+      "/Users/yuusakuichio/trading/data/journal_20260414_20260418_20260421_analysis.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/data/gumroad_template/MEMORY_TEMPLATE.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/inventory_summary.md"
+    ]
+  },
+  "feedback_no_exclude_efficient_assets.md": {
+    "stem": "feedback_no_exclude_efficient_assets",
+    "size_bytes": 2284,
+    "mtime": 1776513798.9384704,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_prop_firm_dual_layer_20260420.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_parallel_verification.md": {
+    "stem": "project_parallel_verification",
+    "size_bytes": 1183,
+    "mtime": 1776123828.0146773,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/research_greeks_activation_plan.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_trader_research.md": {
+    "stem": "project_trader_research",
+    "size_bytes": 1373,
+    "mtime": 1775897181.4354465,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/research_greeks_activation_plan.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_parallel_grid_test.md": {
+    "stem": "project_parallel_grid_test",
+    "size_bytes": 2443,
+    "mtime": 1776233977.416486,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/roadmap_post_tax_20260419_v3.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_capital_distinction.md": {
+    "stem": "project_capital_distinction",
+    "size_bytes": 1715,
+    "mtime": 1776400108.3825119,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_user_judgment_scope_20260422.md": {
+    "stem": "feedback_user_judgment_scope_20260422",
+    "size_bytes": 3546,
+    "mtime": 1776855137.6086512,
+    "ref_count": 1,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md"
+    ]
+  },
+  "feedback_market_24h_vs_session_confusion.md": {
+    "stem": "feedback_market_24h_vs_session_confusion",
+    "size_bytes": 2335,
+    "mtime": 1776813818.382148,
+    "ref_count": 6,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/CLAUDE_md_v3_draft_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/CLAUDE.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_session_20260422_major_redesign.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/data/governance/navigator_audit_phase0_20260422.md"
+    ]
+  },
+  "feedback_no_selective_testing.md": {
+    "stem": "feedback_no_selective_testing",
+    "size_bytes": 1189,
+    "mtime": 1776678891.425159,
+    "ref_count": 11,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/journal_20260420.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/CLAUDE_md_v3_draft_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/CLAUDE.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_bug_zero_absolute_20260422.md",
+      "/Users/yuusakuichio/trading/.claude/hooks/selective_test_detector.sh",
+      "/Users/yuusakuichio/trading/data/specs/v2/chronos_spec_20260422.md",
+      "/Users/yuusakuichio/trading/.claude/agents/navigator.md"
+    ]
+  },
+  "project_night_batch.md": {
+    "stem": "project_night_batch",
+    "size_bytes": 1417,
+    "mtime": 1776068619.7083817,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/journal/journal_20260414.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_external_llm_strategy_20260422.md": {
+    "stem": "project_external_llm_strategy_20260422",
+    "size_bytes": 4023,
+    "mtime": 1776837250.253571,
+    "ref_count": 5,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/scripts/gemini_verify_phase0.py",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/trading/data/governance/redteam_audit_phase0_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "CURRENT_STATE.md": {
+    "stem": "CURRENT_STATE",
+    "size_bytes": 38710,
+    "mtime": 1776881079.4111888,
+    "ref_count": 31,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_navigator_mandatory_20260422.md",
+      "/Users/yuusakuichio/trading/tests/test_current_state_freshness.py",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_chronos_not_running_20260422.md",
+      "/Users/yuusakuichio/trading/scripts/current_state_freshness_check.sh",
+      "/Users/yuusakuichio/trading/CLAUDE.md",
+      "/Users/yuusakuichio/trading/data/premortem_reports/20260421_170856_comprehensive_CURRENT_STATE_rebuild_scan_59fc3b.json",
+      "/Users/yuusakuichio/trading/data/governance/inventory/agent_deps.json",
+      "/Users/yuusakuichio/trading/data/governance/phase1_flow_diagram_20260422.md",
+      "/Users/yuusakuichio/trading/data/premortem_reports/20260421_170856_comprehensive_CURRENT_STATE_rebuild_scan_59fc3b.md"
+    ]
+  },
+  "feedback_auto_resume_always.md": {
+    "stem": "feedback_auto_resume_always",
+    "size_bytes": 2056,
+    "mtime": 1776543330.24294,
+    "ref_count": 6,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/premortem_reports/20260419_051912_Build_permanent_auto-resume_infrastructu_ebd0a1.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_auto_resume_limitation_20260419.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/data/premortem_reports/20260419_051912_Build_permanent_auto-resume_infrastructu_ebd0a1.json",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_sns_filter_architecture.md": {
+    "stem": "feedback_sns_filter_architecture",
+    "size_bytes": 1702,
+    "mtime": 1776710709.7837265,
+    "ref_count": 6,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/journal_20260420.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_session_20260420_to_0421_summary.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/data/journal_20260421.md"
+    ]
+  },
+  "project_pdt_constrained_simulation.md": {
+    "stem": "project_pdt_constrained_simulation",
+    "size_bytes": 4082,
+    "mtime": 1776392720.2029054,
+    "ref_count": 5,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/data/atlas_comprehensive_audit_20260418.md",
+      "/Users/yuusakuichio/trading/data/roadmap_post_tax_20260419_v2.md",
+      "/Users/yuusakuichio/trading/data/retirement_timing_comparison_20260419.md"
+    ]
+  },
+  "feedback_execute_immediately.md": {
+    "stem": "feedback_execute_immediately",
+    "size_bytes": 1363,
+    "mtime": 1776130951.115768,
+    "ref_count": 7,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/discipline_rootcause_analysis.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_no_confirmation_execute_now.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_user_judgment_scope_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_recommend_means_execute.md"
+    ]
+  },
+  "feedback_journal_role_separation.md": {
+    "stem": "feedback_journal_role_separation",
+    "size_bytes": 2232,
+    "mtime": 1776410280.9316947,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/data/research/meta_strategy_router_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_vps_bot_divergence.md": {
+    "stem": "project_vps_bot_divergence",
+    "size_bytes": 1626,
+    "mtime": 1776455007.2044892,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/ops/conoha_cancellation_decision_20260421.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/data/atlas_comprehensive_audit_20260418.md"
+    ]
+  },
+  "project_bot_time_audit.md": {
+    "stem": "project_bot_time_audit",
+    "size_bytes": 1925,
+    "mtime": 1775938191.9891062,
+    "ref_count": 6,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/comprehensive_audit_methodology.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/data/atlas_comprehensive_audit_20260418.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/data/test_strategy_research.md"
+    ]
+  },
+  "project_session_workflow.md": {
+    "stem": "project_session_workflow",
+    "size_bytes": 1638,
+    "mtime": 1775939618.9702175,
+    "ref_count": 1,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_defense_in_depth.md": {
+    "stem": "project_defense_in_depth",
+    "size_bytes": 4477,
+    "mtime": 1776482372.7909856,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/research/llm_repeated_mistake_prevention_20260421.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_decisions_20260418.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_strategy_ideation_session.md": {
+    "stem": "project_strategy_ideation_session",
+    "size_bytes": 11655,
+    "mtime": 1776149581.108863,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_cross_domain_inspection.md": {
+    "stem": "feedback_cross_domain_inspection",
+    "size_bytes": 3019,
+    "mtime": 1776461805.499442,
+    "ref_count": 5,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/data/research/silent_failure_prevention_multidomain_20260421.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/data/research/meta_strategy_router_20260422.md"
+    ]
+  },
+  "project_vps_deployment.md": {
+    "stem": "project_vps_deployment",
+    "size_bytes": 2476,
+    "mtime": 1775690179.8510501,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/user_remaining_tasks.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_sora_resilience_gap_full_20260420.md": {
+    "stem": "project_sora_resilience_gap_full_20260420",
+    "size_bytes": 3593,
+    "mtime": 1776634556.1316526,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/trading/data/research/silent_failure_prevention_multidomain_20260421.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_tone_language.md": {
+    "stem": "feedback_tone_language",
+    "size_bytes": 722,
+    "mtime": 1775947804.724645,
+    "ref_count": 6,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_report_format_user_focus.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/.claude/hooks/pronoun_guard.sh",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_word_choice_kudasai.md"
+    ]
+  },
+  "project_schedule.md": {
+    "stem": "project_schedule",
+    "size_bytes": 816,
+    "mtime": 1775898547.582495,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_notification_no_search.md": {
+    "stem": "feedback_notification_no_search",
+    "size_bytes": 872,
+    "mtime": 1776755758.2558317,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_thetadata_upgrade_triggers.md": {
+    "stem": "project_thetadata_upgrade_triggers",
+    "size_bytes": 2152,
+    "mtime": 1776388117.8300734,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/research_greeks_activation_plan.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/data/atlas_comprehensive_audit_20260418.md"
+    ]
+  },
+  "project_memory_architecture_20260421.md": {
+    "stem": "project_memory_architecture_20260421",
+    "size_bytes": 978,
+    "mtime": 1776755743.500267,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_prompt_cache_crash_on_image_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_automation_playwright_x_20260421.md": {
+    "stem": "project_automation_playwright_x_20260421",
+    "size_bytes": 1922,
+    "mtime": 1776746107.8232672,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_external_llm_strategy_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_thinking_discipline.md": {
+    "stem": "feedback_thinking_discipline",
+    "size_bytes": 1603,
+    "mtime": 1776139577.9288857,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_sns_truth_guard_20260421.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/claudemd_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_no_confirmation_execute_now.md": {
+    "stem": "feedback_no_confirmation_execute_now",
+    "size_bytes": 1735,
+    "mtime": 1776548305.635951,
+    "ref_count": 9,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_goal_acceleration_first.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_user_judgment_scope_20260422.md",
+      "/Users/yuusakuichio/trading/.claude/hooks/session_start_discipline_reload.sh",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_recommend_means_execute.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/inventory_summary.md",
+      "/Users/yuusakuichio/trading/.claude/hooks/discipline_guard.sh"
+    ]
+  },
+  "feedback_cleanup_immediately.md": {
+    "stem": "feedback_cleanup_immediately",
+    "size_bytes": 1768,
+    "mtime": 1776455018.549159,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/data/discipline_rootcause_analysis.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_llc_establishment_20260419.md": {
+    "stem": "project_llc_establishment_20260419",
+    "size_bytes": 3193,
+    "mtime": 1776548235.642886,
+    "ref_count": 11,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_retirement_llc_integrated_20260421.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_llc_revenue_required_for_tax_benefit.md",
+      "/Users/yuusakuichio/trading/data/research_prop_firms_corporate_account_20260420.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/roadmap_post_tax_20260419_v3.md",
+      "/Users/yuusakuichio/trading/data/research_tax_simulation_atlas_chronos_20260420.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_phase_c_2day_sprint_20260421.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_wife_officer_incorporation_20260420.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_unemployment_benefit_waived_20260421.md"
+    ]
+  },
+  "project_mffu_webhook_architecture_approved_20260421.md": {
+    "stem": "project_mffu_webhook_architecture_approved_20260421",
+    "size_bytes": 3376,
+    "mtime": 1776754058.246275,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/trading/data/specs/v2/chronos_spec_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_mffu_no_api_confirmed_20260421.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_implementation_process.md": {
+    "stem": "feedback_implementation_process",
+    "size_bytes": 1256,
+    "mtime": 1776052275.6948032,
+    "ref_count": 14,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/claudemd_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/CLAUDE_md_v3_draft_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_research_before_service_recommend.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/CLAUDE.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_session_20260422_major_redesign.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_full_score_cycle_no_shortcut.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_bug_zero_absolute_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_watchdog_self_recovery_gap_20260420.md": {
+    "stem": "project_watchdog_self_recovery_gap_20260420",
+    "size_bytes": 1811,
+    "mtime": 1776633582.0235665,
+    "ref_count": 6,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/trading/data/research/silent_failure_prevention_multidomain_20260421.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_sora_resilience_gap_full_20260420.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/data/governance/inventory/inventory_summary.md"
+    ]
+  },
+  "project_tradovate_pcaptcha_fix_20260421.md": {
+    "stem": "project_tradovate_pcaptcha_fix_20260421",
+    "size_bytes": 1814,
+    "mtime": 1776745811.730853,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/trading/data/ops/full_bug_inventory_20260421.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_task_report_format.md": {
+    "stem": "feedback_task_report_format",
+    "size_bytes": 784,
+    "mtime": 1776125647.4810941,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_report_format_user_focus.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_timezone_rule.md": {
+    "stem": "feedback_timezone_rule",
+    "size_bytes": 1067,
+    "mtime": 1775892473.5266275,
+    "ref_count": 5,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/discipline_rootcause_analysis.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/data/governance/navigator_audit_phase0_20260422.md"
+    ]
+  },
+  "project_pushover_tag_convention.md": {
+    "stem": "project_pushover_tag_convention",
+    "size_bytes": 1175,
+    "mtime": 1776453890.810179,
+    "ref_count": 17,
+    "refs": [
+      "/Users/yuusakuichio/trading/chronos_watchdog.py",
+      "/Users/yuusakuichio/trading/.bak_chronos_rename_20260419_053049/chronos_watchdog.py",
+      "/Users/yuusakuichio/trading/chronos_agent.py",
+      "/Users/yuusakuichio/trading/data/backups/pushover_redesign_20260421_0430/chronos_watchdog.py",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/data/backups/state_hardening_20260421_0416/chronos_agent.py",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_bot_naming_titans.md",
+      "/Users/yuusakuichio/trading/data/specs/v2/chronos_spec_20260422.md",
+      "/Users/yuusakuichio/trading/.bak_chronos_rename_20260419_053049/chronos_bot.py"
+    ]
+  },
+  "feedback_silent_handling_report.md": {
+    "stem": "feedback_silent_handling_report",
+    "size_bytes": 2295,
+    "mtime": 1776474198.2234688,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_session_20260422_major_redesign.md": {
+    "stem": "project_session_20260422_major_redesign",
+    "size_bytes": 9296,
+    "mtime": 1776849518.8053458,
+    "ref_count": 13,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/scripts/gemini_verify_phase0.py",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/data/research/llm_cost_calculation_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/trading/.claude/agents/builder.md",
+      "/Users/yuusakuichio/trading/data/governance/phase1_flow_diagram_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/hook_deps.json",
+      "/Users/yuusakuichio/trading/data/governance/redteam_audit_phase0_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_no_unnecessary_wait.md": {
+    "stem": "feedback_no_unnecessary_wait",
+    "size_bytes": 2014,
+    "mtime": 1775959516.501964,
+    "ref_count": 6,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/claudemd_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/CLAUDE_md_v3_draft_20260422.md",
+      "/Users/yuusakuichio/trading/CLAUDE.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/data/research/meta_strategy_router_20260422.md"
+    ]
+  },
+  "feedback_cycle_complete_today.md": {
+    "stem": "feedback_cycle_complete_today",
+    "size_bytes": 1309,
+    "mtime": 1776667170.5233097,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/.claude/hooks/discipline_guard.sh"
+    ]
+  },
+  "feedback_agent_model_selection.md": {
+    "stem": "feedback_agent_model_selection",
+    "size_bytes": 2252,
+    "mtime": 1776432475.314136,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_mffu_no_api_confirmed_20260421.md": {
+    "stem": "project_mffu_no_api_confirmed_20260421",
+    "size_bytes": 3158,
+    "mtime": 1776772918.3901856,
+    "ref_count": 1,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "user_company_and_retirement.md": {
+    "stem": "user_company_and_retirement",
+    "size_bytes": 2358,
+    "mtime": 1776407652.265607,
+    "ref_count": 6,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/claudemd_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/data/retirement_timing_comparison_20260419.md",
+      "/Users/yuusakuichio/trading/data/research/japan_tax_optimization_prop_income_20260421.md"
+    ]
+  },
+  "project_tradovate_hardening_20260421.md": {
+    "stem": "project_tradovate_hardening_20260421",
+    "size_bytes": 1817,
+    "mtime": 1776736756.132437,
+    "ref_count": 5,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/agent_deps.json",
+      "/Users/yuusakuichio/trading/data/governance/inventory/hook_deps.json",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_chronos_not_running_20260422.md": {
+    "stem": "project_chronos_not_running_20260422",
+    "size_bytes": 3218,
+    "mtime": 1776813803.2385397,
+    "ref_count": 1,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_research_before_service_recommend.md": {
+    "stem": "feedback_research_before_service_recommend",
+    "size_bytes": 3078,
+    "mtime": 1776517943.9305112,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/hook_deps.json",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_moomoo_unconfirmed_items.md": {
+    "stem": "project_moomoo_unconfirmed_items",
+    "size_bytes": 1641,
+    "mtime": 1776375367.055338,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "MEMORY.md": {
+    "stem": "MEMORY",
+    "size_bytes": 9931,
+    "mtime": 1776855140.454341,
+    "ref_count": 28,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/premortem_reports/20260421_161339_memory_restructure_consolidate_v4_v5_v6_eccb8a.json",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/CLAUDE.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/agent_deps.json",
+      "/Users/yuusakuichio/trading/data/governance/redteam_spec_v3_audit_20260422.md",
+      "/Users/yuusakuichio/trading/.claude/hooks/prompt_reload_memory.sh",
+      "/Users/yuusakuichio/trading/data/ops/20jst_readiness_check_20260421.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/claudemd_classification_20260422.md",
+      "/Users/yuusakuichio/trading/data/premortem_reports/20260421_180340_verify_infrastructure_20jst_readiness_VP_876992.md",
+      "/Users/yuusakuichio/trading/.claude/hooks/pace_check_guard.sh"
+    ]
+  },
+  "project_param_audit.md": {
+    "stem": "project_param_audit",
+    "size_bytes": 3118,
+    "mtime": 1775968439.8155856,
+    "ref_count": 6,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/data/journal/all_conversations.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/data/journal/conversations.json",
+      "/Users/yuusakuichio/trading/data/journal/journal_chat.md"
+    ]
+  },
+  "feedback_proactive_completion.md": {
+    "stem": "feedback_proactive_completion",
+    "size_bytes": 2220,
+    "mtime": 1776476695.6351135,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_goal_acceleration_first.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_plain_language_explain.md": {
+    "stem": "feedback_plain_language_explain",
+    "size_bytes": 1519,
+    "mtime": 1776482464.7682135,
+    "ref_count": 6,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_report_format_user_focus.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_decisions_20260418.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_session_20260422_major_redesign.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_decisions_20260418.md": {
+    "stem": "project_decisions_20260418",
+    "size_bytes": 7130,
+    "mtime": 1776482503.5496087,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/hook_deps.json",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_live_transition_plan.md": {
+    "stem": "project_live_transition_plan",
+    "size_bytes": 1275,
+    "mtime": 1776223414.2416797,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/work_queue.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_multi_strategy_vision.md": {
+    "stem": "project_multi_strategy_vision",
+    "size_bytes": 2101,
+    "mtime": 1776198800.676294,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/data/atlas_comprehensive_audit_20260418.md"
+    ]
+  },
+  "feedback_full_speed_default.md": {
+    "stem": "feedback_full_speed_default",
+    "size_bytes": 2204,
+    "mtime": 1776586219.690235,
+    "ref_count": 6,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/.claude/hooks/pace_check_guard.sh",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_full_score_cycle_no_shortcut.md",
+      "/Users/yuusakuichio/trading/.claude/hooks/session_start_discipline_reload.sh",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_time_awareness_20260422.md": {
+    "stem": "feedback_time_awareness_20260422",
+    "size_bytes": 2690,
+    "mtime": 1776839073.0176392,
+    "ref_count": 11,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/claudemd_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/CLAUDE_md_v3_draft_20260422.md",
+      "/Users/yuusakuichio/trading/scripts/gemini_verify_phase0.py",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/CLAUDE.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_no_private_life_intrusion_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/trading/.claude/agents/builder.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_sns_strategy.md": {
+    "stem": "project_sns_strategy",
+    "size_bytes": 2744,
+    "mtime": 1775897156.0312417,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/research_prop_firms_automation_20260419.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_bot_naming_titans.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_market_hours_token_budget.md": {
+    "stem": "feedback_market_hours_token_budget",
+    "size_bytes": 2234,
+    "mtime": 1776561359.0384173,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/.claude/hooks/session_start_discipline_reload.sh"
+    ]
+  },
+  "feedback_agent_naming.md": {
+    "stem": "feedback_agent_naming",
+    "size_bytes": 1661,
+    "mtime": 1776504439.1367948,
+    "ref_count": 6,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/claudemd_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/agent_deps.json",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/data/governance/navigator_audit_phase0_20260422.md"
+    ]
+  },
+  "feedback_notification_policy.md": {
+    "stem": "feedback_notification_policy",
+    "size_bytes": 2043,
+    "mtime": 1776470856.3421369,
+    "ref_count": 8,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/journal_20260420.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/claudemd_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/CLAUDE_md_v3_draft_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/CLAUDE.md",
+      "/Users/yuusakuichio/trading/data/atlas_comprehensive_audit_20260418.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_chronos_f12_f13_cycle4_failure_20260419.md": {
+    "stem": "project_chronos_f12_f13_cycle4_failure_20260419",
+    "size_bytes": 2611,
+    "mtime": 1776598152.1536465,
+    "ref_count": 5,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_independent_verification_mandatory.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_atlas_cycle3_failure_20260419.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_false_completion_report_root_cause.md"
+    ]
+  },
+  "project_auto_resume_guard_flaw_20260420.md": {
+    "stem": "project_auto_resume_guard_flaw_20260420",
+    "size_bytes": 2030,
+    "mtime": 1776633964.6653705,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_sora_resilience_gap_full_20260420.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_gmail_monitor_setup_20260421.md": {
+    "stem": "project_gmail_monitor_setup_20260421",
+    "size_bytes": 2286,
+    "mtime": 1776715463.1734726,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_atlas.md": {
+    "stem": "project_atlas",
+    "size_bytes": 1363,
+    "mtime": 1776209257.532557,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/specs/v2/atlas_spec_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_atlas_cycle3_failure_20260419.md": {
+    "stem": "project_atlas_cycle3_failure_20260419",
+    "size_bytes": 2946,
+    "mtime": 1776598234.0523043,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_false_completion_report_root_cause.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_report_format_user_focus.md": {
+    "stem": "feedback_report_format_user_focus",
+    "size_bytes": 2203,
+    "mtime": 1776634784.703831,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_pushover_format.md": {
+    "stem": "feedback_pushover_format",
+    "size_bytes": 603,
+    "mtime": 1776340373.2297492,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_mffu_5plan_pitfalls_20260419.md": {
+    "stem": "project_mffu_5plan_pitfalls_20260419",
+    "size_bytes": 2527,
+    "mtime": 1776562973.934765,
+    "ref_count": 5,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_chronos_monthly_schedule_latest.md",
+      "/Users/yuusakuichio/trading/data/research/mffu_15articles_automation_search_20260421.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_prop_firm_dual_layer_20260420.md"
+    ]
+  },
+  "feedback_check_before_launch.md": {
+    "stem": "feedback_check_before_launch",
+    "size_bytes": 936,
+    "mtime": 1776093623.392901,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/journal/journal_20260414.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_phase_c_2day_sprint_20260421.md": {
+    "stem": "project_phase_c_2day_sprint_20260421",
+    "size_bytes": 4227,
+    "mtime": 1776718651.1338222,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_builder_time_estimate_minutes.md": {
+    "stem": "feedback_builder_time_estimate_minutes",
+    "size_bytes": 1432,
+    "mtime": 1776660671.9379141,
+    "ref_count": 9,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_cycle_complete_today.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/.claude/hooks/time_estimate_sanity.sh",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/data/research/flow_audit_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/data/governance/navigator_audit_phase0_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/inventory_summary.md",
+      "/Users/yuusakuichio/trading/.claude/hooks/discipline_guard.sh"
+    ]
+  },
+  "feedback_session_20260413_lessons.md": {
+    "stem": "feedback_session_20260413_lessons",
+    "size_bytes": 2148,
+    "mtime": 1776053737.50786,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_detection_speed_match.md": {
+    "stem": "feedback_detection_speed_match",
+    "size_bytes": 1418,
+    "mtime": 1776475982.8054156,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_false_completion_report_root_cause.md": {
+    "stem": "feedback_false_completion_report_root_cause",
+    "size_bytes": 2872,
+    "mtime": 1776600197.8072858,
+    "ref_count": 7,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/.claude/agents/governance.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_schema_contract_test_mandatory.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_false_completion_4th_20260420.md",
+      "/Users/yuusakuichio/trading/data/governance/redteam_audit_phase0_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_gmail_notify_improve_20260421.md": {
+    "stem": "project_gmail_notify_improve_20260421",
+    "size_bytes": 1486,
+    "mtime": 1776730052.1667612,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_no_general_claims.md": {
+    "stem": "feedback_no_general_claims",
+    "size_bytes": 929,
+    "mtime": 1776050546.8749478,
+    "ref_count": 6,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/discipline_rootcause_analysis.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/claudemd_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/CLAUDE_md_v3_draft_20260422.md",
+      "/Users/yuusakuichio/trading/CLAUDE.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_bot_tactics_roadmap.md": {
+    "stem": "project_bot_tactics_roadmap",
+    "size_bytes": 3577,
+    "mtime": 1775849754.697641,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_launchd_jst.md": {
+    "stem": "feedback_launchd_jst",
+    "size_bytes": 979,
+    "mtime": 1775935443.9254148,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/specs/v2/chronos_spec_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "user_family_structure.md": {
+    "stem": "user_family_structure",
+    "size_bytes": 1235,
+    "mtime": 1776657706.2979476,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/journal_20260420.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_memory_over_assumption.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_chronos_redteam_20260419.md": {
+    "stem": "project_chronos_redteam_20260419",
+    "size_bytes": 3102,
+    "mtime": 1776563497.2009087,
+    "ref_count": 7,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_mffu_5plan_pitfalls_20260419.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_chronos_f12_f13_cycle4_failure_20260419.md",
+      "/Users/yuusakuichio/trading/tests/test_violation_tracker.py",
+      "/Users/yuusakuichio/trading/data/governance/inventory/inventory_summary.md",
+      "/Users/yuusakuichio/trading/mutants/tests/test_violation_tracker.py"
+    ]
+  },
+  "feedback_always_update_memory.md": {
+    "stem": "feedback_always_update_memory",
+    "size_bytes": 2723,
+    "mtime": 1776563081.9673686,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_prompt_cache_crash_on_image_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_cognitive_limit_design.md": {
+    "stem": "feedback_cognitive_limit_design",
+    "size_bytes": 2763,
+    "mtime": 1776455995.0639994,
+    "ref_count": 10,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_sns_truth_guard_20260421.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_research_before_service_recommend.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/data/research/silent_failure_prevention_multidomain_20260421.md",
+      "/Users/yuusakuichio/trading/data/governance/redteam_audit_phase0_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_auto_resume_guard_flaw_20260420.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/inventory_summary.md",
+      "/Users/yuusakuichio/trading/.claude/hooks/discipline_guard.sh"
+    ]
+  },
+  "project_retirement_timing_comparison_20260419.md": {
+    "stem": "project_retirement_timing_comparison_20260419",
+    "size_bytes": 2764,
+    "mtime": 1776563477.7526991,
+    "ref_count": 5,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_atlas_tax_correction_20260420.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_chronos_monthly_schedule_latest.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_unemployment_benefit_waived_20260421.md"
+    ]
+  },
+  "feedback_navigator_mandatory_20260422.md": {
+    "stem": "feedback_navigator_mandatory_20260422",
+    "size_bytes": 3903,
+    "mtime": 1776849517.2411456,
+    "ref_count": 18,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/claudemd_classification_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/phase1_completion_criteria_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/CLAUDE_md_v3_draft_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/scripts/gemini_verify_phase0.py",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/CLAUDE.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/trading/data/journal/growth_report_20260422.md",
+      "/Users/yuusakuichio/trading/.claude/agents/builder.md"
+    ]
+  },
+  "project_chronos_eval_scorecard_20260419.md": {
+    "stem": "project_chronos_eval_scorecard_20260419",
+    "size_bytes": 1765,
+    "mtime": 1776549228.2893982,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_live_account.md": {
+    "stem": "project_live_account",
+    "size_bytes": 668,
+    "mtime": 1776160598.7289796,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_tone.md": {
+    "stem": "feedback_tone",
+    "size_bytes": 1019,
+    "mtime": 1775940329.293784,
+    "ref_count": 6,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/.claude/hooks/pronoun_guard.sh",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/tests/test_violation_tracker.py",
+      "/Users/yuusakuichio/trading/mutants/tests/test_violation_tracker.py"
+    ]
+  },
+  "feedback_market_schedule.md": {
+    "stem": "feedback_market_schedule",
+    "size_bytes": 1028,
+    "mtime": 1776093461.6383932,
+    "ref_count": 5,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/journal/journal_20260414.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/data/governance/navigator_audit_phase0_20260422.md"
+    ]
+  },
+  "feedback_code_audit_methodology.md": {
+    "stem": "feedback_code_audit_methodology",
+    "size_bytes": 2690,
+    "mtime": 1776407673.348555,
+    "ref_count": 7,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/CLAUDE_md_v3_draft_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/CLAUDE.md",
+      "/Users/yuusakuichio/trading/data/test_gap_analysis.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/agent_deps.json",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_sns_truth_guard_20260421.md": {
+    "stem": "project_sns_truth_guard_20260421",
+    "size_bytes": 4452,
+    "mtime": 1776717451.668673,
+    "ref_count": 5,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/agent_deps.json",
+      "/Users/yuusakuichio/trading/data/governance/inventory/hook_deps.json",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_300m_post_tax_and_reinvest.md": {
+    "stem": "feedback_300m_post_tax_and_reinvest",
+    "size_bytes": 2333,
+    "mtime": 1776563104.7291088,
+    "ref_count": 10,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_llc_revenue_required_for_tax_benefit.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_atlas_tax_correction_20260420.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_retirement_timing_comparison_20260419.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_goal_acceleration_first.md",
+      "/Users/yuusakuichio/trading/data/roadmap_post_tax_20260419_v3.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/data/governance/inventory/inventory_summary.md"
+    ]
+  },
+  "feedback_strategy_first_principles.md": {
+    "stem": "feedback_strategy_first_principles",
+    "size_bytes": 2733,
+    "mtime": 1776387708.6822555,
+    "ref_count": 6,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/claudemd_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/CLAUDE_md_v3_draft_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/CLAUDE.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_mffu_official_20260419.md": {
+    "stem": "project_mffu_official_20260419",
+    "size_bytes": 2876,
+    "mtime": 1776548211.0438778,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_mffu_5plan_pitfalls_20260419.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_chronos_eval_scorecard_20260419.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_17domain_top10.md": {
+    "stem": "project_17domain_top10",
+    "size_bytes": 3385,
+    "mtime": 1776482332.630088,
+    "ref_count": 5,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_decisions_20260418.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_total_audit_after_every_change.md",
+      "/Users/yuusakuichio/trading/data/atlas_comprehensive_audit_20260418.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_retirement_llc_integrated_20260421.md": {
+    "stem": "project_retirement_llc_integrated_20260421",
+    "size_bytes": 4241,
+    "mtime": 1776718456.1151297,
+    "ref_count": 5,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_300m_roadmap_20260421_v6.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_phase_c_2day_sprint_20260421.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_decisions_20260416.md": {
+    "stem": "project_decisions_20260416",
+    "size_bytes": 2049,
+    "mtime": 1776280499.0681043,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_mffu_flex_purchased_20260420.md": {
+    "stem": "project_mffu_flex_purchased_20260420",
+    "size_bytes": 1283,
+    "mtime": 1776712034.0121982,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_quote_context_failover.md": {
+    "stem": "project_quote_context_failover",
+    "size_bytes": 2355,
+    "mtime": 1776482393.7453449,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_decisions_20260418.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_token_management.md": {
+    "stem": "feedback_token_management",
+    "size_bytes": 1735,
+    "mtime": 1776093636.702241,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_decisions_20260418_night.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_regulatory_risk_diversification.md": {
+    "stem": "project_regulatory_risk_diversification",
+    "size_bytes": 2608,
+    "mtime": 1776396081.7253716,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_fx_transfer_timing_final.md": {
+    "stem": "project_fx_transfer_timing_final",
+    "size_bytes": 4404,
+    "mtime": 1776406230.27009,
+    "ref_count": 6,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/research_finra_pdt_20260418.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/claudemd_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/data/retirement_timing_comparison_20260419.md"
+    ]
+  },
+  "feedback_prop_basic_knowledge.md": {
+    "stem": "feedback_prop_basic_knowledge",
+    "size_bytes": 1426,
+    "mtime": 1776660680.0966146,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_autonomous_flaw_detection.md": {
+    "stem": "feedback_autonomous_flaw_detection",
+    "size_bytes": 2026,
+    "mtime": 1776712334.023399,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/agent_deps.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_strategy_bcd.md": {
+    "stem": "project_strategy_bcd",
+    "size_bytes": 2017,
+    "mtime": 1775980769.0752013,
+    "ref_count": 7,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/claudemd_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/CLAUDE_md_v3_draft_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/CLAUDE.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_private_fund_timing_20260419.md"
+    ]
+  },
+  "project_agent_organization_20260422.md": {
+    "stem": "project_agent_organization_20260422",
+    "size_bytes": 5067,
+    "mtime": 1776845196.485006,
+    "ref_count": 11,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/claudemd_classification_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/CLAUDE_md_v3_draft_20260422.md",
+      "/Users/yuusakuichio/trading/scripts/gemini_verify_phase0.py",
+      "/Users/yuusakuichio/trading/CLAUDE.md",
+      "/Users/yuusakuichio/trading/data/specs/v3/common_spec_v3_20260422.md",
+      "/Users/yuusakuichio/trading/.claude/agents/builder.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/agent_deps.json",
+      "/Users/yuusakuichio/trading/data/governance/inventory/hook_deps.json",
+      "/Users/yuusakuichio/trading/data/governance/redteam_audit_phase0_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_neuroscience_analysis.md": {
+    "stem": "project_neuroscience_analysis",
+    "size_bytes": 2498,
+    "mtime": 1776287061.0827484,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_journal_agent.md": {
+    "stem": "project_journal_agent",
+    "size_bytes": 1229,
+    "mtime": 1775907737.8074524,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/agent_deps.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_market_hours_active_monitoring.md": {
+    "stem": "feedback_market_hours_active_monitoring",
+    "size_bytes": 2293,
+    "mtime": 1776455159.5161648,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/data/discipline_rootcause_analysis.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_independent_verification_mandatory.md": {
+    "stem": "feedback_independent_verification_mandatory",
+    "size_bytes": 2264,
+    "mtime": 1776598166.563614,
+    "ref_count": 21,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_navigator_mandatory_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/CLAUDE.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_schema_contract_test_mandatory.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/agent_deps.json",
+      "/Users/yuusakuichio/trading/tests/test_chronos_phase_d_20260420.py",
+      "/Users/yuusakuichio/trading/data/journal_20260420.md",
+      "/Users/yuusakuichio/trading/mutants/tests/test_chronos_phase_d_20260420.py",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_session_20260422_major_redesign.md",
+      "/Users/yuusakuichio/trading/data/specs/v2/chronos_spec_20260422.md"
+    ]
+  },
+  "project_decisions_20260418_night.md": {
+    "stem": "project_decisions_20260418_night",
+    "size_bytes": 4621,
+    "mtime": 1776543956.3460436,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_tax_consideration.md": {
+    "stem": "project_tax_consideration",
+    "size_bytes": 3937,
+    "mtime": 1776669751.1455696,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_atlas_tax_correction_20260420.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_atlas_tax_correction_20260420.md": {
+    "stem": "project_atlas_tax_correction_20260420",
+    "size_bytes": 3070,
+    "mtime": 1776669744.454374,
+    "ref_count": 8,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_300m_roadmap_20260421_v6.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_tax_consideration.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/agent_deps.json",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_prop_firm_dual_layer_20260420.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/inventory_summary.md"
+    ]
+  },
+  "feedback_paper_aggressive_config.md": {
+    "stem": "feedback_paper_aggressive_config",
+    "size_bytes": 1667,
+    "mtime": 1776482479.3071163,
+    "ref_count": 5,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_decisions_20260418.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/.claude/hooks/discipline_guard.sh"
+    ]
+  },
+  "project_todo_20260412.md": {
+    "stem": "project_todo_20260412",
+    "size_bytes": 2428,
+    "mtime": 1775947750.4175215,
+    "ref_count": 5,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/claudemd_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/data/research_c2_timing.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_c2_excluded.md": {
+    "stem": "project_c2_excluded",
+    "size_bytes": 1005,
+    "mtime": 1776300105.265043,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/research_collective2.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/data/atlas_comprehensive_audit_20260418.md"
+    ]
+  },
+  "feedback_research_before_implement.md": {
+    "stem": "feedback_research_before_implement",
+    "size_bytes": 836,
+    "mtime": 1775881938.5321383,
+    "ref_count": 6,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/discipline_rootcause_analysis.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_research_before_service_recommend.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/data/research/meta_strategy_router_20260422.md"
+    ]
+  },
+  "project_stoploss_reeval.md": {
+    "stem": "project_stoploss_reeval",
+    "size_bytes": 1314,
+    "mtime": 1776223401.9471102,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_team_name.md": {
+    "stem": "project_team_name",
+    "size_bytes": 599,
+    "mtime": 1775896550.9248092,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_auto_memory.md": {
+    "stem": "feedback_auto_memory",
+    "size_bytes": 876,
+    "mtime": 1775885620.7137623,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_always_update_memory.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_unemployment_benefit_waived_20260421.md": {
+    "stem": "project_unemployment_benefit_waived_20260421",
+    "size_bytes": 922,
+    "mtime": 1776744416.1709507,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_sora_resilience_final_20260420.md": {
+    "stem": "project_sora_resilience_final_20260420",
+    "size_bytes": 3117,
+    "mtime": 1776636030.8120785,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_bot_integration_test.md": {
+    "stem": "feedback_bot_integration_test",
+    "size_bytes": 1343,
+    "mtime": 1776092565.4897141,
+    "ref_count": 6,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/journal/journal_20260414.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/data/test_gap_analysis.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/data/specs/v2/chronos_spec_20260422.md"
+    ]
+  },
+  "project_sns_content_strategy_update.md": {
+    "stem": "project_sns_content_strategy_update",
+    "size_bytes": 1934,
+    "mtime": 1776375396.41256,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/journal_20260417.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_session_20260419_night_summary.md": {
+    "stem": "project_session_20260419_night_summary",
+    "size_bytes": 3117,
+    "mtime": 1776624942.227474,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_auto_resume_limitation_20260419.md": {
+    "stem": "project_auto_resume_limitation_20260419",
+    "size_bytes": 3548,
+    "mtime": 1776599297.5115898,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_always_jst.md": {
+    "stem": "feedback_always_jst",
+    "size_bytes": 689,
+    "mtime": 1776053543.9224133,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/discipline_rootcause_analysis.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_bottleneck_before_proposal.md": {
+    "stem": "feedback_bottleneck_before_proposal",
+    "size_bytes": 2665,
+    "mtime": 1776772281.5610147,
+    "ref_count": 5,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_mffu_no_api_confirmed_20260421.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_session_20260422_major_redesign.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_bug_zero_absolute_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_decisions_20260413.md": {
+    "stem": "project_decisions_20260413",
+    "size_bytes": 4334,
+    "mtime": 1776050540.0298495,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_llc_revenue_required_for_tax_benefit.md": {
+    "stem": "feedback_llc_revenue_required_for_tax_benefit",
+    "size_bytes": 2857,
+    "mtime": 1776597919.5016341,
+    "ref_count": 5,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/data/research/org_hro_nasa_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_wife_officer_incorporation_20260420.md"
+    ]
+  },
+  "feedback_no_fixed_params.md": {
+    "stem": "feedback_no_fixed_params",
+    "size_bytes": 2462,
+    "mtime": 1775903822.1226723,
+    "ref_count": 17,
+    "refs": [
+      "/Users/yuusakuichio/trading/chronos_vwap.py",
+      "/Users/yuusakuichio/trading/chronos_strategy_selector.py",
+      "/Users/yuusakuichio/trading/data/specs/v2/atlas_spec_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/claudemd_classification_20260422.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/CLAUDE_md_v3_draft_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/trading/CLAUDE.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/data/futures_10plus_strategies_design.md"
+    ]
+  },
+  "project_account_registration_20260418.md": {
+    "stem": "project_account_registration_20260418",
+    "size_bytes": 2947,
+    "mtime": 1776482449.54083,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_decisions_20260418.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_prop_farm_deferred.md": {
+    "stem": "project_prop_farm_deferred",
+    "size_bytes": 4509,
+    "mtime": 1776414766.5932732,
+    "ref_count": 9,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_jsonl_priority.md",
+      "/Users/yuusakuichio/trading/data/roadmap_post_tax_20260419_v3.md",
+      "/Users/yuusakuichio/trading/data/research_chronos_20260418.md",
+      "/Users/yuusakuichio/trading/data/research_prop_firms_automation_20260419.md",
+      "/Users/yuusakuichio/trading/data/work_queue.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/data/governance/inventory/inventory_summary.md",
+      "/Users/yuusakuichio/trading/data/research_mffu_20260418.md"
+    ]
+  },
+  "project_chronos_futures_spec_fix_20260420.md": {
+    "stem": "project_chronos_futures_spec_fix_20260420",
+    "size_bytes": 2694,
+    "mtime": 1776639098.2318268,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_secretary_nonblocking.md": {
+    "stem": "feedback_secretary_nonblocking",
+    "size_bytes": 1066,
+    "mtime": 1776035524.4841552,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/research/flow_audit_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_no_confirmation_execute_now.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_trader_gap_complete.md": {
+    "stem": "project_trader_gap_complete",
+    "size_bytes": 1919,
+    "mtime": 1776204981.6300833,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/research_greeks_activation_plan.md",
+      "/Users/yuusakuichio/trading/data/research_symbol_params.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_bot_naming_titans.md": {
+    "stem": "project_bot_naming_titans",
+    "size_bytes": 2978,
+    "mtime": 1776519258.0047042,
+    "ref_count": 2,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/chronos_skeleton_map.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_cycle_status_20260420_morning.md": {
+    "stem": "project_cycle_status_20260420_morning",
+    "size_bytes": 2146,
+    "mtime": 1776624975.0628586,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_300m_roadmap_20260421_v6.md": {
+    "stem": "project_300m_roadmap_20260421_v6",
+    "size_bytes": 2885,
+    "mtime": 1776728753.2140448,
+    "ref_count": 5,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/CLAUDE_md_v3_draft_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/trading/CLAUDE.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "feedback_full_score_cycle_no_shortcut.md": {
+    "stem": "feedback_full_score_cycle_no_shortcut",
+    "size_bytes": 2084,
+    "mtime": 1776587272.8632412,
+    "ref_count": 8,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_independent_verification_mandatory.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_classification_20260422.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_atlas_cycle3_failure_20260419.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/project_chronos_f12_f13_cycle4_failure_20260419.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/feedback_false_completion_report_root_cause.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/inventory_summary.md"
+    ]
+  },
+  "project_thetadata.md": {
+    "stem": "project_thetadata",
+    "size_bytes": 2446,
+    "mtime": 1776254446.2091315,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/trading/data/research_greeks_activation_plan.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  },
+  "project_session_20260419_summary.md": {
+    "stem": "project_session_20260419_summary",
+    "size_bytes": 3671,
+    "mtime": 1776563029.7040653,
+    "ref_count": 4,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/tests/test_violation_tracker.py",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json",
+      "/Users/yuusakuichio/trading/mutants/tests/test_violation_tracker.py"
+    ]
+  },
+  "project_session_20260420_to_0421_summary.md": {
+    "stem": "project_session_20260420_to_0421_summary",
+    "size_bytes": 2462,
+    "mtime": 1776710739.2711947,
+    "ref_count": 3,
+    "refs": [
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/CURRENT_STATE.md",
+      "/Users/yuusakuichio/.claude/projects/-Users-yuusakuichio-trading/memory/MEMORY.md",
+      "/Users/yuusakuichio/trading/data/governance/inventory/memory_deps.json"
+    ]
+  }
+}

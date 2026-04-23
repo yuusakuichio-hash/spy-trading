@@ -1,0 +1,5 @@
+{
+  "ts": "2026-04-22T21:29:29.785021+00:00",
+  "title": "[SentinelALERT] atlas_agent stale",
+  "message": "atlas_agent が stale 状態。\n自動修復: 試行済\n詳細: heartbeat 5074秒前 (stale) / log 5058秒沈黙"
+}

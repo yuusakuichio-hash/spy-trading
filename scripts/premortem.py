@@ -163,22 +163,158 @@ def _call_haiku(prompt: str, api_key: str) -> dict[str, Any]:
     return json.loads(m.group(0))
 
 
+# ---------------------------------------------------------------------------
+# Category-specific failure mode templates (keyword-based dynamic fallback)
+# キーワード分類で fallback テンプレートをタスク固有に切替。LLM call なし。
+# 新カテゴリ追加: CATEGORY_TEMPLATES に dict を追記するだけ。
+# ---------------------------------------------------------------------------
+CATEGORY_TEMPLATES: dict[str, dict] = {
+    "web_api": {
+        "keywords": ["webhook", "api", "endpoint", "http", "request", "rest",
+                     "post", "curl", "bearer", "token", "oauth"],
+        "scenarios": [
+            ("Bearer トークン期限切れで全リクエスト401", "high", "catastrophic"),
+            ("エンドポイントURL変更で silent 404", "medium", "high"),
+            ("レート制限429で発注ループが詰まる", "medium", "high"),
+            ("タイムアウト未設定でスレッドが永久ブロック", "medium", "high"),
+            ("リプレイ攻撃でべき等でない操作が二重実行", "low", "catastrophic"),
+            ("TLS証明書期限切れで接続拒否", "low", "high"),
+            ("JSONレスポンスのフィールド名変更で KeyError", "medium", "high"),
+            ("ネットワーク瞬断でリトライなし→発注欠落", "medium", "high"),
+        ],
+        "top3": ["F01", "F04", "F05"],
+        "gates": ["Auth smoke test (401確認)", "Retry/timeout 設定確認",
+                  "冪等性・べき等ガード実装"],
+    },
+    "test_pytest": {
+        "keywords": ["test", "pytest", "unittest", "mock", "fixture",
+                     "assert", "coverage", "flaky", "ci", "redteam"],
+        "scenarios": [
+            ("flaky test がCI環境のみ失敗し本番バグを隠蔽", "medium", "high"),
+            ("mock が実APIと乖離し false positive 量産", "high", "high"),
+            ("env 依存変数が未設定でテスト全スキップ", "medium", "high"),
+            ("テストが自分のコードをimportせず常に合格", "low", "catastrophic"),
+            ("coverage 100%でも統合パスが未カバー", "medium", "high"),
+            ("並列テストで共有ファイルに race condition", "low", "high"),
+            ("fixture のティアダウンが漏れてDB/ファイル汚染", "medium", "medium"),
+        ],
+        "top3": ["F01", "F02", "F04"],
+        "gates": ["実モジュールimport確認", "mock/実API乖離チェック",
+                  "env vars CI設定確認"],
+    },
+    "hook_precommit": {
+        "keywords": ["hook", "pre-commit", "precommit", "pre_commit",
+                     "git hook", "shell", "bash", "exit code", "guard"],
+        "scenarios": [
+            ("exit code 非ゼロでコミット全ブロック (誤爆)", "high", "high"),
+            ("hookが stdoutに大量出力しタイムアウト", "medium", "medium"),
+            ("hookが CI環境の PATH 相違で not found", "medium", "high"),
+            ("--no-verify でバイパスされ規律が機能しない", "low", "catastrophic"),
+            ("hook内で python -c が構文エラーで常時ブロック", "medium", "high"),
+            ("hook の実行権限 (chmod +x) 未設定", "low", "high"),
+            ("hook が別hookを再帰呼び出しして無限ループ", "low", "high"),
+        ],
+        "top3": ["F01", "F04", "F05"],
+        "gates": ["dry-run で誤爆確認", "CI環境PATH検証",
+                  "--no-verify バイパス監視設計"],
+    },
+    "memory_migration": {
+        "keywords": ["memory", "migration", "migrate", "backup", "schema",
+                     "database", "data", "json", "state", "restore"],
+        "scenarios": [
+            ("移行スクリプトで元データを上書き・バックアップなし", "medium", "catastrophic"),
+            ("スキーマバージョン不整合で読み込み silent fail", "high", "high"),
+            ("部分移行後にプロセスがクラッシュし中途半端な状態", "medium", "high"),
+            ("ロールバック手順未定義で旧バージョンに戻せない", "low", "catastrophic"),
+            ("文字コード (UTF-8/Shift-JIS) 変換で文字化け", "low", "medium"),
+            ("大容量データで移行タイムアウト→中断", "low", "high"),
+            ("並行アクセス中の移行でデータ破損", "medium", "catastrophic"),
+            ("移行後の整合性チェックなしで破損データが本番流入", "medium", "high"),
+        ],
+        "top3": ["F01", "F04", "F07"],
+        "gates": ["バックアップ取得確認", "ロールバック手順文書化",
+                  "移行後整合性チェック自動化"],
+    },
+    "strategy_trading": {
+        "keywords": ["strategy", "trading", "trade", "order", "position",
+                     "option", "spy", "spx", "vix", "delta", "hedge",
+                     "pdt", "margin", "drawdown", "bot", "atlas", "chronos"],
+        "scenarios": [
+            ("PDT違反で口座が90日ロック", "medium", "catastrophic"),
+            ("資金管理ロジックのバグで証拠金超過発注", "low", "catastrophic"),
+            ("DD上限超過後もエントリー継続で連鎖損失", "low", "catastrophic"),
+            ("市場クローズ直前に発注→約定できずポジション持ち越し", "medium", "high"),
+            ("VIX急騰時に戦術切替が遅延し最悪タイミングで発注", "medium", "high"),
+            ("二重発注防止ロジックのバグで同一シグナルを複数回発注", "low", "catastrophic"),
+            ("fill 確認なしで損切注文が未執行のまま放置", "medium", "high"),
+            ("タイムゾーン誤りで場外に発注ループが走る", "low", "high"),
+        ],
+        "top3": ["F01", "F02", "F06"],
+        "gates": ["PDT制約チェック実装確認", "証拠金超過ガード確認",
+                  "DD上限 kill switch 動作確認"],
+    },
+    "deploy_vps": {
+        "keywords": ["deploy", "vps", "ssh", "scp", "service", "systemd",
+                     "launchd", "plist", "daemon", "restart", "infra"],
+        "scenarios": [
+            ("デプロイ先に旧バージョンが残存し新旧混在で動作", "medium", "high"),
+            ("systemd service が ExecStart パス誤りで即死", "high", "high"),
+            ("SSH key 権限が 644 で認証失敗", "medium", "high"),
+            ("デプロイ後の動作確認なしで本番バグ放置", "high", "catastrophic"),
+            ("旧プロセスが残留して二重起動", "medium", "high"),
+            ("ログディレクトリ未作成でサービス起動失敗", "medium", "medium"),
+            ("環境変数 .env 未転送で本番 API key なし", "medium", "catastrophic"),
+        ],
+        "top3": ["F01", "F04", "F07"],
+        "gates": ["デプロイ後 status 確認", "旧プロセス停止確認",
+                  ".env 転送確認"],
+    },
+}
+
+# Default fallback (original behavior)
+_DEFAULT_TEMPLATES = [
+    ("依存サービス未起動でフェイル", "high", "catastrophic"),
+    ("API rate limit / auth 失敗", "medium", "high"),
+    ("データ型/スキーマ不整合で silent fail", "medium", "high"),
+    ("タイムゾーン混在 (JST/ET/UTC)", "medium", "high"),
+    ("並行実行で race condition", "low", "high"),
+    ("ディスク/メモリ枯渇", "low", "high"),
+    ("冬時間/夏時間境界で off-by-one", "low", "medium"),
+    ("既存ファイル破壊・未バックアップ", "medium", "catastrophic"),
+    ("テスト不足で本番初回に発覚", "high", "high"),
+    ("roll-back 手順未定義で復旧不能", "low", "catastrophic"),
+]
+_DEFAULT_TOP3 = ["F01", "F08", "F10"]
+_DEFAULT_GATES = ["事前バックアップ", "smoke test 実施", "roll-back 手順文書化"]
+
+
+def _classify_task(task: str) -> str | None:
+    """タスク文字列のキーワードでカテゴリを判定。最初にマッチしたカテゴリを返す。"""
+    task_lower = task.lower()
+    for category, cfg in CATEGORY_TEMPLATES.items():
+        if any(kw in task_lower for kw in cfg["keywords"]):
+            return category
+    return None
+
+
 def _fallback_report(task: str, files: list[str], reason: str) -> dict[str, Any]:
-    """API未設定・失敗時の決定論的骨組み。guide words を最低限展開する。"""
+    """API未設定・失敗時の決定論的骨組み。タスクキーワードで固有テンプレートを選択する。"""
+    category = _classify_task(task)
+    if category and category in CATEGORY_TEMPLATES:
+        cfg = CATEGORY_TEMPLATES[category]
+        raw_templates = cfg["scenarios"]
+        top3 = cfg["top3"]
+        gates = cfg["gates"]
+        category_label = category
+    else:
+        raw_templates = _DEFAULT_TEMPLATES  # type: ignore[assignment]
+        top3 = _DEFAULT_TOP3
+        gates = _DEFAULT_GATES
+        category_label = "default"
+
     scenarios = []
-    templates = [
-        ("依存サービス未起動でフェイル", "high", "catastrophic"),
-        ("API rate limit / auth 失敗", "medium", "high"),
-        ("データ型/スキーマ不整合で silent fail", "medium", "high"),
-        ("タイムゾーン混在 (JST/ET/UTC)", "medium", "high"),
-        ("並行実行で race condition", "low", "high"),
-        ("ディスク/メモリ枯渇", "low", "high"),
-        ("冬時間/夏時間境界で off-by-one", "low", "medium"),
-        ("既存ファイル破壊・未バックアップ", "medium", "catastrophic"),
-        ("テスト不足で本番初回に発覚", "high", "high"),
-        ("roll-back 手順未定義で復旧不能", "low", "catastrophic"),
-    ]
-    for i, (title, p, impact) in enumerate(templates, start=1):
+    for i, item in enumerate(raw_templates, start=1):
+        title, p, impact = item
         scenarios.append({
             "id": f"F{i:02d}",
             "title": title,
@@ -188,6 +324,7 @@ def _fallback_report(task: str, files: list[str], reason: str) -> dict[str, Any]
             "detection": "ログ監視 / smoke test / assert",
             "mitigation": "事前バックアップ・DRY_RUN・pre-check・段階リリース",
         })
+
     hazop = [{"word": w, "risk": f"{w}適用時の逸脱", "mitigation": hint}
              for w, hint in HAZOP_GUIDE_WORDS]
     return {
@@ -207,14 +344,11 @@ def _fallback_report(task: str, files: list[str], reason: str) -> dict[str, Any]
         "judgment": {
             "overall_risk": "medium",
             "go_no_go": "CONDITIONAL_GO",
-            "top3_blockers": ["F01", "F08", "F10"],
-            "required_gates": [
-                "事前バックアップ",
-                "smoke test 実施",
-                "roll-back 手順文書化",
-            ],
+            "top3_blockers": top3,
+            "required_gates": gates,
         },
         "_fallback_reason": reason,
+        "_category": category_label,
     }
 
 

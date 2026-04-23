@@ -768,7 +768,6 @@ def test_r2c2_cross_tactic_ic_sell_and_sps_share_bucket_granularity():
 
 def test_r2h3_2028_mlk_day_excluded():
     """R2-H3a: 2028 年 MLK Day（2028-01-17 月曜）を NYSE 祝日として除外"""
-    from atlas_v3.strategies.statistical_premium_seller import _is_nyse_holiday, _count_nyse_business_days
     assert _is_nyse_holiday(date(2028, 1, 17)), "2028 MLK Day は祝日のはず"
     # 2028-01-16 (月) MLK Day を含む週: 1/15(月→祝日)を除いた営業日
     # 2028-01-16 (月) から 2028-01-20 (金) まで: 月(祝)火水木金 → 火〜金 = 4 営業日
@@ -778,7 +777,6 @@ def test_r2h3_2028_mlk_day_excluded():
 
 def test_r2h3_2029_memorial_day_excluded():
     """R2-H3b: 2029 年 Memorial Day（2029-05-28 月曜）を NYSE 祝日として除外"""
-    from atlas_v3.strategies.statistical_premium_seller import _is_nyse_holiday, _count_nyse_business_days
     assert _is_nyse_holiday(date(2029, 5, 28)), "2029 Memorial Day は祝日のはず"
     # 2029-05-25 (金) から 2029-05-29 (火) まで:
     # 金・土(skip)・日(skip)・月(祝=Memorial Day)・火 → 金・火 = 2 営業日
@@ -788,7 +786,6 @@ def test_r2h3_2029_memorial_day_excluded():
 
 def test_r2h3_2030_thanksgiving_excluded():
     """R2-H3c: 2030 年 Thanksgiving Day（2030-11-28 木曜）を NYSE 祝日として除外"""
-    from atlas_v3.strategies.statistical_premium_seller import _is_nyse_holiday, _count_nyse_business_days
     assert _is_nyse_holiday(date(2030, 11, 28)), "2030 Thanksgiving Day は祝日のはず"
     # 2030-11-27 (水) から 2030-11-29 (金) まで: 水・木(祝)・金 → 水・金 = 2 営業日
     result = _count_nyse_business_days(date(2030, 11, 27), date(2030, 11, 29))

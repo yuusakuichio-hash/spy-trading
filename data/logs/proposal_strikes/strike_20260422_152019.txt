@@ -1,0 +1,17 @@
+[2026-04-22 15:20:18 JST] Proposal bottleneck violation #17
+Pattern matched in assistant response without research evidence.
+Response excerpt (first 500 chars):
+状況確認：
+
+| 項目 | 状態 |
+|---|---|
+| OpenAI 認証 | ✓ 成功（gpt-5・gpt-5.4・o3 系アクセス権あり） |
+| OpenAI 残高 | ✗ ゼロ（insufficient_quota）→ **チャージが必要** |
+| Gemini Flash | ✓ 動作確認済（Free Tier） |
+| Gemini 2.5 Pro | ✗ Free Tier 枠ゼロ → **有料化 or Flash で代替** |
+
+## 残作業
+
+### A. OpenAI 残高チャージ（ゆうさくさん作業・5 分）
+URL: https://platform.openai.com/settings/organization/billing/ov
+...

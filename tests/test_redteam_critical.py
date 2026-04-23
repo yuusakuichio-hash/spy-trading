@@ -23,6 +23,7 @@ sys.path.insert(0, str(_ROOT))
 # futu未インストール環境対応
 _futu_mock = types.ModuleType("futu")
 _futu_mock.RET_OK = 0
+_futu_mock.RET_ERROR = -1
 _futu_mock.TrdSide = types.SimpleNamespace(BUY=1, SELL=2)
 _futu_mock.KLType = types.SimpleNamespace(K_1M="K_1M")
 sys.modules.setdefault("futu", _futu_mock)
@@ -73,13 +74,11 @@ class TestCritical4KillSwitch:
         monkeypatch.setattr(ks, "AUDIT_FILE", tmp_path / "kill_switch_audit.jsonl")
         # Pushover通知を無効化
         monkeypatch.setattr(ks, "_pushover_kill_switch", lambda *a, **kw: None)
-        # キャッシュをリセット
-        ks._cache_value = False
-        ks._cache_ts = 0.0
+        # _activated_at をリセット（キャッシュ廃止後の新実装対応）
+        monkeypatch.setattr(ks, "_activated_at", None)
         yield
-        # キャッシュをリセット（後片付け）
-        ks._cache_value = False
-        ks._cache_ts = 0.0
+        # _activated_at をリセット（後片付け）
+        ks._activated_at = None
 
     def test_activate_writes_audit(self, tmp_path):
         """activate() 時にauditファイルが作成され内容が正しい"""
@@ -98,23 +97,32 @@ class TestCritical4KillSwitch:
         activate_rec = [r for r in records if r["event"] == "activate"][0]
         assert activate_rec["pid"] == os.getpid(), "PIDが一致しない"
 
-    def test_is_active_ttl_cache(self):
-        """is_active() が5秒TTLキャッシュを使う（ファイル変化を即反映しない）"""
+    def test_is_active_realtime_no_cache(self):
+        """is_active() がキャッシュなしでリアルタイムにファイルを確認する（Hardening 2026-04-21）"""
         import common.kill_switch as ks
-        # キャッシュを強制的にTrueに設定（ファイルなし状態で）
-        ks._cache_value = True
-        ks._cache_ts = time.monotonic()  # 直前にセット → まだ有効
-        result = ks.is_active()
-        assert result is True, "TTLキャッシュが有効期間内に無視された"
+        # ファイルなし → False
+        assert ks.is_active() is False
+
+        # ファイル作成 → 即True（キャッシュによる遅延なし）
+        ks.FLAG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        ks.FLAG_FILE.write_text("activated_at=test\nreason=test\n")
+        assert ks.is_active() is True
+
+        # ファイル削除 → 即False（_activated_at=None なので自動再発動しない）
+        ks.FLAG_FILE.unlink()
+        assert ks.is_active() is False
 
     def test_is_active_cache_expires(self):
-        """TTL切れ後はファイルを再チェックする"""
+        """キャッシュ廃止後: ファイルなし → 常にFalse（TTL概念消滅の確認）
+
+        旧実装: _cache_value/cache_tsでTTLキャッシュ → race condition
+        新実装: キャッシュなし・毎回ファイル確認 → race condition解消
+        """
         import common.kill_switch as ks
-        # キャッシュを古い時刻でTrueに設定（ファイルなし）
-        ks._cache_value = True
-        ks._cache_ts = time.monotonic() - 10.0  # 10秒前（TTL=5秒超過）
+        # ファイルがない状態で is_active() → False（キャッシュに関わらず）
+        assert ks.FLAG_FILE.exists() is False
         result = ks.is_active()
-        assert result is False, "TTL切れ後にキャッシュが使われた（ファイル再チェック失敗）"
+        assert result is False, "ファイルなし状態でTrueが返された"
 
     def test_deactivate_writes_audit(self):
         """deactivate() 時にauditにdeactivate記録が残る"""

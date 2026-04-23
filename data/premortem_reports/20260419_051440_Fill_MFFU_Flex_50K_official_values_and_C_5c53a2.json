@@ -1,0 +1,196 @@
+{
+  "task": "Fill MFFU Flex 50K official values and CME Exchange Margin values into chronos_mffu_rules.py, chronos_rules.yaml, chronos_symbol_meta.py. Implement phase-aware Consistency (evaluation=on, sim_funded=off)",
+  "files": [
+    "chronos_mffu_rules.py",
+    "chronos_rules.yaml",
+    "chronos_symbol_meta.py"
+  ],
+  "generated_at": "2026-04-19T05:14:40",
+  "source": "fallback",
+  "data": {
+    "scenarios": [
+      {
+        "id": "F01",
+        "title": "依存サービス未起動でフェイル",
+        "scenario": "Fill MFFU Flex 50K official values and CME Exchange Margin v... に対し『依存サービス未起動でフェイル』が発生し、復旧不能または無音で不正動作する。",
+        "probability": "high",
+        "impact": "catastrophic",
+        "detection": "ログ監視 / smoke test / assert",
+        "mitigation": "事前バックアップ・DRY_RUN・pre-check・段階リリース"
+      },
+      {
+        "id": "F02",
+        "title": "API rate limit / auth 失敗",
+        "scenario": "Fill MFFU Flex 50K official values and CME Exchange Margin v... に対し『API rate limit / auth 失敗』が発生し、復旧不能または無音で不正動作する。",
+        "probability": "medium",
+        "impact": "high",
+        "detection": "ログ監視 / smoke test / assert",
+        "mitigation": "事前バックアップ・DRY_RUN・pre-check・段階リリース"
+      },
+      {
+        "id": "F03",
+        "title": "データ型/スキーマ不整合で silent fail",
+        "scenario": "Fill MFFU Flex 50K official values and CME Exchange Margin v... に対し『データ型/スキーマ不整合で silent fail』が発生し、復旧不能または無音で不正動作する。",
+        "probability": "medium",
+        "impact": "high",
+        "detection": "ログ監視 / smoke test / assert",
+        "mitigation": "事前バックアップ・DRY_RUN・pre-check・段階リリース"
+      },
+      {
+        "id": "F04",
+        "title": "タイムゾーン混在 (JST/ET/UTC)",
+        "scenario": "Fill MFFU Flex 50K official values and CME Exchange Margin v... に対し『タイムゾーン混在 (JST/ET/UTC)』が発生し、復旧不能または無音で不正動作する。",
+        "probability": "medium",
+        "impact": "high",
+        "detection": "ログ監視 / smoke test / assert",
+        "mitigation": "事前バックアップ・DRY_RUN・pre-check・段階リリース"
+      },
+      {
+        "id": "F05",
+        "title": "並行実行で race condition",
+        "scenario": "Fill MFFU Flex 50K official values and CME Exchange Margin v... に対し『並行実行で race condition』が発生し、復旧不能または無音で不正動作する。",
+        "probability": "low",
+        "impact": "high",
+        "detection": "ログ監視 / smoke test / assert",
+        "mitigation": "事前バックアップ・DRY_RUN・pre-check・段階リリース"
+      },
+      {
+        "id": "F06",
+        "title": "ディスク/メモリ枯渇",
+        "scenario": "Fill MFFU Flex 50K official values and CME Exchange Margin v... に対し『ディスク/メモリ枯渇』が発生し、復旧不能または無音で不正動作する。",
+        "probability": "low",
+        "impact": "high",
+        "detection": "ログ監視 / smoke test / assert",
+        "mitigation": "事前バックアップ・DRY_RUN・pre-check・段階リリース"
+      },
+      {
+        "id": "F07",
+        "title": "冬時間/夏時間境界で off-by-one",
+        "scenario": "Fill MFFU Flex 50K official values and CME Exchange Margin v... に対し『冬時間/夏時間境界で off-by-one』が発生し、復旧不能または無音で不正動作する。",
+        "probability": "low",
+        "impact": "medium",
+        "detection": "ログ監視 / smoke test / assert",
+        "mitigation": "事前バックアップ・DRY_RUN・pre-check・段階リリース"
+      },
+      {
+        "id": "F08",
+        "title": "既存ファイル破壊・未バックアップ",
+        "scenario": "Fill MFFU Flex 50K official values and CME Exchange Margin v... に対し『既存ファイル破壊・未バックアップ』が発生し、復旧不能または無音で不正動作する。",
+        "probability": "medium",
+        "impact": "catastrophic",
+        "detection": "ログ監視 / smoke test / assert",
+        "mitigation": "事前バックアップ・DRY_RUN・pre-check・段階リリース"
+      },
+      {
+        "id": "F09",
+        "title": "テスト不足で本番初回に発覚",
+        "scenario": "Fill MFFU Flex 50K official values and CME Exchange Margin v... に対し『テスト不足で本番初回に発覚』が発生し、復旧不能または無音で不正動作する。",
+        "probability": "high",
+        "impact": "high",
+        "detection": "ログ監視 / smoke test / assert",
+        "mitigation": "事前バックアップ・DRY_RUN・pre-check・段階リリース"
+      },
+      {
+        "id": "F10",
+        "title": "roll-back 手順未定義で復旧不能",
+        "scenario": "Fill MFFU Flex 50K official values and CME Exchange Margin v... に対し『roll-back 手順未定義で復旧不能』が発生し、復旧不能または無音で不正動作する。",
+        "probability": "low",
+        "impact": "catastrophic",
+        "detection": "ログ監視 / smoke test / assert",
+        "mitigation": "事前バックアップ・DRY_RUN・pre-check・段階リリース"
+      }
+    ],
+    "hazop": [
+      {
+        "word": "No/None",
+        "risk": "No/None適用時の逸脱",
+        "mitigation": "その要素が完全に欠落したら？"
+      },
+      {
+        "word": "More",
+        "risk": "More適用時の逸脱",
+        "mitigation": "想定より多すぎる/大きすぎる/速すぎる場合は？"
+      },
+      {
+        "word": "Less",
+        "risk": "Less適用時の逸脱",
+        "mitigation": "想定より少ない/小さい/遅い場合は？"
+      },
+      {
+        "word": "As well as",
+        "risk": "As well as適用時の逸脱",
+        "mitigation": "想定外の追加が混入したら？"
+      },
+      {
+        "word": "Part of",
+        "risk": "Part of適用時の逸脱",
+        "mitigation": "一部だけ成立・残りが欠落したら？"
+      },
+      {
+        "word": "Reverse",
+        "risk": "Reverse適用時の逸脱",
+        "mitigation": "逆方向・真逆の動作が起きたら？"
+      },
+      {
+        "word": "Other than / Instead of",
+        "risk": "Other than / Instead of適用時の逸脱",
+        "mitigation": "全く別のものに置き換わったら？"
+      },
+      {
+        "word": "Early",
+        "risk": "Early適用時の逸脱",
+        "mitigation": "想定より早く起きたら？"
+      },
+      {
+        "word": "Late",
+        "risk": "Late適用時の逸脱",
+        "mitigation": "想定より遅く起きたら？"
+      },
+      {
+        "word": "Before",
+        "risk": "Before適用時の逸脱",
+        "mitigation": "前工程より前に発火したら？"
+      },
+      {
+        "word": "After",
+        "risk": "After適用時の逸脱",
+        "mitigation": "後続が先に終わったら？"
+      }
+    ],
+    "competing_hypotheses": [
+      {
+        "hypothesis": "実装は意図通り動く",
+        "evidence_for": "仕様書通り",
+        "evidence_against": "本番未検証",
+        "test": "smoke test"
+      },
+      {
+        "hypothesis": "隠れた副作用がある",
+        "evidence_for": "既存コードとの結合部",
+        "evidence_against": "なし",
+        "test": "既存回帰テスト"
+      },
+      {
+        "hypothesis": "前提条件が既に壊れている",
+        "evidence_for": "依存サービスの稼働状況不明",
+        "evidence_against": "直近稼働ログあり",
+        "test": "依存 healthcheck"
+      }
+    ],
+    "judgment": {
+      "overall_risk": "medium",
+      "go_no_go": "CONDITIONAL_GO",
+      "top3_blockers": [
+        "F01",
+        "F08",
+        "F10"
+      ],
+      "required_gates": [
+        "事前バックアップ",
+        "smoke test 実施",
+        "roll-back 手順文書化"
+      ]
+    },
+    "_fallback_reason": "no_api_key"
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "timestamp": "2026-04-21T13:06:48.077082+00:00",
+  "total": 5,
+  "passed": 5,
+  "failed": 0,
+  "pass_rate": "5/5",
+  "firm_enforcer_ok": true,
+  "results": [
+    {
+      "strategy_id": "chronos_orb_mes_demo",
+      "firm": "demo",
+      "description": "既存 Paper (Tradovate Paper)",
+      "success": true,
+      "http_status": 200,
+      "log_id": "2c858cc2-0be8-4de9-a512-abe44c03eb40",
+      "error": null
+    },
+    {
+      "strategy_id": "chronos_orb_mes_rapid_sim",
+      "firm": "mffu_rapid",
+      "description": "MFFU Rapid simulation",
+      "success": true,
+      "http_status": 200,
+      "log_id": "91471a05-0148-4081-98c6-3d68868f09a3",
+      "error": null
+    },
+    {
+      "strategy_id": "chronos_orb_mes_pro_sim",
+      "firm": "mffu_pro",
+      "description": "MFFU Pro simulation",
+      "success": true,
+      "http_status": 200,
+      "log_id": "2b1f5a71-7940-4e42-874b-56da884563b2",
+      "error": null
+    },
+    {
+      "strategy_id": "chronos_orb_mes_builder_sim",
+      "firm": "mffu_builder",
+      "description": "MFFU Builder simulation",
+      "success": true,
+      "http_status": 200,
+      "log_id": "226c545d-f830-4a5e-9f33-921365760104",
+      "error": null
+    },
+    {
+      "strategy_id": "chronos_orb_mes_tradeify_sim",
+      "firm": "tradeify",
+      "description": "Tradeify Lightning simulation",
+      "success": true,
+      "http_status": 200,
+      "log_id": "df806441-bc19-4d16-aeb1-6ecfb56379a1",
+      "error": null
+    }
+  ]
+}

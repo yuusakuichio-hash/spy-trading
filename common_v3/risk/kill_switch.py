@@ -369,3 +369,66 @@ class FirmScopedKillSwitch:
     def is_active(self) -> bool:
         """Per-firm Kill Switch が発動中かを返す (キャッシュなし・毎回ファイル確認)。"""
         return self._flag_path.exists()
+
+    # ── deactivate_all (CRIT-R6-2 fix) ───────────────────────────────────────
+
+    @classmethod
+    def list_all_firm_flags(cls) -> list[tuple[str, Path]]:
+        """CRIT-R6-2 fix: 現在 ARMED 状態の全 firm flag を (firm_name, flag_path) のリストで返す。
+
+        _probe_recovery が probe 成功時に全 firm flag を解除するために使用する。
+        per-firm flag ファイルが data/state_v3/kill_switch_<firm>.flag に存在する firm のみ返す。
+
+        Returns:
+            list of (firm_name, flag_path) tuples for all currently ARMED firms
+        """
+        result = []
+        for firm in _VALID_FIRMS:
+            flag_path = _STATE_DIR / f"kill_switch_{firm}.flag"
+            if flag_path.exists():
+                result.append((firm, flag_path))
+        return result
+
+    @classmethod
+    def deactivate_all(cls, activator: str = "probe_recovery") -> dict[str, bool]:
+        """CRIT-R6-2 fix: 全 firm の per-firm Kill Switch flag を一括解除する。
+
+        _probe_recovery が probe 成功時に呼ぶことで、per-firm flag が ARMED のまま
+        残る「ゾンビ状態」を解消する。
+
+        global Kill Switch の deactivate() とは独立して呼ぶこと。
+        呼出側は deactivate_all() の後に global deactivate() も呼ぶこと。
+
+        Returns:
+            dict: {firm_name: deactivated_bool} — True=解除成功 / False=flag 不在(skip)
+        """
+        import logging
+        _log = logging.getLogger(__name__)
+        results: dict[str, bool] = {}
+        armed_firms = cls.list_all_firm_flags()
+        if not armed_firms:
+            _log.debug("[KillSwitch] deactivate_all: no per-firm flags found (all clear).")
+            return results
+        for firm, flag_path in armed_firms:
+            try:
+                if flag_path.exists():
+                    flag_path.unlink()
+                    _write_audit(
+                        event=f"firm_deactivate_{firm}_by_deactivate_all",
+                        reason="probe_recovery_deactivate_all_c6r2_fix",
+                        activator=activator,
+                    )
+                    results[firm] = True
+                    _log.warning(
+                        "[KillSwitch] deactivate_all: per-firm flag DEACTIVATED for firm=%s (CRIT-R6-2 fix)",
+                        firm,
+                    )
+                else:
+                    results[firm] = False
+            except Exception as e:
+                _log.error(
+                    "[KillSwitch] deactivate_all: failed to deactivate firm=%s: %s",
+                    firm, e,
+                )
+                results[firm] = False
+        return results

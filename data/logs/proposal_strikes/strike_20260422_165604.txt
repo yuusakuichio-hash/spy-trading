@@ -1,0 +1,13 @@
+[2026-04-22 16:56:03 JST] Proposal bottleneck violation #25
+Pattern matched in assistant response without research evidence.
+Response excerpt (first 500 chars):
+正しい指摘。ソラが過剰に判断を求めすぎました。**「準備までソラ単独・最終確認だけゆうさくさん」**が本来の運用。再評価します。
+
+## 再評価（実際の判断必要度）
+
+| # | タスク | 準備（ソラ単独）| 最終承認のみゆうさくさん |
+|---|---|---|---|
+| A | 棚卸 | 削除/archive 候補リスト作成 | 微妙な数件のみ確認 |
+| B | CLAUDE.md 圧縮 | draft 作成 | draft レビュー |
+| C | 有効化フラグ
+...
