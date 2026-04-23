@@ -1,0 +1,2 @@
+{"kind": "builder", "task": "Sprint 2 Day 1: allowlist hook 本番 lock + launchd plist", "waits_for": "ゆうさくさん Day 1 着手 go", "added_ts": "2026-04-23T23:45:37.361929+00:00"}
+{"kind": "builder", "task": "Sprint 2 Day 2: moomoo_provider.py 実装 (判断 3 件返答後)", "waits_for": "Day 1 完了 + judgment 3", "added_ts": "2026-04-23T23:45:37.393810+00:00"}
