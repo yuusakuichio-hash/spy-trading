@@ -139,8 +139,9 @@ def _build_metric_provider(provider_name: str) -> "Callable[[], dict]":
 
     if provider_name == "moomoo":
         # ADR-014 (Sprint 2 C-017 本実装) により配線。
-        # S-1 fix (Redteam r8): startup 時に smoke_test を実行し 401/unauth を早期検知。
-        # 失敗時は AuthenticationError → Pushover 発火 → ゆうさくさん手動再ログイン トリガー。
+        # S-1 fix: startup 時に smoke_test → 401/unauth 早期検知
+        # S-5 fix: AuthenticationError / OpenD 未起動で SystemExit 別 exit code
+        #          launchd KeepAlive の無限再起動ループを抑制
         from atlas_v3.ops.moomoo_provider import (
             AuthenticationError,
             MoomooMetricProvider,
@@ -154,14 +155,22 @@ def _build_metric_provider(provider_name: str) -> "Callable[[], dict]":
             log.critical(
                 "[main] Moomoo smoke_test FAILED (AuthenticationError): %s. "
                 "Session may be expired. Re-login required via moomoo app. "
-                "Provider will fail-closed on get_metrics().",
+                "Exit code 78 (EX_CONFIG) signals launchd to NOT retry immediately.",
                 auth_err,
             )
+            # S-5 fix: exit code 78 = EX_CONFIG（launchd plist で ThrottleInterval 拡張推奨）
+            raise SystemExit(78)
         except MoomooProviderNotImplementedError as ni_err:
-            log.critical("[main] Moomoo not implemented / futu-api missing: %s", ni_err)
+            log.critical(
+                "[main] Moomoo not implemented / futu-api missing: %s. "
+                "Exit 78 (EX_CONFIG).",
+                ni_err,
+            )
+            raise SystemExit(78)
         except Exception as other_err:
             log.warning(
-                "[main] Moomoo smoke_test non-auth error (OpenD may not be running): %s",
+                "[main] Moomoo smoke_test non-auth error (OpenD may not be running): %s. "
+                "Proceeding with fail-closed provider (get_metrics will raise).",
                 other_err,
             )
         log.info("[main] Using MoomooMetricProvider (Sprint 2 C-017) for metric data.")

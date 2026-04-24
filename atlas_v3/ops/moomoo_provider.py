@@ -59,6 +59,16 @@ _DEFAULT_SOCKET_TIMEOUT_SECS = 5.0
 _DEFAULT_RETRY_MAX = 3
 _DEFAULT_RETRY_BACKOFF_BASE = 1.5
 
+# S-4 fix (Redteam r8): rate limit 対策
+# moomoo OpenD (futu-api) は公称 30req/30s 程度。check_interval=15s に対して retry 3 件 burst
+# で 15s 内に 4 call 発射（初回 + retry 3）→ 他 bot と共存で超過リスク。
+# _MIN_REQUEST_INTERVAL_SECS で最低間隔を保証（rate limit 擬似ガード）
+_MIN_REQUEST_INTERVAL_SECS = 1.0
+
+# B-1 fix (Redteam r8): RET_OK 固定値前提の runtime assert
+# futu-api 公式 doc では RET_OK = 0 だが、将来 SDK 変更で別値になる可能性。
+# import 成功時は SDK 値を使用・fallback 0 使用時は startup で warning ログ
+
 # S-2 fix (Redteam r8): 401/unauth 判定の多言語対応
 # 中国語エラー: "未授权" "权限不足" "会话已过期"
 # 英語エラー: "401" "unauth" "unauthorized" "session expired"
@@ -124,6 +134,14 @@ class MoomooMetricProvider:
         self._trade_ctx: Any = None  # OpenSecTradeContext instance（遅延接続）
         # S-3 fix: high_water_mark を session 跨ぎで永続化（再起動での drawdown 隠蔽防止）
         self._high_water_mark_usd: float = self._load_hwm()
+        # S-4 fix: rate limit 対策・最後の request 時刻
+        self._last_request_ts: float = 0.0
+        # B-1 fix: RET_OK 値の runtime 確認（SDK 未 import 時は 0 fallback なので warning）
+        if not FUTU_AVAILABLE:
+            log.warning(
+                "[MoomooProvider] futu SDK unavailable. RET_OK fallback=0. "
+                "Sprint 3+ で futu 公式 doc から RET_OK 値確認・固定値 assert 追加予定。"
+            )
 
     def _load_hwm(self) -> float:
         """S-3 fix: 永続化された high_water_mark を読込（起動時）。"""
@@ -220,9 +238,18 @@ class MoomooMetricProvider:
         """
         self._ensure_connected()
 
+        # S-4 fix: rate limit 擬似ガード（直前 request から _MIN_REQUEST_INTERVAL_SECS 経過を保証）
+        now = time.monotonic()
+        since_last = now - self._last_request_ts
+        if since_last < _MIN_REQUEST_INTERVAL_SECS:
+            wait = _MIN_REQUEST_INTERVAL_SECS - since_last
+            log.debug("[MoomooProvider] rate limit guard: waiting %.2fs", wait)
+            time.sleep(wait)
+
         start = time.monotonic()
         last_err: Optional[Exception] = None
         for attempt in range(self._retry_max):
+            self._last_request_ts = time.monotonic()
             try:
                 ret, data = self._trade_ctx.accinfo_query(trd_env=TrdEnv.SIMULATE)
                 if ret != RET_OK:

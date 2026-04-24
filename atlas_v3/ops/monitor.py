@@ -370,10 +370,24 @@ class MonitorDaemon:
         log.info("[Monitor] started (interval=%.0fs)", self._config.check_interval_secs)
 
     def stop(self, timeout: float = 5.0) -> None:
-        """daemon スレッドを停止する。"""
+        """daemon スレッドを停止する。
+
+        B-3 fix (Redteam r8): metric_provider が close() を持っていれば呼出（socket/SDK リソース開放）。
+        """
         self._stop_event.set()
         if self._thread is not None:
             self._thread.join(timeout=timeout)
+        # B-3 fix: provider の socket/SDK resource を明示開放
+        provider = self._config.metric_provider
+        if provider is not None and hasattr(provider, "__self__"):
+            # bound method の場合 __self__ が provider instance
+            instance = provider.__self__
+            if hasattr(instance, "close") and callable(instance.close):
+                try:
+                    instance.close()
+                    log.info("[Monitor] metric_provider closed")
+                except Exception as close_err:
+                    log.warning("[Monitor] metric_provider.close() failed: %s", close_err)
         log.info("[Monitor] stopped")
 
     def is_running(self) -> bool:
