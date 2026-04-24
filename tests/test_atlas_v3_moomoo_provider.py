@@ -61,7 +61,27 @@ class TestAuthenticationError:
 
         provider = MoomooMetricProvider()
         provider._trade_ctx = mock_ctx
-        with pytest.raises(AuthenticationError, match="get_acc_list failed"):
+        with pytest.raises(AuthenticationError, match="auth error"):
+            provider.smoke_test()
+
+    def test_smoke_test_detects_chinese_auth_error(self, mocked_futu):
+        """S-2 fix: 中国語エラー '未授权' を検知。"""
+        mock_ctx = MagicMock()
+        mock_ctx.get_acc_list.return_value = (-1, "未授权访问")
+
+        provider = MoomooMetricProvider()
+        provider._trade_ctx = mock_ctx
+        with pytest.raises(AuthenticationError):
+            provider.smoke_test()
+
+    def test_smoke_test_detects_japanese_auth_error(self, mocked_futu):
+        """S-2 fix: 日本語エラー '認証' を検知。"""
+        mock_ctx = MagicMock()
+        mock_ctx.get_acc_list.return_value = (-1, "認証エラー")
+
+        provider = MoomooMetricProvider()
+        provider._trade_ctx = mock_ctx
+        with pytest.raises(AuthenticationError):
             provider.smoke_test()
 
     def test_get_metrics_401_becomes_auth_error(self, mocked_futu):

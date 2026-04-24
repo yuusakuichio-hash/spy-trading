@@ -59,6 +59,27 @@ _DEFAULT_SOCKET_TIMEOUT_SECS = 5.0
 _DEFAULT_RETRY_MAX = 3
 _DEFAULT_RETRY_BACKOFF_BASE = 1.5
 
+# S-2 fix (Redteam r8): 401/unauth 判定の多言語対応
+# 中国語エラー: "未授权" "权限不足" "会话已过期"
+# 英語エラー: "401" "unauth" "unauthorized" "session expired"
+# 日本語エラー: "認証" "権限なし" "セッション期限"
+_AUTH_ERROR_PATTERNS = [
+    "401",
+    "unauth",
+    "unauthorized",
+    "session expired",
+    "未授权",
+    "权限不足",
+    "会话已过期",
+    "認証",
+    "権限",
+    "セッション期限",
+]
+
+# S-3 fix: high_water_mark の session 永続化パス
+from pathlib import Path as _Path
+_HWM_STATE_FILE = _Path("/Users/yuusakuichio/trading/data/state_v3/moomoo_hwm.json")
+
 
 class MoomooProviderNotImplementedError(NotImplementedError):
     """futu SDK 未インストール時 or 未実装パス呼出時。"""
@@ -101,7 +122,33 @@ class MoomooMetricProvider:
         self._security_firm = security_firm
         self._trd_market = trd_market
         self._trade_ctx: Any = None  # OpenSecTradeContext instance（遅延接続）
-        self._high_water_mark_usd: float = 0.0  # drawdown_pct 算出用
+        # S-3 fix: high_water_mark を session 跨ぎで永続化（再起動での drawdown 隠蔽防止）
+        self._high_water_mark_usd: float = self._load_hwm()
+
+    def _load_hwm(self) -> float:
+        """S-3 fix: 永続化された high_water_mark を読込（起動時）。"""
+        try:
+            if _HWM_STATE_FILE.exists():
+                import json
+                data = json.loads(_HWM_STATE_FILE.read_text(encoding="utf-8"))
+                hwm = float(data.get("high_water_mark_usd", 0.0))
+                log.info("[MoomooProvider] Loaded persisted high_water_mark: $%.2f", hwm)
+                return hwm
+        except Exception as exc:
+            log.warning("[MoomooProvider] Failed to load hwm state: %s. Starting from 0.", exc)
+        return 0.0
+
+    def _save_hwm(self) -> None:
+        """S-3 fix: high_water_mark を永続化（drawdown 隠蔽防止）。"""
+        try:
+            import json
+            _HWM_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            _HWM_STATE_FILE.write_text(
+                json.dumps({"high_water_mark_usd": self._high_water_mark_usd}),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            log.warning("[MoomooProvider] Failed to save hwm state: %s", exc)
 
     def _ensure_connected(self) -> None:
         """遅延接続: 初回 get_metrics 時に OpenSecTradeContext 作成 + unlock。"""
@@ -131,6 +178,7 @@ class MoomooMetricProvider:
 
     def smoke_test(self) -> None:
         """startup 時に get_acc_list() で 401/unauth 検出（ADR-014 Decision 2）。
+        S-2 fix: 多言語 auth error パターンで中国語/日本語 moomoo 応答も検知。
 
         Raises:
             AuthenticationError: 認証失敗（期限切れ等）
@@ -140,6 +188,14 @@ class MoomooMetricProvider:
         try:
             ret, data = self._trade_ctx.get_acc_list()
             if ret != RET_OK:
+                # S-2 fix: 多言語 auth パターン
+                data_lower = str(data).lower()
+                is_auth = any(pat.lower() in data_lower for pat in _AUTH_ERROR_PATTERNS)
+                if is_auth:
+                    raise AuthenticationError(
+                        f"get_acc_list auth error (ret={ret}, data={data}). "
+                        "moomoo session likely expired. Re-login required."
+                    )
                 raise AuthenticationError(
                     f"get_acc_list failed (ret={ret}, data={data}). "
                     "moomoo session likely expired. Re-login required."
@@ -170,23 +226,38 @@ class MoomooMetricProvider:
             try:
                 ret, data = self._trade_ctx.accinfo_query(trd_env=TrdEnv.SIMULATE)
                 if ret != RET_OK:
-                    if "401" in str(data) or "unauth" in str(data).lower():
+                    # S-2 fix: 多言語 auth error パターン検知
+                    data_lower = str(data).lower()
+                    if any(pat.lower() in data_lower for pat in _AUTH_ERROR_PATTERNS):
                         raise AuthenticationError(
-                            f"accinfo_query 401/unauth (ret={ret}, data={data})"
+                            f"accinfo_query auth error (ret={ret}, data={data})"
                         )
                     raise RuntimeError(f"accinfo_query failed (ret={ret}, data={data})")
                 if data is None or len(data) == 0:
                     raise RuntimeError("accinfo_query returned empty data")
 
                 row = data.iloc[0]
-                total_assets = float(row.get("total_assets") or 0.0)
-                realized_pl = float(row.get("realized_pl") or 0.0)
-                unrealized_pl = float(row.get("unrealized_pl") or 0.0)
+                # S-6 fix: pd.isna() で NaN 明示検出（row.get() or 0.0 は NaN を回避しない）
+                import pandas as pd
+                def _safe_float(key: str) -> float:
+                    v = row.get(key)
+                    if v is None or (isinstance(v, float) and pd.isna(v)):
+                        return 0.0
+                    try:
+                        f = float(v)
+                        return 0.0 if pd.isna(f) else f
+                    except (TypeError, ValueError):
+                        return 0.0
+                total_assets = _safe_float("total_assets")
+                realized_pl = _safe_float("realized_pl")
+                unrealized_pl = _safe_float("unrealized_pl")
 
                 pnl_day_usd = realized_pl + unrealized_pl
 
                 if total_assets > self._high_water_mark_usd:
                     self._high_water_mark_usd = total_assets
+                    # S-3 fix: HWM 更新時に即永続化（drawdown 隠蔽防止）
+                    self._save_hwm()
                 if self._high_water_mark_usd > 0:
                     drawdown_pct = max(
                         0.0,

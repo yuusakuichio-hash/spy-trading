@@ -68,17 +68,27 @@ case "${1:-status}" in
                 echo "Dir: $d/"
                 while IFS= read -r f; do
                     lock_file "$f"
-                done < <(find "$d" -type f \( -name "*.py" -o -name "*.yaml" -o -name "*.json" \))
+                done < <(find -P "$d" -type f -not -type l \( -name "*.py" -o -name "*.yaml" -o -name "*.json" \))
             fi
         done
         echo "=== Done ==="
         ;;
     unlock)
-        echo "⚠ UNLOCK requires explicit confirmation."
-        read -p "Type 'UNLOCK' to confirm: " confirm
-        if [ "$confirm" != "UNLOCK" ]; then
-            echo "Cancelled."
-            exit 1
+        # O-1 break-glass: 環境変数 ATLAS_UNLOCK_APPROVED に
+        # "YYYY-MM-DD:reason" 形式で指定すると対話確認を bypass（Secretary 非対話経由用）
+        if [ -n "${ATLAS_UNLOCK_APPROVED:-}" ]; then
+            echo "⚠ UNLOCK via ATLAS_UNLOCK_APPROVED env: $ATLAS_UNLOCK_APPROVED"
+            # audit log に記録（改変不可な append-only 推奨だが最小実装）
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] UNLOCK via env: $ATLAS_UNLOCK_APPROVED" \
+                >> /Users/yuusakuichio/trading/data/logs/lock_legacy_unlock_audit.log 2>/dev/null || true
+        else
+            echo "⚠ UNLOCK requires explicit confirmation."
+            echo "Non-interactive mode: export ATLAS_UNLOCK_APPROVED='YYYY-MM-DD:reason'"
+            read -p "Type 'UNLOCK' to confirm: " confirm
+            if [ "$confirm" != "UNLOCK" ]; then
+                echo "Cancelled."
+                exit 1
+            fi
         fi
         echo "=== Unlocking protected files ==="
         for f in "${PROTECTED_FILES[@]}"; do
@@ -88,7 +98,7 @@ case "${1:-status}" in
             if [ -d "$d" ]; then
                 while IFS= read -r f; do
                     unlock_file "$f"
-                done < <(find "$d" -type f \( -name "*.py" -o -name "*.yaml" -o -name "*.json" \))
+                done < <(find -P "$d" -type f -not -type l \( -name "*.py" -o -name "*.yaml" -o -name "*.json" \))
             fi
         done
         echo "=== Done (remember to re-lock after legitimate edit) ==="
@@ -101,10 +111,10 @@ case "${1:-status}" in
             if [ -f "$f" ]; then
                 if ls -lO "$f" 2>/dev/null | grep -q "schg"; then
                     echo "  [LOCKED]   $f"
-                    ((locked++))
+                    locked=$((locked+1))
                 else
                     echo "  [unlocked] $f"
-                    ((unlocked++))
+                    unlocked=$((unlocked+1))
                 fi
             fi
         done
@@ -113,12 +123,12 @@ case "${1:-status}" in
                 while IFS= read -r f; do
                     if [ -f "$f" ]; then
                         if ls -lO "$f" 2>/dev/null | grep -q "schg"; then
-                            ((locked++))
+                            locked=$((locked+1))
                         else
-                            ((unlocked++))
+                            unlocked=$((unlocked+1))
                         fi
                     fi
-                done < <(find "$d" -type f \( -name "*.py" -o -name "*.yaml" -o -name "*.json" \))
+                done < <(find -P "$d" -type f -not -type l \( -name "*.py" -o -name "*.yaml" -o -name "*.json" \))
             fi
         done
         echo "=== Summary: locked=$locked / unlocked=$unlocked ==="

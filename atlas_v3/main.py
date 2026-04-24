@@ -139,10 +139,31 @@ def _build_metric_provider(provider_name: str) -> "Callable[[], dict]":
 
     if provider_name == "moomoo":
         # ADR-014 (Sprint 2 C-017 本実装) により配線。
-        # futu-api 未インストール時は MoomooProviderNotImplementedError が get_metrics() で raise。
-        # smoke_test は OpenD 起動 + Paper login 済環境でゆうさくさん戻り後に実行。
-        from atlas_v3.ops.moomoo_provider import MoomooMetricProvider
+        # S-1 fix (Redteam r8): startup 時に smoke_test を実行し 401/unauth を早期検知。
+        # 失敗時は AuthenticationError → Pushover 発火 → ゆうさくさん手動再ログイン トリガー。
+        from atlas_v3.ops.moomoo_provider import (
+            AuthenticationError,
+            MoomooMetricProvider,
+            MoomooProviderNotImplementedError,
+        )
         moomoo_provider = MoomooMetricProvider()
+        try:
+            moomoo_provider.smoke_test()
+            log.info("[main] MoomooMetricProvider smoke_test passed.")
+        except AuthenticationError as auth_err:
+            log.critical(
+                "[main] Moomoo smoke_test FAILED (AuthenticationError): %s. "
+                "Session may be expired. Re-login required via moomoo app. "
+                "Provider will fail-closed on get_metrics().",
+                auth_err,
+            )
+        except MoomooProviderNotImplementedError as ni_err:
+            log.critical("[main] Moomoo not implemented / futu-api missing: %s", ni_err)
+        except Exception as other_err:
+            log.warning(
+                "[main] Moomoo smoke_test non-auth error (OpenD may not be running): %s",
+                other_err,
+            )
         log.info("[main] Using MoomooMetricProvider (Sprint 2 C-017) for metric data.")
         return moomoo_provider.get_metrics
 
