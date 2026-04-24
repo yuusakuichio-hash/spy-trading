@@ -17,9 +17,13 @@ set -e
 cd /Users/yuusakuichio/trading
 
 AUTO_YES=0
-if [ "${1:-}" = "--yes" ]; then
-    AUTO_YES=1
-fi
+DRY_RUN=0
+for arg in "$@"; do
+    case "$arg" in
+        --yes) AUTO_YES=1 ;;
+        --dry-run) DRY_RUN=1; AUTO_YES=1; echo "★ DRY RUN mode - actions will be simulated" ;;
+    esac
+done
 
 confirm() {
     if [ "$AUTO_YES" -eq 1 ]; then return 0; fi
@@ -38,7 +42,11 @@ if python3 -c "import futu" 2>/dev/null; then
     echo "  ✓ futu-api already installed"
 else
     if confirm "pip install futu-api を実行しますか？"; then
-        pip3 install futu-api
+        if [ "$DRY_RUN" -eq 1 ]; then
+            echo "  [dry-run] pip3 install futu-api"
+        else
+            pip3 install futu-api
+        fi
         echo "  ✓ installed"
     else
         echo "  ✗ skipped（Day 2 moomoo 実接続不可）"
@@ -52,7 +60,11 @@ LOCK_STATUS=$(bash scripts/lock_legacy_files.sh status 2>&1 | grep "Summary" | t
 echo "  現状: $LOCK_STATUS"
 if echo "$LOCK_STATUS" | grep -q "locked=0"; then
     if confirm "lock を実行しますか？ (chflags schg で immutable 化)"; then
-        bash scripts/lock_legacy_files.sh lock
+        if [ "$DRY_RUN" -eq 1 ]; then
+            echo "  [dry-run] bash scripts/lock_legacy_files.sh lock"
+        else
+            bash scripts/lock_legacy_files.sh lock
+        fi
     else
         echo "  ✗ skipped"
     fi
