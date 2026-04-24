@@ -136,6 +136,9 @@ class MoomooMetricProvider:
         self._high_water_mark_usd: float = self._load_hwm()
         # S-4 fix: rate limit 対策・最後の request 時刻
         self._last_request_ts: float = 0.0
+        # C-017: smoke_test で SIMULATE 行から解決する Paper 口座 acc_id（初期 None）
+        # get_metrics() は設定済なら accinfo_query(acc_id=...) で明示指定する
+        self._paper_acc_id: Optional[int] = None
         # B-1 fix: RET_OK 値の runtime 確認（SDK 未 import 時は 0 fallback なので warning）
         if not FUTU_AVAILABLE:
             log.warning(
@@ -253,6 +256,13 @@ class MoomooMetricProvider:
                     "get_acc_list returned no SIMULATE (Paper) account. "
                     "moomoo app の『デモ取引』を有効化してください。"
                 )
+            # C-017: SIMULATE 行の先頭 acc_id をキャッシュ（get_metrics で accinfo_query 明示指定用）
+            try:
+                self._paper_acc_id = int(sim_rows.iloc[0]["acc_id"])
+                log.info("[MoomooProvider] Paper acc_id resolved: %d", self._paper_acc_id)
+            except (IndexError, KeyError, ValueError, TypeError) as _acc_err:
+                log.warning("[MoomooProvider] acc_id resolution failed: %s. Falling back to trd_env-only query.", _acc_err)
+                self._paper_acc_id = None
         except AuthenticationError:
             raise
         except Exception as exc:
@@ -284,7 +294,33 @@ class MoomooMetricProvider:
         for attempt in range(self._retry_max):
             self._last_request_ts = time.monotonic()
             try:
-                ret, data = self._trade_ctx.accinfo_query(trd_env=TrdEnv.SIMULATE)
+                # C-017: Paper 口座 acc_id キャッシュ済なら accinfo_query に明示指定
+                # (smoke_test 未実行環境での後方互換のため None 時は省略)
+                _accinfo_kwargs: dict = {"trd_env": TrdEnv.SIMULATE}
+                if self._paper_acc_id is not None:
+                    _accinfo_kwargs["acc_id"] = int(self._paper_acc_id)
+
+                # R4: hang 検知 — daemon thread で呼出・join(timeout) で wall-clock cap
+                # (smoke_test と同パターン・OpenD 応答 hang で monitor thread が永久 block しない)
+                import threading as _th
+                _call_result: dict = {}
+                def _call_runner():
+                    try:
+                        _call_result["value"] = self._trade_ctx.accinfo_query(**_accinfo_kwargs)
+                    except BaseException as _e:  # noqa: BLE001 — propagate any
+                        _call_result["error"] = _e
+                _ct = _th.Thread(target=_call_runner, daemon=True, name="moomoo_accinfo_worker")
+                _ct.start()
+                _ct.join(timeout=self._socket_timeout_secs)
+                if _ct.is_alive():
+                    raise RuntimeError(
+                        f"accinfo_query hang detected (timeout={self._socket_timeout_secs}s). "
+                        "OpenD unreachable or session blocked."
+                    )
+                if "error" in _call_result:
+                    raise _call_result["error"] if isinstance(_call_result["error"], Exception) else RuntimeError(f"accinfo_query raised: {_call_result['error']}")
+                ret, data = _call_result["value"]
+
                 if ret != RET_OK:
                     # S-2 fix: 多言語 auth error パターン検知
                     data_lower = str(data).lower()
