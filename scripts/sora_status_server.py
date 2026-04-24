@@ -429,6 +429,88 @@ def _render_live_health() -> str:
                 f'<div class="health-row ok">💚 atlas-paper alive: PID {html.escape(pid_paper)} (elapsed {html.escape(etime)})</div>'
             )
 
+    # 4. spy-bot-paper daemon 状態 (2026-04-24 23:52 追加・場中 paper 戦略層)
+    pid_spy = None
+    spy_etime = "?"
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", "spy_bot.py.*--paper"],
+            capture_output=True, text=True, timeout=2,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            pid_spy = result.stdout.strip().splitlines()[0]
+            etime_result = subprocess.run(
+                ["ps", "-p", pid_spy, "-o", "etime="],
+                capture_output=True, text=True, timeout=2,
+            )
+            spy_etime = etime_result.stdout.strip() if etime_result.returncode == 0 else "?"
+    except Exception:
+        pass
+
+    if pid_spy is not None:
+        sections.append(
+            f'<div class="health-row ok">🤖 spy-bot-paper alive: PID {html.escape(pid_spy)} (elapsed {html.escape(spy_etime)})</div>'
+        )
+    else:
+        # launchd 登録有無で emergency / warn を分岐
+        try:
+            lc_result = subprocess.run(
+                ["launchctl", "list", "com.soralab.spy-bot-paper"],
+                capture_output=True, text=True, timeout=2,
+            )
+            if lc_result.returncode == 0:
+                sections.append(
+                    '<div class="health-row warn">⚠ spy-bot-paper daemon 未稼働 (launchd 登録済・起動失敗の可能性)</div>'
+                )
+            else:
+                sections.append(
+                    '<div class="health-row warn">💤 spy-bot-paper daemon 未登録 (paper 発注層停止中)</div>'
+                )
+        except Exception:
+            sections.append('<div class="health-row warn">? spy-bot-paper status 判定不能</div>')
+
+    # 5. moomoo OpenD preemptive relogin heartbeat (案 F・12h 周期)
+    relogin_hb_file = PROJECT_ROOT / "data" / "state_v3" / "opend_relogin_heartbeat.jsonl"
+    if relogin_hb_file.exists():
+        try:
+            lines = relogin_hb_file.read_text(encoding="utf-8").splitlines()
+            last_record = None
+            for line in reversed(lines[-5:]):
+                try:
+                    rec = json.loads(line)
+                    if last_record is None:
+                        last_record = rec
+                        break
+                except Exception:
+                    continue
+            if last_record is not None:
+                ts_str = last_record.get("ts", "")
+                try:
+                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                    age_secs = (datetime.now(timezone.utc) - ts).total_seconds()
+                except Exception:
+                    age_secs = -1
+                status = last_record.get("status", "unknown")
+                if status == "success" and 0 <= age_secs < 25 * 3600:
+                    age_h = int(age_secs / 3600)
+                    age_m = int((age_secs % 3600) / 60)
+                    sections.append(
+                        f'<div class="health-row ok">🔄 OpenD relogin OK: 最終 success {age_h}h{age_m}m 前 (次発火 08:00 / 20:00 JST)</div>'
+                    )
+                elif status != "success":
+                    err = last_record.get("details", {}).get("error", "unknown")[:80]
+                    sections.append(
+                        f'<div class="health-row warn">⚠ OpenD relogin 最新 {html.escape(status)}: {html.escape(err)}</div>'
+                    )
+                else:
+                    sections.append(
+                        f'<div class="health-row warn">⚠ OpenD relogin heartbeat stale: {int(age_secs/3600)}h old</div>'
+                    )
+        except Exception:
+            sections.append('<div class="health-row warn">? OpenD relogin heartbeat 読取失敗</div>')
+    else:
+        sections.append('<div class="health-row warn">🔄 OpenD relogin: 初回実行前 (launchd 登録済・次発火待ち)</div>')
+
     return f"""
 <div class="sec">
 <div class="sec-title">🩺 Live Health (実測)</div>
