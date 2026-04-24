@@ -101,7 +101,13 @@ class TestOpendConnectionFailure:
 class TestReloginResponse:
     def _make_mock_socket(self, response_bytes: bytes) -> MagicMock:
         sock = MagicMock()
-        sock.recv.side_effect = [response_bytes, b""]
+        # 3 phase: banner drain / command response / follow-up (multi-line)
+        # banner は "Type \"help\"" を含めて drain loop を早期 break させる
+        sock.recv.side_effect = [
+            b"moomoo OpenD version: x.x, Type \"help\" for more information\n",
+            response_bytes,
+            b"",
+        ]
         sock.settimeout = MagicMock()
         sock.sendall = MagicMock()
         sock.close = MagicMock()
@@ -190,7 +196,11 @@ class TestPasswordLeakage:
         import hashlib
         expected_md5 = hashlib.md5(b"sekret123").hexdigest()
         mock_sock = MagicMock()
-        mock_sock.recv.side_effect = [b"relogin success\n", b""]
+        mock_sock.recv.side_effect = [
+            b"moomoo OpenD version: x.x, Type \"help\" for more information\n",
+            b"Login successful\n",
+            b"",
+        ]
         with patch.object(mod.subprocess, "run", side_effect=keychain_calls), \
              patch.object(mod.socket, "create_connection", return_value=mock_sock), \
              patch.object(mod, "_escalate_failure"), \

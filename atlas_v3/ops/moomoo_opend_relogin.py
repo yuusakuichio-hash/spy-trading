@@ -146,7 +146,12 @@ def _password_md5(password: str) -> str:
 def _send_operate_command(command: str) -> str:
     """OpenD operate port に command を送信し response を返す。
 
-    telnet protocol ではなく raw TCP socket を使用。
+    raw TCP socket。OpenD は接続時に banner を即送信する仕様のため、
+    以下順で処理する:
+      1. 接続
+      2. banner を drain (短い timeout で読み捨て)
+      3. command 送信
+      4. command response を受信 (banner 以降の新 bytes のみ)
     """
     try:
         sock = socket.create_connection(
@@ -160,24 +165,55 @@ def _send_operate_command(command: str) -> str:
         ) from exc
 
     try:
-        sock.settimeout(_OPERATE_READ_TIMEOUT_SECS)
-        payload = (command + "\n").encode("utf-8")
-        sock.sendall(payload)
-
-        # response を読み取る (改行区切り想定)
-        buffer = b""
-        deadline = time.monotonic() + _OPERATE_READ_TIMEOUT_SECS
-        while time.monotonic() < deadline:
+        # Phase 1: banner drain (OpenD の挨拶文を捨てる)
+        sock.settimeout(1.0)
+        banner_buf = b""
+        banner_deadline = time.monotonic() + 1.5
+        while time.monotonic() < banner_deadline:
             try:
                 chunk = sock.recv(4096)
             except socket.timeout:
                 break
             if not chunk:
                 break
-            buffer += chunk
-            if b"\n" in buffer:
+            banner_buf += chunk
+            # prompt または "Type help" パターン到達で banner 完了と判定
+            banner_lower = banner_buf.lower()
+            if any(p in banner_lower for p in (b"type \"help\"", b"type 'help'", b"> ", b">>>")):
                 break
-        return buffer.decode("utf-8", errors="replace").strip()
+
+        # Phase 2: command 送信 (OpenD は CRLF 要求・LF のみでは無視される)
+        sock.settimeout(_OPERATE_READ_TIMEOUT_SECS)
+        payload = (command + "\r\n").encode("utf-8")
+        sock.sendall(payload)
+
+        # Phase 3: command response を受信 (banner は既に drain 済なのでこれは真の応答)
+        response_buf = b""
+        response_deadline = time.monotonic() + _OPERATE_READ_TIMEOUT_SECS
+        while time.monotonic() < response_deadline:
+            try:
+                chunk = sock.recv(4096)
+            except socket.timeout:
+                # timeout は「応答終了」の合図 (prompt 待ちでもう来ない)
+                break
+            if not chunk:
+                break
+            response_buf += chunk
+            # 改行が 1 件以上入ったら response 到達・さらに短い follow-up 読取
+            if b"\n" in response_buf and len(response_buf) >= 10:
+                # 追加 chunk を短時間待つ (multi-line response 完全取得)
+                sock.settimeout(0.3)
+                try:
+                    while True:
+                        more = sock.recv(4096)
+                        if not more:
+                            break
+                        response_buf += more
+                except socket.timeout:
+                    pass
+                break
+
+        return response_buf.decode("utf-8", errors="replace").strip()
     finally:
         try:
             sock.close()
@@ -265,8 +301,7 @@ def _escalate_failure(reason: str, response_excerpt: str = "") -> None:
             f"ts: {datetime.now(timezone.utc).isoformat()}"
         )
         # 深夜は priority=2 で迂回
-        import datetime as _dt
-        hour_jst = (_dt.datetime.utcnow().hour + 9) % 24
+        hour_jst = (datetime.now(timezone.utc).hour + 9) % 24
         priority = 2 if (22 <= hour_jst or hour_jst < 6) else 1
         _pushover.send(title=title, message=message, priority=priority)
         log.info("[Relogin] escalated failure to Pushover (priority=%d)", priority)
