@@ -30,6 +30,70 @@ STATE_FILE = PROJECT_ROOT / "data" / "state_v3" / "supervisor_last_kick.json"
 IDLE_THRESHOLD_SECS = 600  # 10 分以上 idle で検知
 KICK_COOLDOWN_SECS = 1800  # 一度 kick したら 30 分は再 kick しない（連打防止）
 
+# Fork session auto-spawn 制御
+# SORA_AUTO_FORK=1 env で有効化・default off（cost 対策）
+AUTO_FORK_ENABLED = os.environ.get("SORA_AUTO_FORK", "0") == "1"
+MAX_FORKS_PER_DAY = 6  # 1 日最大 6 回 fork（cost 上限）
+
+# Fork prompt（carryover の安全 task のみに限定）
+FORK_PROMPT = """あなたは Sora Lab の auto-continue fork session です。
+main Claude session が idle で止まっているため、fork で安全な継続作業を進めます。
+
+厳守制約:
+- ADR-015 判断待ち事項（ゆうさくさん承認要）には一切触らない
+- 既存コード (spy_bot.py / chronos_bot.py / common/ 等) 改変禁止
+- paper 口座の発注・send_pushover 等 side-effect ある操作禁止
+- data/sprint1_carryovers.md の未完 carryover で「ゆうさくさん判断不要」のもののみ着手
+- 作業内容は 1 件に絞る・実行 → test → commit まで完結
+- 完遂できない task は触らない（半端な状態で放置しない）
+- 完了後は「このターンで終了します」と明記して exit
+
+着手推奨（優先度順）:
+1. C-025 assert 残関数（check_var / _check_kill_switch 等）
+2. memory の古い archive 整理
+3. pytest 全件走行結果の最終確認
+4. ダッシュボード改善の小項目
+
+止まらず 1 task 完遂して終了。"""
+
+
+def auto_fork_spawn(reason: str) -> bool:
+    """SORA_AUTO_FORK=1 なら claude -p --fork-session で別プロセス spawn。"""
+    if not AUTO_FORK_ENABLED:
+        return False
+    log_path = PROJECT_ROOT / "data" / "logs" / f"auto_fork_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    cmd = [
+        "/opt/homebrew/bin/claude",
+        "-p",
+        "--continue",
+        "--fork-session",
+        "--dangerously-skip-permissions",
+        FORK_PROMPT,
+    ]
+    try:
+        with log_path.open("w") as logf:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=logf,
+                stderr=logf,
+                cwd=str(PROJECT_ROOT),
+                start_new_session=True,
+            )
+        print(f"[supervisor] auto_fork spawned PID {proc.pid} → {log_path}")
+        return True
+    except Exception as exc:
+        print(f"[supervisor] auto_fork failed: {exc}", file=sys.stderr)
+        return False
+
+
+def count_forks_today() -> int:
+    """data/logs/auto_fork_YYYYMMDD_*.log で本日 fork 回数を数える。"""
+    today = datetime.now().strftime("%Y%m%d")
+    log_dir = PROJECT_ROOT / "data" / "logs"
+    if not log_dir.exists():
+        return 0
+    return len(list(log_dir.glob(f"auto_fork_{today}_*.log")))
+
 
 def find_main_session_jsonl() -> Path | None:
     """直接 trading/ 直下の最新 session jsonl を返す（subagents/ は対象外）。"""
@@ -164,21 +228,39 @@ def main() -> int:
         print(f"[supervisor] active: {jsonl.stem[:8]} / role={last_role} / tool_use={tool_use} / elapsed={elapsed_m}m")
         return 0
 
-    # idle 検知 → kick
+    # idle 検知 → 通知 + 可能なら auto_fork
     elapsed_m = int(elapsed / 60)
-    title = "[Sora Supervisor] Sora が止まっています"
-    message = (
-        f"セッション {jsonl.stem[:8]} / {elapsed_m}分 idle / tool_use=0\n"
-        f"最新 role: {last_role}\n"
-        "→ 「続けて」「次 task 進めて」等 1 言送ってください。\n"
-        "ダッシュボード: http://192.168.10.123:8765/"
-    )
-    print(f"[supervisor] IDLE DETECTED → notifying: {title}")
+
+    # Auto-fork：ゆうさくさん介入なしで fork session を spawn
+    fork_spawned = False
+    forks_today = count_forks_today()
+    if AUTO_FORK_ENABLED and forks_today < MAX_FORKS_PER_DAY:
+        fork_spawned = auto_fork_spawn(f"idle {elapsed_m}m")
+
+    title = "[Sora Supervisor] Sora idle 検知"
+    base_msg = f"セッション {jsonl.stem[:8]} / {elapsed_m}分 idle / tool_use=0"
+    if fork_spawned:
+        message = (
+            f"{base_msg}\n"
+            f"→ AUTO_FORK で別 session spawn 済 (本日 {forks_today + 1}/{MAX_FORKS_PER_DAY})\n"
+            "進捗: data/logs/auto_fork_*.log"
+        )
+    else:
+        reason = "AUTO_FORK 無効" if not AUTO_FORK_ENABLED else f"本日 {forks_today}/{MAX_FORKS_PER_DAY} 上限"
+        message = (
+            f"{base_msg}\n"
+            f"→ 手動介入推奨（{reason}）。\n"
+            "「続けて」等 1 言送ってください。\n"
+            "ダッシュボード: http://192.168.10.123:8765/"
+        )
+
+    print(f"[supervisor] IDLE DETECTED → {('auto_fork' if fork_spawned else 'notify only')}")
     send_macos_notification(title, message)
     send_pushover(title, message, priority=1)
 
     state["last_kick_ts"] = now.isoformat()
     state["last_kick_reason"] = f"idle {elapsed_m}m / tool_use 0"
+    state["last_kick_fork"] = fork_spawned
     save_state(state)
 
     return 0
