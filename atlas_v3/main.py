@@ -138,11 +138,13 @@ def _build_metric_provider(provider_name: str) -> "Callable[[], dict]":
         return yf_provider.get_metrics
 
     if provider_name == "moomoo":
-        # 将来実装: MoomooMetricProvider
-        raise NotImplementedError(
-            "moomoo provider is not yet implemented. "
-            "Use --provider yfinance for now."
-        )
+        # ADR-014 (Sprint 2 C-017 本実装) により配線。
+        # futu-api 未インストール時は MoomooProviderNotImplementedError が get_metrics() で raise。
+        # smoke_test は OpenD 起動 + Paper login 済環境でゆうさくさん戻り後に実行。
+        from atlas_v3.ops.moomoo_provider import MoomooMetricProvider
+        moomoo_provider = MoomooMetricProvider()
+        log.info("[main] Using MoomooMetricProvider (Sprint 2 C-017) for metric data.")
+        return moomoo_provider.get_metrics
 
     raise ValueError(
         f"Unknown provider: {provider_name!r}. "

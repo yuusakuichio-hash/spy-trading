@@ -43,11 +43,12 @@ class TestMoomooProviderSkeleton:
         with pytest.raises(MoomooProviderNotImplementedError):
             provider.smoke_test()
 
-    def test_exception_message_mentions_sprint2(self):
-        """例外メッセージに Sprint 2 実装予定の明示がある。"""
+    def test_exception_can_be_instantiated_with_message(self):
+        """C-017 本実装後の更新: skeleton の Sprint 2 prepend は廃止。
+        例外は通常の NotImplementedError として message を保持するのみ。"""
         from atlas_v3.ops.moomoo_provider import MoomooProviderNotImplementedError
-        exc = MoomooProviderNotImplementedError("test")
-        assert "Sprint 2" in str(exc)
+        exc = MoomooProviderNotImplementedError("test message")
+        assert "test message" in str(exc)
 
     def test_has_yfinance_compatible_interface(self):
         """YFinanceMetricProvider と同じ method name を持つ（interface 契約）。"""
