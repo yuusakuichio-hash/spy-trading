@@ -574,6 +574,12 @@ class RiskEngine:
             ValueError:    returns_history が _MIN_VAR_HISTORY 未満（C-1）
             AssertionError: expected_unit が config.returns_unit と不一致（C-4）
         """
+        # C-025: 境界条件 invariant (型 + 非 None 検査)
+        assert isinstance(portfolio, PortfolioSnapshot), (
+            f"portfolio must be PortfolioSnapshot, got {type(portfolio).__name__}"
+        )
+        assert self._config is not None, "RiskEngine._config must not be None"
+
         # C-4: schema 契約チェック（unit 不一致を早期検知）
         if expected_unit is not None and expected_unit != self._config.returns_unit:
             raise AssertionError(
@@ -647,6 +653,9 @@ class RiskEngine:
             RiskDecision(allowed=False) — Kill Switch ARMED の場合
             None                       — Kill Switch 非 ARMED の場合
         """
+        # C-025: 境界条件 invariant (config 健全性)
+        assert self._config is not None, "RiskEngine._config must not be None"
+
         try:
             from common_v3.risk.kill_switch import is_active as _ks_is_active
             if _ks_is_active():
@@ -809,6 +818,14 @@ class RiskEngine:
         returns_history の各要素は check_var 内で個別検査するため、
         ここでは含めない（check_var の ValueError → DENY 経路で処理）。
         """
+        # C-025: 境界条件 invariant (型 + 非 None 検査)
+        assert isinstance(portfolio, PortfolioSnapshot), (
+            f"portfolio must be PortfolioSnapshot, got {type(portfolio).__name__}"
+        )
+        assert isinstance(request_notional, (int, float)), (
+            f"request_notional must be numeric, got {type(request_notional).__name__}"
+        )
+
         scalars = {
             "request_notional": request_notional,
             "pnl_day_usd": portfolio.pnl_day_usd,

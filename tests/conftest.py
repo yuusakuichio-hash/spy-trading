@@ -44,7 +44,8 @@ def _isolate_state_dirs(tmp_path, monkeypatch):
     """
     from pathlib import Path as _P
     isolated_state = tmp_path / "state_v3"
-    isolated_state.mkdir(exist_ok=True)
+    # 2026-04-25: mkdir は行わない (個別 test の `_clean_state` fixture と競合するため)
+    # 各モジュール (kill_switch.activate 等) が自身で parent.mkdir(exist_ok=True) する
     hwm_path = tmp_path / "moomoo_hwm.json"
     monkeypatch.setenv("TRADING_STATE_DIR", str(isolated_state))
     monkeypatch.setenv("TRADING_MOOMOO_HWM_PATH", str(hwm_path))
