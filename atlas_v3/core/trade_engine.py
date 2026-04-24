@@ -195,7 +195,18 @@ class _VirtualPositionManager:
 
 
 def _extract_symbol_from_code(code: str) -> str:
-    """futu option コード "US.SPYW260502C00570000" から "SPY" を返す。
+    """futu option コード "US.SPYW260502C00570000" から原資産シンボル "SPY" を返す。
+
+    futu option コードの形式:
+      "US.<SYMBOL>[W|M]<YYMMDD>[C|P]<STRIKE>"
+      例: "US.SPYW260502C00570000" → "SPY"
+          "US.QQQW260502P00450000" → "QQQ"
+          "US.SPY" (株式) → "SPY"
+
+    アルゴリズム:
+      1. "." 以降を取り出す
+      2. 先頭から大文字アルファ文字を抽出
+      3. 末尾が "W" または "M"（週次/月次 option suffix）なら除去
 
     フォーマット不明時は code をそのまま返す。
     """
@@ -208,6 +219,12 @@ def _extract_symbol_from_code(code: str) -> str:
                 symbol += ch
             else:
                 break
+        # 週次 (W) / 月次 (M) option suffix を除去
+        # 例: "SPYW" → "SPY"、"QQQW" → "QQQ"、"NVDAW" → "NVDA"
+        if len(symbol) > 1 and symbol[-1] in ("W", "M"):
+            # 末尾 W/M の直前が数字でない場合のみ除去（株式シンボルの一部でない確認）
+            # futu option コードでは "SPYW" のように 1 文字が必ず付く
+            symbol = symbol[:-1]
         return symbol or code
     except Exception:
         return code

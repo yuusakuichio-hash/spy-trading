@@ -373,7 +373,14 @@ def test_check_exit_iv_crush(tmp_path):
     mock_mkt.get_option_greeks.side_effect = lambda code: (
         {"iv": 0.25, "last": 0.25} if "FRONT" in code else {"iv": 0.40, "last": 0.55}
     )
-    with patch("atlas_v3.bots.engines.calendar_native.CALENDAR_PNL_FILE", tmp_path / "pnl.json"):
+    # 10:30 ET — フォースクローズ時刻 (15:45) よりはるかに前
+    fake_now = datetime.datetime(2026, 4, 25, 10, 30, 0, tzinfo=ET)
+    with patch("atlas_v3.bots.engines.calendar_native.CALENDAR_PNL_FILE", tmp_path / "pnl.json"), \
+         patch("atlas_v3.bots.engines.calendar_native.datetime") as mock_dt, \
+         patch("atlas_v3.bots.engines.calendar_native._is_early_close_today", return_value=False):
+        mock_dt.datetime.now.return_value = fake_now
+        mock_dt.timedelta = datetime.timedelta
+        mock_dt.datetime.fromisoformat = datetime.datetime.fromisoformat
         eng = CalendarNativeEngine(mkt=mock_mkt, dry_test=False)
         pos = CalendarNativePosition(
             front_code="US.SPY_FRONT_260417C560000",
@@ -382,6 +389,7 @@ def test_check_exit_iv_crush(tmp_path):
             front_entry_price=0.30, back_entry_price=0.60,
             front_iv=0.30,
         )
+        pos.entry_time = "2026-04-25T10:00:00+00:00"
         eng.position = pos
         result = eng.check_exit()
     assert result is not None
@@ -397,7 +405,14 @@ def test_check_exit_max_loss(tmp_path):
     mock_mkt.get_option_greeks.side_effect = lambda code: (
         {"iv": 0.30, "last": 0.20} if "FRONT" in code else {"iv": 0.40, "last": 0.605}
     )
-    with patch("atlas_v3.bots.engines.calendar_native.CALENDAR_PNL_FILE", tmp_path / "pnl.json"):
+    # 10:30 ET — フォースクローズ時刻よりはるかに前
+    fake_now = datetime.datetime(2026, 4, 25, 10, 30, 0, tzinfo=ET)
+    with patch("atlas_v3.bots.engines.calendar_native.CALENDAR_PNL_FILE", tmp_path / "pnl.json"), \
+         patch("atlas_v3.bots.engines.calendar_native.datetime") as mock_dt, \
+         patch("atlas_v3.bots.engines.calendar_native._is_early_close_today", return_value=False):
+        mock_dt.datetime.now.return_value = fake_now
+        mock_dt.timedelta = datetime.timedelta
+        mock_dt.datetime.fromisoformat = datetime.datetime.fromisoformat
         eng = CalendarNativeEngine(mkt=mock_mkt, dry_test=False)
         pos = CalendarNativePosition(
             front_code="US.SPY_FRONT_260417C560000",
@@ -406,6 +421,7 @@ def test_check_exit_max_loss(tmp_path):
             front_entry_price=0.30, back_entry_price=0.60,
             front_iv=0.30,
         )
+        pos.entry_time = "2026-04-25T10:00:00+00:00"
         eng.position = pos
         result = eng.check_exit()
     assert result is not None

@@ -428,9 +428,9 @@ class TestExecuteEntry:
             "atlas_v3.bots.engines.straddle_buy_native.kill_switch_is_active",
             return_value=False,
         ), patch(
-            "atlas_v3.bots.engines.straddle_buy_native.get_current_price_with_fallback",
-            return_value=(560.0, "mkt"),
-        ):
+            "atlas_v3.bots.engines.straddle_buy_native._is_past_entry_cutoff",
+            return_value=False,
+        ), patch.object(engine, "_get_underlying_price", return_value=560.0):
             pos = engine.execute_entry()
         assert pos is None
 
@@ -441,6 +441,9 @@ class TestExecuteEntry:
         engine = StraddleBuyNativeEngine(mkt=mkt, eng=eng, paper=True, dry_test=False)
         with patch(
             "atlas_v3.bots.engines.straddle_buy_native.kill_switch_is_active",
+            return_value=False,
+        ), patch(
+            "atlas_v3.bots.engines.straddle_buy_native._is_past_entry_cutoff",
             return_value=False,
         ), patch.object(engine, "_get_underlying_price", return_value=560.0):
             pos = engine.execute_entry()
@@ -454,6 +457,9 @@ class TestExecuteEntry:
         engine = StraddleBuyNativeEngine(mkt=mkt, eng=eng, paper=True, dry_test=False)
         with patch(
             "atlas_v3.bots.engines.straddle_buy_native.kill_switch_is_active",
+            return_value=False,
+        ), patch(
+            "atlas_v3.bots.engines.straddle_buy_native._is_past_entry_cutoff",
             return_value=False,
         ), patch.object(engine, "_get_underlying_price", return_value=560.0):
             pos = engine.execute_entry()
@@ -599,7 +605,9 @@ class TestCheckHedge:
         """mock engine では place_buy が呼ばれることを確認。"""
         pos = _make_position()
         mock_engine.position = pos
-        mock_engine.today_vix = 30.0  # band=CRISIS=0.10 < 0.22
+        # mkt.get_vix() を 30.0 に設定 → band=CRISIS=0.10 < delta=0.22 → ヘッジ発動
+        mock_engine.mkt.get_vix.return_value = 30.0
+        mock_engine.today_vix = 30.0
         with patch.object(mock_engine, "_get_portfolio_delta", return_value=0.22), \
              patch.object(mock_engine, "_get_underlying_price", return_value=560.0):
             result = mock_engine.check_hedge()

@@ -102,24 +102,28 @@ def _make_engine(
     price_ret: float = 560.0,
     atr_ret: float = 5.0,
     sma_ret: Optional[float] = 555.0,
-    lower_mid: float = 1.50,
-    atm_mid: float = 2.50,
-    upper_mid: float = 1.50,
+    lower_mid: float = 2.50,   # lower wing (near-ATM) is more expensive -> positive debit
+    atm_mid: float = 1.50,     # ATM sell price
+    upper_mid: float = 2.50,   # upper wing price
     place_result: Optional[str] = "OID_TEST",
     early_close: bool = False,
     cash: float = 15_000.0,
 ) -> ButterflyNativeEngine:
-    """テスト用エンジンを生成する（全 mock をインライン定義）。"""
+    """テスト用エンジンを生成する（全 mock をインライン定義）。
+
+    デフォルト価格設定: lower_mid=2.50 / atm_mid=1.50 / upper_mid=2.50
+    -> net_debit = 2.50 + 2.50 - 2*1.50 = 2.0 (正値 = debit エントリー成立)
+    """
 
     class _Mkt:
         def get_current_price(self, symbol):    return price_ret
         def get_ivr(self, symbol):              return ivr_ret
         def get_ivr_percentile_low(self, symbol): return 30.0
         def get_option_mid(self, code):
-            # lower / upper -> lower_mid / upper_mid, ATM -> atm_mid
-            if "lower" in code or code.endswith("C00558000") or "558" in code:
+            # 558 系 -> lower_mid, 562 系 -> upper_mid, else -> atm_mid
+            if "558" in code:
                 return lower_mid
-            if "upper" in code or "562" in code:
+            if "562" in code:
                 return upper_mid
             return atm_mid
         def get_sma(self, symbol, period=20):   return sma_ret
