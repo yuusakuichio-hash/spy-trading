@@ -3059,6 +3059,18 @@ class MarketData:
         """
         if not FUTU_AVAILABLE or not self.quote_ctx:
             return
+        # 2026-04-25 SYMBOL_MISMATCH 根治: 呼出側が SPY price を渡すが
+        # self.underlying_code は SPX 等の場合があり SPX chain に SPY 714 center で
+        # 判定すると全 strike 外で銘柄混入疑い skip が全発動していた。
+        # → 当該 underlying の snapshot から動的取得で上書き
+        try:
+            _uret, _usnap = self.quote_ctx.get_market_snapshot([self.underlying_code])
+            if _uret == RET_OK and not _usnap.empty:
+                _new_price = float(_usnap.iloc[0].get("last_price", 0) or 0)
+                if _new_price > 0:
+                    spy_price = _new_price
+        except Exception as _upe:
+            log.debug(f"[ATMSubscribe] underlying price re-fetch failed: {_upe}")
         if spy_price <= 0:
             return
 
@@ -5522,7 +5534,15 @@ class DemoLogger:
             if ret != RET_OK or chain_df.empty:
                 return {"label": variant["label"], "error": "chain_failed"}
             # [ChainGuard] center_strike±20%フィルタで銘柄混入を除外
-            spy_price_ref = getattr(self, "_cached_spy_price", None) or 0
+            # 2026-04-25 Redteam CRITICAL #1 根治: _cached_spy_price は代入箇所が存在せず常に 0
+            # → 銘柄自身 (self.underlying_code) の snapshot から動的取得
+            spy_price_ref = 0
+            try:
+                _cg_ret, _cg_snap = self.quote_ctx.get_market_snapshot([self.underlying_code])
+                if _cg_ret == RET_OK and not _cg_snap.empty:
+                    spy_price_ref = float(_cg_snap.iloc[0].get("last_price", 0) or 0)
+            except Exception as _cg_e:
+                log.warning(f"[ChainGuard] center price fetch failed for {self.underlying_code}: {_cg_e}")
             if spy_price_ref > 0:
                 chain_df = chain_df.copy()
                 chain_df["strike_price"] = chain_df["strike_price"].astype(float)
@@ -17339,7 +17359,9 @@ class SPYCreditSpreadBot:
                     if _ss_in_window:
                         _vix_ss = self.mkt.get_vix() or 20.0
                         _ivr_ss = self.mkt.calc_ivr(_vix_ss) or 0.0
-                        _ivr_hi = (self.mkt.get_ivr_percentiles() or {}).get("p70", STRANGLE_SELL_IVR_MIN)
+                        _, _ivr_hi = self.mkt.get_ivr_percentiles()
+                        if _ivr_hi is None or _ivr_hi <= 0:
+                            _ivr_hi = STRANGLE_SELL_IVR_MIN
                         _sym_ss = self.strangle_sell_engine.symbol
                         if StrangleSellEngine.should_trade_today(
                             _sym_ss, _vix_ss, _ivr_ss, _ivr_hi, paper=self.paper
