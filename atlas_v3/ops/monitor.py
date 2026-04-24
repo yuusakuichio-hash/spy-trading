@@ -732,11 +732,9 @@ class MonitorDaemon:
         """
         try:
             import common.pushover_client as _pushover
-            kwargs: dict = {"title": title, "message": message, "priority": priority}
-            if priority == 2:
-                kwargs["retry"] = 60
-                kwargs["expire"] = 600
-            result = _pushover.send(**kwargs)
+            # priority=2 時の retry/expire は common.pushover_client.send() 内で自動付与される
+            # (common/pushover_client.py docstring "priority: 2の場合 retry/expire を自動付与")
+            result = _pushover.send(title=title, message=message, priority=priority)
 
             # RT-R2-007: send() が dict を返す場合は status/request を検証
             if isinstance(result, dict):
