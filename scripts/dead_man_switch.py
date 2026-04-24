@@ -287,6 +287,74 @@ def _check_infra() -> None:
     else:
         log.info("infra check: atlas-paper OK (%s)", _ATLAS_PAPER_JOB)
 
+    # --- moomoo OpenD preemptive relogin (案 F) ---
+    # 12h 周期で launchd が実行 → heartbeat が 25h 以上古い or 連続 failure なら異常
+    _check_opend_relogin_heartbeat(_alert_p1)
+
+
+_RELOGIN_HEARTBEAT_FILE = _TRADING_DIR / "data" / "state_v3" / "opend_relogin_heartbeat.jsonl"
+_RELOGIN_STALE_THRESHOLD_SECS = 25 * 3600  # 25h (12h 周期 + 1h grace)
+
+
+def _check_opend_relogin_heartbeat(alert_fn) -> None:
+    """案 F preemptive relogin の heartbeat 監視。
+
+    - heartbeat file が存在しない → warning のみ（初回セットアップ前の可能性）
+    - 最新 heartbeat が 25h 以上古い → P1 alert（launchd 発火失敗 or スクリプト死）
+    - 最新 heartbeat が failure で 2 連続以上 → P1 alert（認証失敗継続）
+    """
+    if not _RELOGIN_HEARTBEAT_FILE.exists():
+        log.info("infra check: opend_relogin heartbeat file not yet created (initial setup?)")
+        return
+
+    try:
+        lines = _RELOGIN_HEARTBEAT_FILE.read_text(encoding="utf-8").splitlines()
+        if not lines:
+            return
+        last_record = None
+        recent_failures = 0
+        for line in reversed(lines[-5:]):
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            if last_record is None:
+                last_record = rec
+            if rec.get("status") == "failure":
+                recent_failures += 1
+            else:
+                break
+        if last_record is None:
+            return
+
+        # age 判定
+        ts_str = last_record.get("ts", "")
+        try:
+            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            age_secs = (datetime.now(timezone.utc) - ts).total_seconds()
+        except Exception:
+            age_secs = 0
+
+        if age_secs > _RELOGIN_STALE_THRESHOLD_SECS:
+            alert_fn(
+                "[SYS] moomoo OpenD relogin STALE",
+                f"preemptive relogin heartbeat が {int(age_secs/3600)}h 更新なし。"
+                f" launchd com.soralab.moomoo-opend-relogin の発火失敗 or script 死の疑い。"
+                f" 最終 ts: {ts_str}",
+            )
+        elif recent_failures >= 2:
+            alert_fn(
+                "[SYS] moomoo OpenD relogin 連続失敗",
+                f"直近 relogin が {recent_failures} 回連続失敗。"
+                f" Keychain credential 確認 or OpenD 手動再起動が必要。"
+                f" 最終 reason: {last_record.get('details', {}).get('error', 'unknown')}",
+            )
+        else:
+            log.info("infra check: opend_relogin OK (age=%.0fs, last_status=%s)",
+                     age_secs, last_record.get("status", ""))
+    except Exception as exc:
+        log.warning("opend_relogin heartbeat check failed: %s", exc)
+
 
 # ── JSONL ローテーション (7日以上古い行を削除) ───────────────────────────────
 
