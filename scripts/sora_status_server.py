@@ -263,6 +263,63 @@ def find_all_active_subagents(now_ts: float, max_age_sec: int = 1800) -> list[di
     return agents
 
 
+def _render_phase_section() -> str:
+    """Sprint phase 進捗表示（data/sprint_state.json 読み込み）。"""
+    state_file = PROJECT_ROOT / "data" / "sprint_state.json"
+    if not state_file.exists():
+        return ""
+    try:
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+
+    current_id = state.get("current_phase_id", "")
+    current_label = state.get("current_phase_label", "")
+    overall_note = state.get("overall_note", "")
+    phases = state.get("phases", [])
+
+    status_style = {
+        "completed": ("✅", "#22c55e", "completed"),
+        "ready (ゆうさくさん手動実行待ち)": ("⏸", "#f59e0b", "ready-user-action"),
+        "code ready (futu install + login 待ち)": ("⏸", "#f59e0b", "ready-user-action"),
+        "pending": ("⏳", "#6b7280", "pending"),
+        "pending (Day 1/2 完了後)": ("⏳", "#6b7280", "pending"),
+    }
+
+    rows = []
+    for p in phases:
+        is_current = (p.get("id") == current_id)
+        stat = p.get("status", "pending")
+        icon, color, _ = status_style.get(stat, ("•", "#9ca3af", ""))
+        border = f"border:2px solid #f59e0b" if is_current else "border-left:3px solid " + color
+        marker = "▶ " if is_current else ""
+        blocker = p.get("blocker", "")
+        blocker_html = f"<div class='phase-blocker'>⚠ {html.escape(blocker)}</div>" if blocker else ""
+        artifact = p.get("artifact", "")
+        artifact_html = f"<div class='phase-artifact'>{html.escape(artifact)}</div>" if artifact else ""
+        rows.append(f"""
+        <div class="phase-row" style="{border}">
+            <div class="phase-line">
+                <span class="phase-icon" style="color:{color}">{icon}</span>
+                <b>{marker}{html.escape(p.get("name", ""))}</b>
+                <span class="phase-status" style="color:{color}">{html.escape(stat)}</span>
+            </div>
+            <div class="phase-purpose">{html.escape(p.get("purpose", ""))}</div>
+            {artifact_html}
+            {blocker_html}
+        </div>
+        """)
+
+    return f"""
+<div class="sec">
+<div class="sec-title">Sprint Phase Progress</div>
+<div class="phase-header">📍 Now: <b>{html.escape(current_label)}</b></div>
+<div class="phase-note">{html.escape(overall_note)}</div>
+{''.join(rows)}
+</div>
+"""
+
+
 def build_html() -> str:
     now_utc = datetime.now(timezone.utc)
     now_jst = (now_utc + timedelta(hours=9)).strftime("%H:%M:%S")
@@ -462,6 +519,15 @@ def build_html() -> str:
   .upcoming{{margin:4px 0;padding-left:20px;color:#9ca3af}}
   .upcoming li{{font-size:12px;margin-bottom:3px}}
   .upcoming li b{{color:#cbd5e1}}
+  .phase-header{{font-size:13px;color:#fde68a;margin-bottom:6px;padding:6px;background:#451a03;border-radius:4px}}
+  .phase-note{{font-size:11px;color:#9ca3af;margin-bottom:8px;font-style:italic}}
+  .phase-row{{background:#111827;padding:8px 10px;margin-bottom:6px;border-radius:6px}}
+  .phase-line{{font-size:12px;color:#e5e7eb;margin-bottom:3px}}
+  .phase-icon{{margin-right:4px}}
+  .phase-status{{font-size:10px;margin-left:8px;opacity:0.8}}
+  .phase-purpose{{font-size:11px;color:#9ca3af;margin-top:2px;padding-left:20px}}
+  .phase-artifact{{font-size:10px;color:#6b7280;padding-left:20px;margin-top:2px}}
+  .phase-blocker{{font-size:11px;color:#fca5a5;padding-left:20px;margin-top:3px;background:#450a0a;padding:4px 6px;border-radius:3px}}
   @keyframes pulse{{0%,100%{{opacity:1}}50%{{opacity:0.75}}}}
   .line{{font-size:11px;color:#9ca3af;margin:4px 0;word-break:break-all}}
   .sec{{margin-top:10px;border-top:1px solid #374151;padding-top:8px}}
@@ -481,6 +547,8 @@ def build_html() -> str:
 
 {sora_banner}
 {sora_line}
+
+{_render_phase_section()}
 
 <div class="sec">
 <div class="sec-title">Recent agent activity</div>
