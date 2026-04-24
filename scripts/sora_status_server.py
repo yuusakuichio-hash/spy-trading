@@ -275,7 +275,44 @@ def _render_tunnel_url() -> str:
 """
 
 
-def _get_public_tunnel_url() -> Optional[str]:
+def _render_supervisor_status() -> str:
+    """Supervisor daemon + auto_fork 状況をヘッダ下に表示。"""
+    state_file = PROJECT_ROOT / "data" / "state_v3" / "supervisor_last_kick.json"
+    log_file = PROJECT_ROOT / "data" / "logs" / "supervisor.log"
+    last_kick = "n/a"
+    last_probe_line = ""
+    auto_fork_enabled = False
+    try:
+        if state_file.exists():
+            st = json.loads(state_file.read_text(encoding="utf-8"))
+            last_kick = st.get("last_kick_ts", "n/a")[:19].replace("T", " ")
+    except Exception:
+        pass
+    try:
+        if log_file.exists():
+            lines = [l for l in log_file.read_text(encoding="utf-8", errors="replace").splitlines() if l.strip()]
+            if lines:
+                last_probe_line = lines[-1][-120:]
+    except Exception:
+        pass
+    # auto_fork today count
+    today = datetime.now().strftime("%Y%m%d")
+    fork_today = 0
+    try:
+        for p in (PROJECT_ROOT / "data" / "logs").glob(f"auto_fork_{today}_*.log"):
+            fork_today += 1
+    except Exception:
+        pass
+    color = "#22c55e" if "active" in last_probe_line else ("#f59e0b" if "IDLE" in last_probe_line else "#6b7280")
+    return f"""
+<div class="sup-status" style="border-left:3px solid {color}">
+  👁 Supervisor: <span style="color:{color}">{html.escape(last_probe_line or "(no probe yet)")}</span>
+  <div class="sup-sub">last kick: {html.escape(last_kick)} / auto_fork today: {fork_today}/6</div>
+</div>
+"""
+
+
+def _get_public_tunnel_url():  # -> Optional[str]（typing import 省略のため annotation 削除）
     """cloudflared quick tunnel のログから公開 URL を抽出。"""
     log_file = PROJECT_ROOT / "data" / "logs" / "cloudflared_tunnel.log"
     if not log_file.exists():
@@ -558,6 +595,8 @@ def build_html() -> str:
   .phase-blocker{{font-size:11px;color:#fca5a5;padding-left:20px;margin-top:3px;background:#450a0a;padding:4px 6px;border-radius:3px}}
   .tunnel-url{{font-size:11px;color:#fde68a;padding:4px 8px;background:#1e3a8a;border-radius:4px;margin-bottom:8px;word-break:break-all}}
   .tunnel-url a{{color:#bae6fd;text-decoration:none}}
+  .sup-status{{font-size:10px;color:#cbd5e1;padding:4px 8px;background:#1f2937;border-radius:4px;margin-bottom:8px}}
+  .sup-sub{{font-size:9px;color:#6b7280;margin-top:2px}}
   @keyframes pulse{{0%,100%{{opacity:1}}50%{{opacity:0.75}}}}
   .line{{font-size:11px;color:#9ca3af;margin:4px 0;word-break:break-all}}
   .sec{{margin-top:10px;border-top:1px solid #374151;padding-top:8px}}
@@ -575,6 +614,7 @@ def build_html() -> str:
   <div class="now">{now_jst} / 5s refresh</div>
 </div>
 {_render_tunnel_url()}
+{_render_supervisor_status()}
 
 {sora_banner}
 {sora_line}
