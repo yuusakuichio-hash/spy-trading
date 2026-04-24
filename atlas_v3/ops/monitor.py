@@ -1052,6 +1052,13 @@ class MonitorDaemon:
                     latency_ms=metrics["latency_ms"],
                 )
                 consecutive_failures = 0  # 成功したらリセット
+                # S-6 fix 2026-04-24: Bot 層 (atlas_agent) なしの paper monitor 単体起動でも
+                # heartbeat を打つ。_fetch_metrics + check_once 成功 = Monitor 層の liveness
+                # 証明と見なし self-heartbeat。元設計では Bot 層から record_heartbeat を期待
+                # していたが、yfinance provider 単体運用では Bot 層なし → 300s で kill_switch
+                # 誤発動の構造バグを解消。Bot 層存在時は Bot 側からの record_heartbeat が上書き
+                # する設計のため互換性維持。
+                self.record_heartbeat()
             except Exception as e:
                 consecutive_failures += 1
                 log.error(
