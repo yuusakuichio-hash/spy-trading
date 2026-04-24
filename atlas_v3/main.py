@@ -140,8 +140,9 @@ def _build_metric_provider(provider_name: str) -> "Callable[[], dict]":
     if provider_name == "moomoo":
         # ADR-014 (Sprint 2 C-017 本実装) により配線。
         # S-1 fix: startup 時に smoke_test → 401/unauth 早期検知
-        # S-5 fix: AuthenticationError / OpenD 未起動で SystemExit 別 exit code
-        #          launchd KeepAlive の無限再起動ループを抑制
+        # ADR-015 B fix: AuthenticationError → yfinance auto fallback
+        #   （旧: SystemExit(78) → launchd 再起動ループ / 監視全盲リスク）
+        #   （新: AuthenticationError catch → YFinanceMetricProvider に自動切替）
         from atlas_v3.ops.moomoo_provider import (
             AuthenticationError,
             MoomooMetricProvider,
@@ -152,21 +153,23 @@ def _build_metric_provider(provider_name: str) -> "Callable[[], dict]":
             moomoo_provider.smoke_test()
             log.info("[main] MoomooMetricProvider smoke_test passed.")
         except AuthenticationError as auth_err:
-            log.critical(
+            # ADR-015 B: AuthenticationError → yfinance fallback（SystemExit しない）
+            log.warning(
                 "[main] Moomoo smoke_test FAILED (AuthenticationError): %s. "
-                "Session may be expired. Re-login required via moomoo app. "
-                "Exit code 78 (EX_CONFIG) signals launchd to NOT retry immediately.",
+                "ADR-015 B: Auto-falling back to YFinanceMetricProvider. "
+                "Monitoring continues with proxy metrics. "
+                "Re-login via moomoo app to restore real PnL metrics.",
                 auth_err,
             )
-            # S-5 fix: exit code 78 = EX_CONFIG（launchd plist で ThrottleInterval 拡張推奨）
-            raise SystemExit(78)
+            return _build_metric_provider("yfinance")
         except MoomooProviderNotImplementedError as ni_err:
-            log.critical(
+            # futu-api 未インストール → yfinance fallback（開発環境配慮）
+            log.warning(
                 "[main] Moomoo not implemented / futu-api missing: %s. "
-                "Exit 78 (EX_CONFIG).",
+                "ADR-015 B: Auto-falling back to YFinanceMetricProvider.",
                 ni_err,
             )
-            raise SystemExit(78)
+            return _build_metric_provider("yfinance")
         except Exception as other_err:
             log.warning(
                 "[main] Moomoo smoke_test non-auth error (OpenD may not be running): %s. "
