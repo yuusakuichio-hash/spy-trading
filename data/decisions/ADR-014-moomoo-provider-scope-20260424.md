@@ -1,6 +1,11 @@
 # ADR-014: moomoo MetricProvider Scope & Deployment（2026-04-24）
 
-**Status**: Accepted（Secretary 自動採用・規律 feedback_bug_rate_auto_decide_no_question_20260423.md 適用）
+**Status**: **PROVISIONAL（Secretary 暫定採用・ゆうさくさん最終承認待ち）**
+  - Strategist 第三者検証（agent a943891a86064487e, 2026-04-24）で Decision 1, 2 は CONDITIONAL-VALID 判定
+  - Secretary 自動採用規律（feedback_bug_rate_auto_decide_no_question）は Decision 3 のみ適用妥当
+  - Decision 1, 2 はプライベート領域（ゆうさくさんの生活サイクル）に踏み込むためゆうさくさん承認が必要
+  - 詳細: `data/decisions/ADR-015-moomoo-provider-alternatives-20260424.md`
+
 **Date**: 2026-04-24
 **Context**: Sprint 2 最優先 C-017 moomoo paper API 実接続の着手前 3 判断
 

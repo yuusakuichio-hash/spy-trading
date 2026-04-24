@@ -1,8 +1,8 @@
 {
-  "last_updated": "2026-04-24 12:30 JST",
+  "last_updated": "2026-04-24 13:05 JST",
   "current_phase_id": "2-D1-wait",
-  "current_phase_label": "Sprint 2 Day 1 着手待機（ゆうさくさん lock 実行待ち）",
-  "overall_note": "Sprint 2 前倒し 90%+ 完遂・ゆうさくさん手動 action 3 点で本番着手可",
+  "current_phase_label": "Sprint 2 Day 1 着手待機 + ADR-015 判断待ち",
+  "overall_note": "Sprint 2 前倒し 95%+ / 23 commits / caffeinate & cloudflared 常駐化済 / ADR-014 は Strategist 検証で Decision 1・2 要承認",
   "phases": [
     {
       "id": "1A",
@@ -24,6 +24,14 @@
       "purpose": "carryover 消化 + allowlist script + moomoo 本実装 + r8 指摘修正",
       "status": "completed",
       "artifact": "本セッション 15 commits (2e35d14 → d20e225)"
+    },
+    {
+      "id": "adr-015-wait",
+      "name": "ADR-015 判断: ADR-014 代替案 A/B/C/D 選択",
+      "purpose": "Strategist 検証で Decision 1/2 越権指摘・ゆうさくさん承認必要",
+      "status": "ready (ゆうさくさん手動実行待ち)",
+      "blocker": "data/decisions/ADR-015-moomoo-provider-alternatives-20260424.md を見て A/B/C/D 選択",
+      "eta_hr": 0.1
     },
     {
       "id": "2-D1-wait",
