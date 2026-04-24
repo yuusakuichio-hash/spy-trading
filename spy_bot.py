@@ -17338,7 +17338,7 @@ class SPYCreditSpreadBot:
                     )
                     if _ss_in_window:
                         _vix_ss = self.mkt.get_vix() or 20.0
-                        _ivr_ss = self.mkt.calc_ivr() or 0.0
+                        _ivr_ss = self.mkt.calc_ivr(_vix_ss) or 0.0
                         _ivr_hi = (self.mkt.get_ivr_percentiles() or {}).get("p70", STRANGLE_SELL_IVR_MIN)
                         _sym_ss = self.strangle_sell_engine.symbol
                         if StrangleSellEngine.should_trade_today(
