@@ -1,0 +1,187 @@
+"""atlas_v3/bots/trader.py — AtlasTrader: spy_bot.SPYCreditSpreadBot の薄い wrapper。
+
+設計方針
+--------
+- spy_bot.py は schg lock 下で変更不可。全動作は import + delegate で実現。
+- 将来 Engine 移植時の hook 点を set_engine_override() として確保。
+- logger 名は "atlas.bots.trader" で spy_bot 内部 logger と分離。
+- stop() / status() は spy_bot に同名メソッドが存在しないため wrapper 内で実装。
+"""
+from __future__ import annotations
+
+import logging
+import threading
+from typing import Any, Optional
+
+log = logging.getLogger("atlas.bots.trader")
+
+
+class AtlasTrader:
+    """spy_bot.SPYCreditSpreadBot への delegate wrapper。
+
+    Parameters
+    ----------
+    paper : bool
+        ペーパーモード（デフォルト True）。
+    test_connect : bool
+        接続テストのみで終了するフラグ。
+    dry_test : bool
+        futu 接続なし・市場時間外でも全ロジックをテストするモード。
+    shadow : bool
+        Shadow Mode: 全 API コールを tests/recorded/ に JSONL 記録。
+    disable_orb : bool
+        ORB 買い戦略を無効化する（--no-orb 相当）。
+    disable_calendar : bool
+        カレンダースプレッド戦略を無効化する（--no-calendar 相当）。
+    disable_multi : bool
+        マルチ銘柄同時運用を無効化する（--no-multi 相当）。
+    """
+
+    def __init__(
+        self,
+        paper: bool = True,
+        test_connect: bool = False,
+        dry_test: bool = False,
+        shadow: bool = False,
+        disable_orb: bool = False,
+        disable_calendar: bool = False,
+        disable_multi: bool = False,
+    ) -> None:
+        self._paper = paper
+        self._test_connect = test_connect
+        self._dry_test = dry_test
+        self._shadow = shadow
+        self._disable_orb = disable_orb
+        self._disable_calendar = disable_calendar
+        self._disable_multi = disable_multi
+
+        # Engine override: 将来の移植 hook 点
+        # { engine_name: impl } — run_forever() 呼び出し前にセットすれば inner に反映予定
+        self._engine_overrides: dict[str, Any] = {}
+
+        # 実行中フラグ（stop() から参照）
+        self._running = False
+        self._lock = threading.Lock()
+
+        # spy_bot グローバルフラグを inner 生成前に設定する
+        # （inner.__init__ 内で ENABLE_* グローバルを参照するため順序が重要）
+        self._apply_global_flags()
+
+        log.info(
+            "AtlasTrader init: paper=%s dry_test=%s shadow=%s "
+            "disable_orb=%s disable_calendar=%s disable_multi=%s",
+            paper, dry_test, shadow, disable_orb, disable_calendar, disable_multi,
+        )
+
+        import spy_bot as _sb  # noqa: PLC0415 — 遅延 import でテスト差し替え可能にする
+        self._sb = _sb
+
+        self._inner: Any = _sb.SPYCreditSpreadBot(
+            paper=paper,
+            test_connect=test_connect,
+            dry_test=dry_test,
+            no_multi=disable_multi,
+            shadow=shadow,
+        )
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    def _apply_global_flags(self) -> None:
+        """spy_bot モジュール内グローバルフラグを引数に合わせて設定する。
+
+        spy_bot.SPYCreditSpreadBot.__init__ は ENABLE_ORB / ENABLE_CALENDAR /
+        DRY_TEST といったモジュールレベル変数を参照するため、inner 生成前に
+        モジュール側を書き換える必要がある。
+        """
+        try:
+            import spy_bot as _sb  # noqa: PLC0415
+            if self._dry_test:
+                _sb.DRY_TEST = True
+                log.info("[DRY-TEST] DRY_TEST グローバル有効化")
+            if self._disable_orb:
+                _sb.ENABLE_ORB = False
+                log.info("[ORB] ENABLE_ORB グローバル無効化")
+            if self._disable_calendar:
+                _sb.ENABLE_CALENDAR = False
+                log.info("[Calendar] ENABLE_CALENDAR グローバル無効化")
+            if self._disable_multi:
+                _sb.ENABLE_MULTI_SYMBOL = False
+                log.info("[Multi] ENABLE_MULTI_SYMBOL グローバル無効化")
+        except ImportError:
+            # テスト環境で spy_bot が stub の場合は無視
+            log.debug("_apply_global_flags: spy_bot import skip (test stub?)")
+
+    # ------------------------------------------------------------------
+    # Engine override hook（将来移植用）
+    # ------------------------------------------------------------------
+
+    def set_engine_override(self, engine_name: str, impl: Any) -> None:
+        """将来 Engine 移植時の hook 点。
+
+        現状は _engine_overrides に記録するのみ。
+        Engine ごとの差し替えが必要になった時点で inner への反映処理を追加する。
+
+        Parameters
+        ----------
+        engine_name : str
+            エンジン識別子（例: "orb_engine", "calendar_engine"）。
+        impl : Any
+            差し替える Engine 実装インスタンス。
+        """
+        log.info("set_engine_override: engine=%s impl=%r", engine_name, impl)
+        self._engine_overrides[engine_name] = impl
+
+    def get_engine_override(self, engine_name: str) -> Optional[Any]:
+        """登録済みの Engine override を返す。未登録は None。"""
+        return self._engine_overrides.get(engine_name)
+
+    # ------------------------------------------------------------------
+    # 公開メソッド
+    # ------------------------------------------------------------------
+
+    def run_forever(self) -> None:
+        """inner.run_forever() を呼び出す（ブロッキング）。"""
+        with self._lock:
+            self._running = True
+        log.info("AtlasTrader.run_forever() — inner.run_forever() に委譲")
+        try:
+            self._inner.run_forever()
+        finally:
+            with self._lock:
+                self._running = False
+
+    def stop(self) -> None:
+        """実行中フラグをクリアする。
+
+        spy_bot.SPYCreditSpreadBot に stop() は存在しない。
+        将来 inner が stop() を実装した場合はここで呼び出す。
+        """
+        log.info("AtlasTrader.stop() called")
+        with self._lock:
+            self._running = False
+        # 将来対応: if hasattr(self._inner, "stop"): self._inner.stop()
+
+    def status(self) -> dict[str, Any]:
+        """現在の状態スナップショットを返す。
+
+        spy_bot.SPYCreditSpreadBot に status() は存在しないため、
+        公開属性から収集して dict として返す。
+        """
+        inner = self._inner
+        snap: dict[str, Any] = {
+            "running": self._running,
+            "paper": self._paper,
+            "dry_test": self._dry_test,
+            "shadow": self._shadow,
+            "disable_orb": self._disable_orb,
+            "disable_calendar": self._disable_calendar,
+            "disable_multi": self._disable_multi,
+            "engine_overrides": list(self._engine_overrides.keys()),
+        }
+        # inner の公開属性を安全に追加
+        for attr in ("traded_today", "_daily_loss_halted", "_running"):
+            if hasattr(inner, attr):
+                snap[f"inner.{attr}"] = getattr(inner, attr)
+        return snap

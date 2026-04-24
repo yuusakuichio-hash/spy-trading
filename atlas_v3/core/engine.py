@@ -385,20 +385,17 @@ class AtlasEngine:
             trigger_time=trigger_time,
         )
 
-        # C-r1-03: moomoo_breaker 状態チェック（state NotImplementedError は Sprint 1 実装待ち）
-        try:
-            breaker_state = moomoo_breaker.state
-            if breaker_state == "OPEN":
-                log.error(
-                    "[AtlasEngine] moomoo_breaker OPEN: 発注をブロック tactic=%s symbol=%s",
-                    tactic.tactic_name,
-                    symbol,
-                )
-                raise BrokerUnavailable(
-                    f"moomoo_breaker is OPEN: tactic={tactic.tactic_name!r} symbol={symbol!r}"
-                )
-        except NotImplementedError:
-            pass  # Sprint 1 実装待ち — state 未実装は pass（暫定）
+        # C-r1-03: moomoo_breaker 状態チェック — fail-closed (Sprint 1 state 実装済み)
+        breaker_state = moomoo_breaker.state
+        if breaker_state == "OPEN":
+            log.error(
+                "[AtlasEngine] moomoo_breaker OPEN: 発注をブロック tactic=%s symbol=%s",
+                tactic.tactic_name,
+                symbol,
+            )
+            raise BrokerUnavailable(
+                f"moomoo_breaker is OPEN: tactic={tactic.tactic_name!r} symbol={symbol!r}"
+            )
 
         request = OrderRequest(
             symbol=symbol,

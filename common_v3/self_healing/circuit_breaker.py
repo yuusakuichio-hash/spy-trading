@@ -25,12 +25,21 @@ Sprint 1-B Redteam r1 対応 (C-005 CRITICAL/HIGH):
   HIGH-4: __copy__ / __deepcopy__ を明示 raise
   HIGH-5: __init_subclass__ で __new__/__setattr__/__reduce__/_auto_recovery property も全禁止
 
+Sprint 1 state machine 実装:
+  - state プロパティ: CLOSED / OPEN / HALF_OPEN を返す（内部 counter ベース）
+  - call(fn, *args, **kwargs): OPEN → CircuitBreakerOpenError / CLOSED → fn 実行 /
+    fail 計上 / fail_max 到達で OPEN 遷移 / reset_timeout 経過で HALF_OPEN
+  - reset(approver): approver 検証後に state を CLOSED へ遷移
+  - reset_timeout パラメータ追加 (default=300.0 sec)
+  - 状態ストレージは WeakKeyDictionary closure に隠蔽 (frozen design 維持)
+
 禁則: auto_recovery=True での生成は RuntimeError (CircuitBreakerAutoRecoveryForbidden) で即停止
 理由: 自動復旧は "整備士のいない F1 カー" 化を招くため Gemini 直言に従い禁止
      (data/specs/v3/common_spec_v3_20260422.md B14 L360)
 """
 from __future__ import annotations
 
+import time
 import unicodedata
 from typing import Any, Callable, Literal
 from typing import runtime_checkable, Protocol
@@ -64,6 +73,25 @@ class CircuitBreakerFrozenViolation(TypeError):
 
     ADR-008 案 A: __setattr__ override により全代入を検出して raise。
     """
+
+
+class CircuitBreakerOpenError(RuntimeError):
+    """Circuit Breaker が OPEN 状態のため call() を拒否した。
+
+    Attributes:
+        name:           CircuitBreaker 識別名
+        reset_timeout:  HALF_OPEN 遷移までの設定秒数
+    """
+
+    def __init__(self, name: str, reset_timeout: float) -> None:
+        super().__init__(
+            f"CircuitBreaker {name!r} is OPEN: call blocked. "
+            f"reset_timeout={reset_timeout:.0f}s. "
+            "復帰は reset(approver='yuusaku') で人間承認してください。 "
+            "spec ref: data/specs/v3/common_spec_v3_20260422.md B14 L360"
+        )
+        self.name = name
+        self.reset_timeout = reset_timeout
 
 
 # ---------------------------------------------------------------------------
@@ -170,9 +198,13 @@ def _make_circuit_breaker_class() -> type:
     """CircuitBreaker クラスを closure 内で生成し sentinel と store を完全隠蔽する。
 
     closure 変数:
-      _sentinel          : __init__ 経由確認用 sentinel (CRITICAL-2)
-      _AR_STORE          : WeakKeyDictionary[instance, bool] (CRITICAL-1)
-      _INITIALIZED_STORE : WeakKeyDictionary[instance, bool] (CRITICAL-3)
+      _sentinel            : __init__ 経由確認用 sentinel (CRITICAL-2)
+      _AR_STORE            : WeakKeyDictionary[instance, bool] (CRITICAL-1)
+      _INITIALIZED_STORE   : WeakKeyDictionary[instance, bool] (CRITICAL-3)
+      _STATE_STORE         : WeakKeyDictionary[instance, str]  state machine 状態
+      _FAIL_COUNT_STORE    : WeakKeyDictionary[instance, int]  失敗カウンタ
+      _OPENED_AT_STORE     : WeakKeyDictionary[instance, float|None]  OPEN 遷移時刻
+      _RESET_TIMEOUT_STORE : WeakKeyDictionary[instance, float]  reset_timeout 秒
     """
     # CRITICAL-2: module 外から取得不能な closure-scope sentinel
     _sentinel: object = object()
@@ -182,6 +214,12 @@ def _make_circuit_breaker_class() -> type:
 
     # CRITICAL-3: 二重 __init__ 検出用 WeakKeyDictionary
     _INITIALIZED_STORE: WeakKeyDictionary = WeakKeyDictionary()
+
+    # Sprint 1 state machine — frozen design 維持のため全て WeakKeyDictionary に格納
+    _STATE_STORE: WeakKeyDictionary = WeakKeyDictionary()         # str: CLOSED/OPEN/HALF_OPEN
+    _FAIL_COUNT_STORE: WeakKeyDictionary = WeakKeyDictionary()    # int
+    _OPENED_AT_STORE: WeakKeyDictionary = WeakKeyDictionary()     # float | None
+    _RESET_TIMEOUT_STORE: WeakKeyDictionary = WeakKeyDictionary()  # float
 
     class CircuitBreaker:
         """Circuit Breaker 標準実装（frozen design / Sprint 1-B C-005）
@@ -205,8 +243,9 @@ def _make_circuit_breaker_class() -> type:
         Args:
             name:          CB 識別名（ログ・EICAS 通知で使用）
             fail_max:      OPEN に遷移するまでの失敗許容回数
-            backend:       外部 CB 実装（None の場合 Sprint 1 で内蔵 state machine 使用）
+            backend:       外部 CB 実装（None の場合内蔵 state machine 使用）
             auto_recovery: 自動復旧フラグ。**False 以外は禁止・即 raise**
+            reset_timeout: OPEN → HALF_OPEN に遷移するまでの秒数 (default=300.0)
 
         Raises:
             CircuitBreakerAutoRecoveryForbidden: auto_recovery is not False
@@ -287,6 +326,7 @@ def _make_circuit_breaker_class() -> type:
             fail_max: int = 3,
             backend: CircuitBreakerBackend | None = None,
             auto_recovery: bool = False,
+            reset_timeout: float = 300.0,
         ) -> None:
             # CRITICAL-3: 二重 __init__ 検出
             if _INITIALIZED_STORE.get(self, False):
@@ -325,6 +365,12 @@ def _make_circuit_breaker_class() -> type:
 
             # CRITICAL-1: _ar_store は slot ではなく WeakKeyDictionary に格納
             _AR_STORE[self] = False
+
+            # Sprint 1 state machine 初期化 — WeakKeyDictionary に格納
+            _STATE_STORE[self] = "CLOSED"
+            _FAIL_COUNT_STORE[self] = 0
+            _OPENED_AT_STORE[self] = None
+            _RESET_TIMEOUT_STORE[self] = float(reset_timeout)
 
             # sentinel を None で上書き（初期化完了）
             object.__setattr__(self, "_init_required", None)
@@ -409,6 +455,18 @@ def _make_circuit_breaker_class() -> type:
             )
 
         @property
+        def reset_timeout(self) -> float:
+            """OPEN → HALF_OPEN 遷移するまでの秒数（読み取り専用）"""
+            return _RESET_TIMEOUT_STORE.get(self, 300.0)
+
+        @reset_timeout.setter
+        def reset_timeout(self, value: float) -> None:
+            raise AttributeError(
+                "CircuitBreaker.reset_timeout is immutable after initialization. "
+                "frozen design 違反。"
+            )
+
+        @property
         def _auto_recovery(self) -> bool:
             """auto_recovery フラグ（常に False・読み取り専用）
             CRITICAL-1: WeakKeyDictionary (_AR_STORE) から読み取る
@@ -416,48 +474,100 @@ def _make_circuit_breaker_class() -> type:
             return _AR_STORE.get(self, False)
 
         # ------------------------------------------------------------------
-        # state — Sprint 1 で実装
+        # state — Sprint 1 実装
         # ------------------------------------------------------------------
 
         @property
         def state(self) -> Literal["CLOSED", "OPEN", "HALF_OPEN"]:
-            """現在の CB 状態（Sprint 1 で実装）"""
-            raise NotImplementedError(
-                "CircuitBreaker.state は Sprint 1 で実装予定です。"
-            )
+            """現在の CB 状態 (CLOSED / OPEN / HALF_OPEN) を返す。
+
+            OPEN かつ reset_timeout 経過時は自動的に HALF_OPEN に遷移する。
+            (auto_recovery=True の自動 CLOSED 復帰は行わない — spec B14 L360)
+            """
+            current = _STATE_STORE.get(self, "CLOSED")
+            if current == "OPEN":
+                opened_at = _OPENED_AT_STORE.get(self)
+                rt = _RESET_TIMEOUT_STORE.get(self, 300.0)
+                if opened_at is not None:
+                    elapsed = time.monotonic() - opened_at
+                    if elapsed >= rt:
+                        _STATE_STORE[self] = "HALF_OPEN"
+                        return "HALF_OPEN"
+            return current
 
         # ------------------------------------------------------------------
-        # call — Sprint 1 で実装
+        # call — Sprint 1 実装
         # ------------------------------------------------------------------
 
         def call(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
-            """保護対象の関数を CB ロジック下で実行（Sprint 1 で実装）"""
-            raise NotImplementedError(
-                "CircuitBreaker.call は Sprint 1 で実装予定です。"
-            )
+            """保護対象の関数を CB ロジック下で実行。
+
+            状態別動作:
+              OPEN      : CircuitBreakerOpenError を raise（発注物理 block）
+              CLOSED    : func を実行。失敗で fail_count 増加 / fail_max 到達で OPEN 遷移
+              HALF_OPEN : func を 1 回試行。成功 → CLOSED / 失敗 → OPEN 再遷移
+
+            Args:
+                func:     保護対象の callable
+                *args:    func に渡す位置引数
+                **kwargs: func に渡すキーワード引数
+
+            Returns:
+                func の戻り値
+
+            Raises:
+                CircuitBreakerOpenError: state が OPEN の場合
+                Exception: func が raise した例外はそのまま再 raise
+            """
+            current = self.state  # プロパティ呼出で OPEN→HALF_OPEN 遷移評価
+            cb_name = object.__getattribute__(self, "_name")
+            rt = _RESET_TIMEOUT_STORE.get(self, 300.0)
+            fail_max = object.__getattribute__(self, "_fail_max")
+
+            if current == "OPEN":
+                raise CircuitBreakerOpenError(name=cb_name, reset_timeout=rt)
+
+            try:
+                result = func(*args, **kwargs)
+            except Exception:
+                # 失敗カウント増加
+                _FAIL_COUNT_STORE[self] = _FAIL_COUNT_STORE.get(self, 0) + 1
+                fail_count = _FAIL_COUNT_STORE[self]
+
+                if current == "HALF_OPEN":
+                    # HALF_OPEN 中の失敗 → OPEN 再遷移
+                    _STATE_STORE[self] = "OPEN"
+                    _OPENED_AT_STORE[self] = time.monotonic()
+                elif fail_count >= fail_max and _STATE_STORE.get(self) != "OPEN":
+                    # CLOSED 中に fail_max 到達 → OPEN 遷移
+                    _STATE_STORE[self] = "OPEN"
+                    _OPENED_AT_STORE[self] = time.monotonic()
+                raise
+            else:
+                # 成功 → CLOSED に戻す・カウンタリセット
+                _STATE_STORE[self] = "CLOSED"
+                _FAIL_COUNT_STORE[self] = 0
+                _OPENED_AT_STORE[self] = None
+                return result
 
         # ------------------------------------------------------------------
-        # reset — approver 検証のみ実装・state 遷移は Sprint 1
+        # reset — approver 検証 + state 遷移 Sprint 1 実装
         # ------------------------------------------------------------------
 
         def reset(self, approver: str) -> None:
-            """OPEN 状態を CLOSED に戻す（人間承認必須）
-
-            Sprint 0.5: approver 検証のみ。state 遷移は Sprint 1 で実装。
+            """OPEN 状態を CLOSED に戻す（人間承認必須）。
 
             Args:
                 approver: 承認者識別子 (例: "yuusaku")
 
             Raises:
-                CircuitBreakerApproverInvalid: approver が不正
-                NotImplementedError: state 遷移は Sprint 1 で実装
+                CircuitBreakerApproverInvalid: approver が不正または whitelist 外
             """
             _validate_approver(approver)
-            # state 遷移は Sprint 1 で実装
-            raise NotImplementedError(
-                f"CircuitBreaker {self.name!r}: reset() の state 遷移は Sprint 1 で実装予定です。 "
-                f"approver={approver!r} の検証は合格しました。"
-            )
+            # state を CLOSED に戻す・カウンタリセット
+            _STATE_STORE[self] = "CLOSED"
+            _FAIL_COUNT_STORE[self] = 0
+            _OPENED_AT_STORE[self] = None
 
         def __repr__(self) -> str:
             return (
