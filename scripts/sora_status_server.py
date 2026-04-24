@@ -263,6 +263,34 @@ def find_all_active_subagents(now_ts: float, max_age_sec: int = 1800) -> list[di
     return agents
 
 
+def _render_tunnel_url() -> str:
+    """cloudflared quick tunnel URL をヘッダ下に表示。"""
+    url = _get_public_tunnel_url()
+    if not url:
+        return ""
+    return f"""
+<div class="tunnel-url">
+  🌐 外出先 URL: <a href="{url}">{url}</a>
+</div>
+"""
+
+
+def _get_public_tunnel_url() -> Optional[str]:
+    """cloudflared quick tunnel のログから公開 URL を抽出。"""
+    log_file = PROJECT_ROOT / "data" / "logs" / "cloudflared_tunnel.log"
+    if not log_file.exists():
+        return None
+    try:
+        content = log_file.read_text(encoding="utf-8")
+        import re
+        matches = re.findall(r"https://[a-z-]+\.trycloudflare\.com", content)
+        if matches:
+            return matches[-1]
+    except Exception:
+        pass
+    return None
+
+
 def _render_phase_section() -> str:
     """Sprint phase 進捗表示（data/sprint_state.json 読み込み）。"""
     state_file = PROJECT_ROOT / "data" / "sprint_state.json"
@@ -528,6 +556,8 @@ def build_html() -> str:
   .phase-purpose{{font-size:11px;color:#9ca3af;margin-top:2px;padding-left:20px}}
   .phase-artifact{{font-size:10px;color:#6b7280;padding-left:20px;margin-top:2px}}
   .phase-blocker{{font-size:11px;color:#fca5a5;padding-left:20px;margin-top:3px;background:#450a0a;padding:4px 6px;border-radius:3px}}
+  .tunnel-url{{font-size:11px;color:#fde68a;padding:4px 8px;background:#1e3a8a;border-radius:4px;margin-bottom:8px;word-break:break-all}}
+  .tunnel-url a{{color:#bae6fd;text-decoration:none}}
   @keyframes pulse{{0%,100%{{opacity:1}}50%{{opacity:0.75}}}}
   .line{{font-size:11px;color:#9ca3af;margin:4px 0;word-break:break-all}}
   .sec{{margin-top:10px;border-top:1px solid #374151;padding-top:8px}}
@@ -544,6 +574,7 @@ def build_html() -> str:
   <h1>★ Sora Lab Monitor</h1>
   <div class="now">{now_jst} / 5s refresh</div>
 </div>
+{_render_tunnel_url()}
 
 {sora_banner}
 {sora_line}
