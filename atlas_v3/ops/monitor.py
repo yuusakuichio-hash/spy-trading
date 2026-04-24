@@ -54,10 +54,23 @@ log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # パス定義
+# 2026-04-24 22:58 汚染事故再発防止: TRADING_STATE_DIR env で override 可能
 # ---------------------------------------------------------------------------
 _BASE = Path(__file__).resolve().parents[2]
-_STATE_DIR = _BASE / "data" / "state_v3"
+_DEFAULT_STATE_DIR = _BASE / "data" / "state_v3"
+_STATE_DIR = Path(os.getenv("TRADING_STATE_DIR", str(_DEFAULT_STATE_DIR)))
 _MONITOR_LOG = _STATE_DIR / "monitor_state.jsonl"
+
+# ---------------------------------------------------------------------------
+# ntfy 429 backoff (2026-04-24: 22:33 事故で 15 秒毎連射が rate limit 誘発した
+# 問題の根治・pushover_client と同設計)
+# ---------------------------------------------------------------------------
+import threading as _threading_ntfy
+_NTFY_CONSECUTIVE_429: int = 0
+_NTFY_BACKOFF_UNTIL: float = 0.0
+_NTFY_BACKOFF_THRESHOLD: int = 3     # 3 連続 429 で沈黙開始
+_NTFY_BACKOFF_SECS: int = 1800       # 30 分沈黙
+_NTFY_LOCK = _threading_ntfy.Lock()
 
 # ---------------------------------------------------------------------------
 # AlertLevel
@@ -766,7 +779,23 @@ class MonitorDaemon:
         ntfy Priority ヘッダは数値 1-5 が仕様。
         ref: https://docs.ntfy.sh/publish/#message-priority
           1=min, 2=low, 3=default, 4=high, 5=urgent (≒ max)
+
+        2026-04-24: 3 連続 429 で 30 分自動沈黙する backoff 機構追加
+        (pushover_client と同設計・rate limit 連鎖暴走の予防)。
+        22:33 事故時に ntfy が 15 秒毎連射で 429 連発 + log 汚染した問題の根治。
         """
+        # 429 backoff 中なら即 return (ログのみ)
+        global _NTFY_CONSECUTIVE_429, _NTFY_BACKOFF_UNTIL
+        now = time.time()
+        with _NTFY_LOCK:
+            if now < _NTFY_BACKOFF_UNTIL:
+                remaining = int(_NTFY_BACKOFF_UNTIL - now)
+                log.debug(
+                    "[Monitor] ntfy backoff active, skip (remaining=%ds)",
+                    remaining,
+                )
+                return
+
         # CRITICAL 5 修正: Enum.value 文字列ではなく数値 int を使用
         _ntfy_priority_map = {
             AlertLevel.WARNING: 3,    # default
@@ -785,7 +814,24 @@ class MonitorDaemon:
                 method="POST",
             )
             urllib.request.urlopen(req, timeout=5)
+            # 成功 → consecutive_429 reset
+            with _NTFY_LOCK:
+                _NTFY_CONSECUTIVE_429 = 0
         except Exception as e:
+            err_str = str(e)
+            is_429 = "429" in err_str or "too many" in err_str.lower() or "rate" in err_str.lower()
+            if is_429:
+                with _NTFY_LOCK:
+                    _NTFY_CONSECUTIVE_429 += 1
+                    if _NTFY_CONSECUTIVE_429 >= _NTFY_BACKOFF_THRESHOLD:
+                        _NTFY_BACKOFF_UNTIL = time.time() + _NTFY_BACKOFF_SECS
+                        log.warning(
+                            "[Monitor] ntfy %d consecutive 429 → silencing for %d min",
+                            _NTFY_CONSECUTIVE_429,
+                            _NTFY_BACKOFF_SECS // 60,
+                        )
+                        # reset counter after arming backoff
+                        _NTFY_CONSECUTIVE_429 = 0
             log.error("[Monitor] ntfy fallback failed: %s", e)
 
     def _activate_kill_switch(self, chk: HealthCheck) -> None:

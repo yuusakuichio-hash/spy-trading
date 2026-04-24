@@ -23,6 +23,7 @@ import datetime
 import json
 import logging
 import math
+import os
 import threading
 import time
 from collections import deque
@@ -34,9 +35,11 @@ log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # パス定義
+# 2026-04-24 22:58 汚染事故再発防止: TRADING_STATE_DIR env で override 可能
 # ---------------------------------------------------------------------------
 _BASE = Path(__file__).resolve().parents[2]
-_STATE_DIR = _BASE / "data" / "state_v3"
+_DEFAULT_STATE_DIR = _BASE / "data" / "state_v3"
+_STATE_DIR = Path(os.getenv("TRADING_STATE_DIR", str(_DEFAULT_STATE_DIR)))
 _LATENCY_LOG = _STATE_DIR / "latency_samples.jsonl"
 
 # ---------------------------------------------------------------------------

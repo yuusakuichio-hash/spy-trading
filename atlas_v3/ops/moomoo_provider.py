@@ -21,6 +21,7 @@ Fail-closed 規律:
 from __future__ import annotations
 
 import logging
+import os
 import time
 from typing import Any, Optional
 
@@ -87,8 +88,10 @@ _AUTH_ERROR_PATTERNS = [
 ]
 
 # S-3 fix: high_water_mark の session 永続化パス
+# 2026-04-24 22:58 汚染事故再発防止: TRADING_MOOMOO_HWM_PATH env で override 可能
 from pathlib import Path as _Path
-_HWM_STATE_FILE = _Path("/Users/yuusakuichio/trading/data/state_v3/moomoo_hwm.json")
+_DEFAULT_HWM_PATH = "/Users/yuusakuichio/trading/data/state_v3/moomoo_hwm.json"
+_HWM_STATE_FILE = _Path(os.getenv("TRADING_MOOMOO_HWM_PATH", _DEFAULT_HWM_PATH))
 
 
 class MoomooProviderNotImplementedError(NotImplementedError):

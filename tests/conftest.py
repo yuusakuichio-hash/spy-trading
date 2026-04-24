@@ -24,6 +24,63 @@ for _path in [str(_project_dir), str(_project_parent)]:
 
 
 @pytest.fixture(autouse=True)
+def _isolate_state_dirs(tmp_path, monkeypatch):
+    """2026-04-24 22:58 JST 事故再発防止: pytest が本番 data/state_v3/ を汚染
+    しないよう、全テストで env var + module attr の両方を tmp_path に差し替える。
+
+    env var は新規 import 時の初期値に適用、monkeypatch.setattr は既 import 済
+    module の module-level 定数を tmp_path に差し替える。両方必要なのは、
+    モジュールが既に一度 import されてると os.getenv が effective にならない
+    ため (Python の module load timing 制約)。
+
+    対象:
+    - common_v3.risk.kill_switch._STATE_DIR / FLAG_FILE / AUDIT_FILE
+    - atlas_v3.ops.monitor._STATE_DIR / _MONITOR_LOG
+    - atlas_v3.ops.latency_monitor._STATE_DIR / _LATENCY_LOG
+    - atlas_v3.ops.moomoo_provider._HWM_STATE_FILE
+
+    autouse=True で全テストに適用。本番環境 (ライブ実行) では env 未設定のため
+    従来どおり data/state_v3/ を使用する (後方互換)。
+    """
+    from pathlib import Path as _P
+    isolated_state = tmp_path / "state_v3"
+    isolated_state.mkdir(exist_ok=True)
+    hwm_path = tmp_path / "moomoo_hwm.json"
+    monkeypatch.setenv("TRADING_STATE_DIR", str(isolated_state))
+    monkeypatch.setenv("TRADING_MOOMOO_HWM_PATH", str(hwm_path))
+
+    # 既 import 済 module の module-level 定数を直接差し替える
+    _patches = [
+        ("common_v3.risk.kill_switch", [
+            ("_STATE_DIR", isolated_state),
+            ("FLAG_FILE", isolated_state / "kill_switch.flag"),
+            ("AUDIT_FILE", isolated_state / "kill_switch_audit.jsonl"),
+        ]),
+        ("atlas_v3.ops.monitor", [
+            ("_STATE_DIR", isolated_state),
+            ("_MONITOR_LOG", isolated_state / "monitor_state.jsonl"),
+        ]),
+        ("atlas_v3.ops.latency_monitor", [
+            ("_STATE_DIR", isolated_state),
+            ("_LATENCY_LOG", isolated_state / "latency_samples.jsonl"),
+        ]),
+        ("atlas_v3.ops.moomoo_provider", [
+            ("_HWM_STATE_FILE", hwm_path),
+        ]),
+    ]
+    for mod_name, attrs in _patches:
+        try:
+            import importlib
+            mod = importlib.import_module(mod_name)
+            for attr_name, attr_value in attrs:
+                if hasattr(mod, attr_name):
+                    monkeypatch.setattr(mod, attr_name, attr_value)
+        except ImportError:
+            pass  # futu SDK 未インストール環境等
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _reset_risk_engine_escalation_state():
     """CR-1: 各テスト前後に _ESCALATION_LAST_SENT をリセットする。
 

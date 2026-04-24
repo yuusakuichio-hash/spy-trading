@@ -29,8 +29,14 @@ from typing import Literal
 from common_v3.executor.sync_guard import sync_only
 
 # ── パス定義 ─────────────────────────────────────────────────────────────────
+# 2026-04-24 22:58 JST 事故 (pytest が本番 kill_switch.flag を汚染し
+# atlas-paper daemon が誤って KillSwitch 発動) の再発防止として
+# TRADING_STATE_DIR env var で state dir を override 可能にする。
+# 本番では env 未設定 = 既存 data/state_v3/ を使用 (後方互換)。
+# pytest では conftest.py autouse fixture で tmp_path に差し替える。
 _BASE = Path(__file__).resolve().parents[2]
-_STATE_DIR = _BASE / "data" / "state_v3"
+_DEFAULT_STATE_DIR = _BASE / "data" / "state_v3"
+_STATE_DIR = Path(os.getenv("TRADING_STATE_DIR", str(_DEFAULT_STATE_DIR)))
 FLAG_FILE = _STATE_DIR / "kill_switch.flag"
 AUDIT_FILE = _STATE_DIR / "kill_switch_audit.jsonl"
 
