@@ -801,8 +801,10 @@ class MonitorDaemon:
 
         for attempt in range(1, MAX_RETRIES + 1):
             try:
-                from common_v3.risk.kill_switch import activate as ks_activate
-                activated = ks_activate(
+                # MonitorDaemon は thread で動くため @sync_only guard に抵触する。
+                # async_impl.py と同じ _raw 経路で guard bypass する公式パターン。
+                from common_v3.risk.kill_switch import _activate_raw
+                activated = _activate_raw(
                     reason=f"monitor_emergency:{chk.check_name}:{chk.message[:100]}",
                     activator="atlas_monitor_daemon",
                 )
@@ -1241,9 +1243,11 @@ class MonitorDaemon:
             # CRIT-R6-2 fix: 全 firm の per-firm flag も一括解除（FirmScopedKillSwitch.deactivate_all()）
             # 状態機械: activate → probe 成功 → deactivate(global+all_firms) → counter reset → 再開
             try:
-                from common_v3.risk.kill_switch import deactivate as ks_deactivate
+                # MonitorDaemon は thread で動くため @sync_only guard に抵触する。
+                # async_impl.py と同じ _raw 経路で guard bypass する公式パターン。
+                from common_v3.risk.kill_switch import _deactivate_raw
                 # C3 fix: global flag を解除（必須・失敗でも probe は True を返す）
-                ks_deactivate(
+                _deactivate_raw(
                     activator="atlas_monitor_probe_recovery",
                     reason="probe_recovery_success_c3_fix_crit_r6_2",
                 )

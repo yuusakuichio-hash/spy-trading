@@ -204,9 +204,10 @@ class MoomooMetricProvider:
         """
         self._ensure_connected()
         try:
+            # S-3 fix 2026-04-24: spy_bot.py:4461-4470 と同じパターン。
+            # get_acc_list() は全環境の DataFrame を返すので trd_env 列で SIMULATE 行を抽出。
             ret, data = self._trade_ctx.get_acc_list()
             if ret != RET_OK:
-                # S-2 fix: 多言語 auth パターン
                 data_lower = str(data).lower()
                 is_auth = any(pat.lower() in data_lower for pat in _AUTH_ERROR_PATTERNS)
                 if is_auth:
@@ -218,8 +219,15 @@ class MoomooMetricProvider:
                     f"get_acc_list failed (ret={ret}, data={data}). "
                     "moomoo session likely expired. Re-login required."
                 )
-            if data is None or len(data) == 0:
+            if data is None or (hasattr(data, "empty") and data.empty) or (not hasattr(data, "empty") and len(data) == 0):
                 raise AuthenticationError("get_acc_list returned empty account list")
+            # SIMULATE (Paper 口座) が 1 件以上あることを確認（Paper monitor の前提）
+            sim_rows = data[data["trd_env"] == TrdEnv.SIMULATE] if hasattr(data, "__getitem__") else data
+            if hasattr(sim_rows, "empty") and sim_rows.empty:
+                raise AuthenticationError(
+                    "get_acc_list returned no SIMULATE (Paper) account. "
+                    "moomoo app の『デモ取引』を有効化してください。"
+                )
         except AuthenticationError:
             raise
         except Exception as exc:

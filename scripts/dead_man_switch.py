@@ -30,6 +30,8 @@ import hashlib
 import json
 import logging
 import os
+import socket
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -155,6 +157,137 @@ def _fallback_log(title: str, msg: str) -> None:
         f.write(f"{now_iso} | {title} | {msg}\n")
 
 
+# ── インフラ死活監視 ──────────────────────────────────────────────────────────
+
+_OPEND_PORT = int(os.environ.get("SORA_OPEND_PORT", "11111"))
+_OPEND_HOST = os.environ.get("SORA_OPEND_HOST", "127.0.0.1")
+_ATLAS_PAPER_JOB = os.environ.get("SORA_ATLAS_PAPER_JOB", "com.soralab.atlas-paper")
+_INFRA_SOCKET_TIMEOUT = 2.0  # seconds
+
+
+def _is_opend_alive() -> bool:
+    """moomoo OpenD の死活を確認する。
+
+    チェック方法:
+        1. ``pgrep -x OpenD`` でプロセス存在確認
+        2. TCP ポート 11111 への connect 試行
+
+    両方 OK の場合のみ True を返す。
+    """
+    # 1. プロセス存在
+    try:
+        result = subprocess.run(
+            ["pgrep", "-x", "OpenD"],
+            capture_output=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            return False
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+    # 2. ポート listen
+    try:
+        with socket.create_connection((_OPEND_HOST, _OPEND_PORT), timeout=_INFRA_SOCKET_TIMEOUT):
+            pass
+    except OSError:
+        return False
+
+    return True
+
+
+def _is_atlas_paper_alive() -> bool:
+    """com.soralab.atlas-paper launchd job の死活を確認する。
+
+    ``launchctl list <job>`` の出力を解析し、PID フィールドが "-" でないことを確認する。
+
+    Returns:
+        True: job が登録済みかつ PID あり（稼働中）
+        False: job 未登録 / PID なし / launchctl 実行失敗
+    """
+    try:
+        result = subprocess.run(
+            ["launchctl", "list", _ATLAS_PAPER_JOB],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+    if result.returncode != 0:
+        return False
+
+    # 出力フォーマット例:
+    #   {
+    #     "StandardOutPath" = "/dev/null";
+    #     "LimitLoadToSessionType" = "Background";
+    #     "Label" = "com.soralab.atlas-paper";
+    #     "OnDemand" = true;
+    #     "LastExitStatus" = 0;
+    #     "PID" = 12345;
+    #   }
+    # または最初の行が "PID\tStatus\tLabel" のテーブル形式の場合もある。
+    # plist 形式: "PID" = <number>; が存在し数値なら alive
+    # テーブル形式: 1 列目が数値 (PID) なら alive、"-" なら停止
+    stdout = result.stdout
+    for line in stdout.splitlines():
+        stripped = line.strip()
+        # plist 形式: "PID" = 12345;
+        if stripped.startswith('"PID"'):
+            parts = stripped.split("=", 1)
+            if len(parts) == 2:
+                pid_str = parts[1].strip().rstrip(";").strip()
+                return pid_str.lstrip("-").isdigit() and not pid_str.startswith("-")
+        # テーブル形式: <PID>\t<Status>\t<Label>
+        cols = stripped.split("\t")
+        if len(cols) >= 3 and cols[2].strip() == _ATLAS_PAPER_JOB:
+            return cols[0].strip().isdigit()
+
+    return False
+
+
+def _check_infra() -> None:
+    """OpenD + atlas-paper の死活を確認し、異常時は Pushover P1 + fallback log を記録する。
+
+    既存の check_and_alert() と独立して動作する。
+    既存ファイル・ビーコン機構には一切触れない。
+    """
+    try:
+        from common.pushover_client import send as _pushover  # type: ignore[import]
+    except ImportError:
+        _pushover = None  # type: ignore[assignment]
+
+    def _alert_p1(title: str, msg: str) -> None:
+        log.error("INFRA ALERT P1: %s | %s", title, msg)
+        _fallback_log(title, msg)
+        if _pushover is not None:
+            try:
+                _pushover(title, msg, priority=1)
+            except Exception as exc:  # noqa: BLE001
+                log.error("Pushover P1 send failed: %s", exc)
+
+    # --- OpenD ---
+    if not _is_opend_alive():
+        _alert_p1(
+            "[SYS] OpenD DEAD",
+            f"moomoo OpenD プロセスが停止 or ポート {_OPEND_PORT} で listen していません。"
+            " 手動再起動が必要です。",
+        )
+    else:
+        log.info("infra check: OpenD OK (port=%d)", _OPEND_PORT)
+
+    # --- atlas-paper ---
+    if not _is_atlas_paper_alive():
+        _alert_p1(
+            "[SYS] atlas-paper JOB DEAD",
+            f"launchd ジョブ {_ATLAS_PAPER_JOB} の PID が確認できません。"
+            " launchctl load / start が必要です。",
+        )
+    else:
+        log.info("infra check: atlas-paper OK (%s)", _ATLAS_PAPER_JOB)
+
+
 # ── JSONL ローテーション (7日以上古い行を削除) ───────────────────────────────
 
 def _rotate_ping_file() -> None:
@@ -196,6 +329,7 @@ def main() -> None:
         write_all_beacons()
         _rotate_ping_file()
         check_and_alert()
+        _check_infra()
 
 
 if __name__ == "__main__":

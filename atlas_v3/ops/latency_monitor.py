@@ -348,8 +348,10 @@ class LatencyMonitor:
 
         for attempt in range(1, MAX_RETRIES + 1):
             try:
-                from common_v3.risk.kill_switch import activate as ks_activate
-                ks_activate(
+                # LatencyMonitor は thread で動くため @sync_only guard に抵触する。
+                # async_impl.py と同じ _raw 経路で guard bypass する公式パターン。
+                from common_v3.risk.kill_switch import _activate_raw
+                _activate_raw(
                     reason=f"latency_halt:p99={p99:.1f}ms>=halt={self._config.p99_halt_ms:.1f}ms",
                     activator="latency_monitor",
                 )

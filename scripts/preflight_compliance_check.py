@@ -49,15 +49,18 @@ _DEFAULT_CHECKLIST = _OPS_DIR / "compliance_checklist_20260423.md"
 # ---------------------------------------------------------------------------
 
 # CRITICAL タグ（全モードでブロック）: PENDING_OWNER_APPROVAL_LIVE
-_PATTERN_CRITICAL_LIVE = re.compile(r"\[PENDING_OWNER_APPROVAL_LIVE\]", re.IGNORECASE)
+_PATTERN_CRITICAL_LIVE = re.compile(r"(?<!`)\[PENDING_OWNER_APPROVAL_LIVE\](?!`)", re.IGNORECASE)
 
 # WARN タグ（paper のみ許容）: PENDING_OWNER_APPROVAL_PAPER
-_PATTERN_WARN_PAPER = re.compile(r"\[PENDING_OWNER_APPROVAL_PAPER\]", re.IGNORECASE)
+_PATTERN_WARN_PAPER = re.compile(r"(?<!`)\[PENDING_OWNER_APPROVAL_PAPER\](?!`)", re.IGNORECASE)
 
 # 後方互換タグ: PENDING_OWNER_APPROVAL（分割タグのどちらでもない場合）
 # paper モード: WARN / live モード: CRITICAL
+# S-4 fix 2026-04-24: ops agent が _CRITICAL_LIVE / _WARN_PAPER にバックティック除外を
+# 入れたが LEGACY パターンは漏れていた。凡例行の `[PENDING_OWNER_APPROVAL]` も誤検知
+# するため同様の (?<!`) ... (?!`) を追加（atlas-paper crash loop 再発防止）。
 _PATTERN_LEGACY = re.compile(
-    r"\[PENDING_OWNER_APPROVAL\](?!_PAPER)(?!_LIVE)",
+    r"(?<!`)\[PENDING_OWNER_APPROVAL\](?!_PAPER)(?!_LIVE)(?!`)",
     re.IGNORECASE,
 )
 

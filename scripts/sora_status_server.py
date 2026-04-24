@@ -619,8 +619,6 @@ def build_html() -> str:
 {sora_banner}
 {sora_line}
 
-{_render_phase_section()}
-
 <div class="sec">
 <div class="sec-title">Recent agent activity</div>
 {agents_section}
@@ -632,6 +630,8 @@ def build_html() -> str:
 </div>
 
 {upcoming_section}
+
+{_render_phase_section()}
 </body>
 </html>"""
 
