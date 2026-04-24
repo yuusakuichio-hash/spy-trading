@@ -194,19 +194,44 @@ class MoomooMetricProvider:
         except Exception as exc:
             raise RuntimeError(f"OpenD connection failed: {exc}") from exc
 
-    def smoke_test(self) -> None:
+    def smoke_test(self, timeout_secs: float = 15.0) -> None:
         """startup 時に get_acc_list() で 401/unauth 検出（ADR-014 Decision 2）。
         S-2 fix: 多言語 auth error パターンで中国語/日本語 moomoo 応答も検知。
+        S-5 fix 2026-04-24: OpenD 応答 hang で caller が永久に blocking しないよう
+        ThreadPoolExecutor + Future.result(timeout) で wall-clock cap を強制。
+
+        Args:
+            timeout_secs: get_acc_list() 単体の wall-clock timeout（default 15s）
 
         Raises:
-            AuthenticationError: 認証失敗（期限切れ等）
-            RuntimeError: OpenD 未起動
+            AuthenticationError: 認証失敗・Paper 口座未設定・timeout hang 検知時
+            RuntimeError: OpenD 未起動 / 予期せぬ例外
         """
         self._ensure_connected()
         try:
+            # S-5 fix: hang 検知のため daemon thread で API 呼出・main thread は timeout 管理。
+            # ThreadPoolExecutor の with 文は hang 時に context exit が worker join を待つため
+            # 使わず、daemon=True + join(timeout) で wall-clock cap を強制する。
+            import threading as _th
+            _result: dict = {}
+            def _runner():
+                try:
+                    _result["value"] = self._trade_ctx.get_acc_list()
+                except BaseException as _e:  # noqa: BLE001 — propagate any
+                    _result["error"] = _e
+            _t = _th.Thread(target=_runner, daemon=True, name="moomoo_smoke_worker")
+            _t.start()
+            _t.join(timeout=timeout_secs)
+            if _t.is_alive():
+                raise AuthenticationError(
+                    f"smoke_test timeout after {timeout_secs}s. "
+                    "OpenD unreachable or Paper 口座 login 未了の可能性。"
+                )
+            if "error" in _result:
+                raise RuntimeError(f"get_acc_list raised in worker: {_result['error']}")
+            ret, data = _result["value"]
             # S-3 fix 2026-04-24: spy_bot.py:4461-4470 と同じパターン。
             # get_acc_list() は全環境の DataFrame を返すので trd_env 列で SIMULATE 行を抽出。
-            ret, data = self._trade_ctx.get_acc_list()
             if ret != RET_OK:
                 data_lower = str(data).lower()
                 is_auth = any(pat.lower() in data_lower for pat in _AUTH_ERROR_PATTERNS)
