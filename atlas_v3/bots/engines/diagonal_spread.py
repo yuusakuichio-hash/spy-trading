@@ -391,17 +391,18 @@ class DiagonalSpreadTactic(TacticBase):
                 "MarketEnvironment.ivr_by_symbol は 0-100 スケール固定。"
             )
 
-        # IVR 範囲チェック（30-70: プレミアムが取れる適度な水準）
-        if not (self._cfg.ivr_min <= ivr <= self._cfg.ivr_max):
+        # IVR 範囲チェック (動的閾値・規律 feedback_no_fixed_params 準拠)
+        from atlas_v3.bots.engines.dynamic_params import get_dynamic_ivr_threshold
+        ivr_min_dyn = get_dynamic_ivr_threshold(env.vix, self._cfg.ivr_min)
+        if not (ivr_min_dyn <= ivr <= self._cfg.ivr_max):
             log.debug(
-                "[DiagonalSpreadTactic.should_enter] IVR=%.1f が範囲外 [%.1f, %.1f]: スキップ "
-                "(symbol=%s)",
-                ivr, self._cfg.ivr_min, self._cfg.ivr_max, symbol,
+                "[DiagonalSpreadTactic.should_enter] IVR=%.1f が範囲外 [%.1f(dyn,base=%.1f,VIX=%.2f), %.1f]: スキップ (symbol=%s)",
+                ivr, ivr_min_dyn, self._cfg.ivr_min, env.vix, self._cfg.ivr_max, symbol,
             )
             return DiagonalSpreadEntryDecision(
                 should_enter=False,
                 symbol=symbol,
-                reason=f"IVR={ivr:.1f} 範囲外 [{self._cfg.ivr_min:.1f},{self._cfg.ivr_max:.1f}]",
+                reason=f"IVR={ivr:.1f} 範囲外 [{ivr_min_dyn:.1f}(dyn),{self._cfg.ivr_max:.1f}]",
             )
 
         # 上方向バイアス確認（Diagonal Spread は bull 環境専用）

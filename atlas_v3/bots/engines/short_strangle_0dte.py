@@ -517,16 +517,18 @@ class ShortStrangle0DTEEngine(TacticBase):
                 reason=f"expiry={expiry_date} は当日 0DTE でない",
             )
 
-        # 2. IVR チェック
+        # 2. IVR チェック (動的閾値・規律 feedback_no_fixed_params 準拠)
         ivr = env.ivr_by_symbol.get(symbol, 0.0)
-        if ivr < self._cfg.ivr_min:
+        from atlas_v3.bots.engines.dynamic_params import get_dynamic_ivr_threshold
+        ivr_min_dynamic = get_dynamic_ivr_threshold(env.vix, self._cfg.ivr_min)
+        if ivr < ivr_min_dynamic:
             log.debug(
-                "[ShortStrangle0DTEEngine.should_enter] IVR=%.1f < min=%.1f: スキップ (symbol=%s)",
-                ivr, self._cfg.ivr_min, symbol,
+                "[ShortStrangle0DTEEngine.should_enter] IVR=%.1f < dynamic_min=%.1f (base=%.1f, VIX=%.2f): スキップ (symbol=%s)",
+                ivr, ivr_min_dynamic, self._cfg.ivr_min, env.vix, symbol,
             )
             return StrangleEntryDecision(
                 should_enter=False, symbol=symbol,
-                reason=f"IVR={ivr:.1f} < {self._cfg.ivr_min}",
+                reason=f"IVR={ivr:.1f} < dynamic_min={ivr_min_dynamic:.1f}",
             )
 
         # 3. VIX 範囲確認

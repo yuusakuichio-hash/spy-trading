@@ -149,9 +149,14 @@ class TestIvrFilter:
         assert dec.should_enter is True
 
     def test_ivr_below_min_blocks_entry(self) -> None:
-        """TC-05: IVR=39 → エントリー拒否。"""
+        """TC-05: IVR が dynamic_min を下回ると拒否.
+
+        2026-04-25: dynamic_params 統合で VIX 帯に応じて ivr_min が動的調整される
+        ようになったため、低 VIX (calm band: VIX<15) で base+5 の動的閾値 (45) を
+        確実に下回る IVR=30 で test。
+        """
         eng = RatioSpreadEngine(clock_fn=_clock(11, 0))
-        env = _env(ivr=39.0)
+        env = _env(ivr=30.0, vix=12.0)  # calm band → ivr_min_dyn=45 / IVR=30 < 45 で block
         dec = eng.should_enter(env, "QQQ", atm_strike=450.0, net_credit=1.5)
         assert dec.should_enter is False
         assert "IVR" in dec.reason

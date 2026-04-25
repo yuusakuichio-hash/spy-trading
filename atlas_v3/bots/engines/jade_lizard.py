@@ -552,18 +552,18 @@ class JadeLizardTactic(TacticBase):
         ivr = env.ivr_by_symbol.get(symbol, 0.0)
         self._validate_ivr(symbol, ivr)
 
-        # 5. IVR フィルタ
-        if ivr < self._cfg.ivr_min:
+        # 5. IVR フィルタ (動的閾値・規律 feedback_no_fixed_params 準拠)
+        from atlas_v3.bots.engines.dynamic_params import get_dynamic_ivr_threshold
+        ivr_min_dyn = get_dynamic_ivr_threshold(env.vix, self._cfg.ivr_min)
+        if ivr < ivr_min_dyn:
             log.debug(
-                "[JadeLizardTactic.should_enter] IVR=%.1f < min=%.1f: スキップ (symbol=%s)",
-                ivr,
-                self._cfg.ivr_min,
-                symbol,
+                "[JadeLizardTactic.should_enter] IVR=%.1f < dynamic_min=%.1f (base=%.1f, VIX=%.2f): スキップ (symbol=%s)",
+                ivr, ivr_min_dyn, self._cfg.ivr_min, env.vix, symbol,
             )
             return JadeLizardEntryDecision(
                 should_enter=False,
                 symbol=symbol,
-                reason=f"IVR={ivr:.1f} < ivr_min={self._cfg.ivr_min:.1f}",
+                reason=f"IVR={ivr:.1f} < dynamic_min={ivr_min_dyn:.1f}",
                 ivr=ivr,
             )
 

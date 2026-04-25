@@ -424,17 +424,18 @@ class IronFlyEngine(TacticBase):
             )
 
         ivr = env.ivr_by_symbol.get(symbol, 0.0)
-        if ivr <= self._cfg.ivr_min:
+        # 2026-04-25: 動的 IVR 閾値 (VIX に応じて緩和/厳格化・規律 feedback_no_fixed_params 遵守)
+        from atlas_v3.bots.engines.dynamic_params import get_dynamic_ivr_threshold
+        ivr_min_dynamic = get_dynamic_ivr_threshold(env.vix, self._cfg.ivr_min)
+        if ivr <= ivr_min_dynamic:
             log.info(
-                "[IronFlyEngine.should_enter] IVR=%.1f <= ivr_min=%.1f: スキップ (symbol=%s)",
-                ivr,
-                self._cfg.ivr_min,
-                symbol,
+                "[IronFlyEngine.should_enter] IVR=%.1f <= ivr_min_dynamic=%.1f (base=%.1f, VIX=%.2f): スキップ (symbol=%s)",
+                ivr, ivr_min_dynamic, self._cfg.ivr_min, env.vix, symbol,
             )
             return IronFlyEntryDecision(
                 should_enter=False,
                 symbol=symbol,
-                reason=f"IVR={ivr:.1f} <= ivr_min={self._cfg.ivr_min}",
+                reason=f"IVR={ivr:.1f} <= ivr_min_dynamic={ivr_min_dynamic:.1f}",
             )
 
         if env.vix >= self._cfg.vix_max:
