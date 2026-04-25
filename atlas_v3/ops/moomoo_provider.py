@@ -91,6 +91,10 @@ _AUTH_ERROR_PATTERNS = [
 # test_bulkhead_20260425.py::test_t18_moomoo_provider_uses_bulkhead が検証
 from common_v3.self_healing.bulkhead import get_global_pool  # noqa: F401
 
+# Circuit Breaker: moomoo_quote upstream（C-017 fail-closed 規律）
+# get_metrics に @breaker("moomoo_quote") を適用 → OPEN 時は CircuitOpenError raise
+from common_v3.self_healing.breaker_config import breaker as _breaker  # noqa: F401
+
 # S-3 fix: high_water_mark の session 永続化パス
 # 2026-04-24 22:58 汚染事故再発防止: TRADING_MOOMOO_HWM_PATH env で override 可能
 from pathlib import Path as _Path
@@ -275,13 +279,18 @@ class MoomooMetricProvider:
         except Exception as exc:
             raise RuntimeError(f"smoke_test failed: {exc}") from exc
 
+    @_breaker("moomoo_quote")
     def get_metrics(self) -> dict:
         """paper 口座の実 PnL を取得し YFinanceMetricProvider 互換 dict を返す。
+
+        moomoo_quote Circuit Breaker: CLOSED→通常呼出 / OPEN→CircuitOpenError raise。
+        fail_max=5 / reset_timeout=60s（breaker_config.UPSTREAM_CONFIGS["moomoo_quote"]）。
 
         Returns:
             dict with keys {pnl_day_usd, drawdown_pct, latency_ms}
 
         Raises:
+            CircuitOpenError: moomoo_quote breaker が OPEN 状態（fail-closed 規律）
             AuthenticationError: セッション期限切れ（MonitorDaemon が Pushover 発火）
             RuntimeError: OpenD 未起動・API エラー
             MoomooProviderNotImplementedError: futu-api 未インストール
