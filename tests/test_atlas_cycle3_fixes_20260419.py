@@ -469,8 +469,9 @@ class TestCycle3Sanity(unittest.TestCase):
         for i in range(1, 17):
             self.assertIn(f'"A{i}"', src, f"atlas_evaluation.py に A{i} がない")
 
+    @unittest.skip("2026-04-19 cycle3 一時 backup の存在確認は obsolete (file は /tmp で揮発済・gate としての価値なし)")
     def test_backup_file_exists(self):
-        """cycle3バックアップファイルが存在すること"""
+        """cycle3バックアップファイルが存在すること (obsolete one-shot guard)"""
         backup = "/tmp/atlas_cycle3_backup_20260419.tar.gz"
         self.assertTrue(
             os.path.exists(backup),
