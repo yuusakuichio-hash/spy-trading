@@ -718,7 +718,9 @@ class TestCritR4_4_KillSwitchRecovery:
     def test_probe_recovery_returns_true_when_provider_valid(self):
         """_probe_recovery は metric_provider が valid な dict を返す場合に True を返す。"""
         from atlas_v3.ops.monitor import MonitorConfig, MonitorDaemon
-        provider = lambda: {"pnl_day_usd": 0.0, "drawdown_pct": 0.0, "latency_ms": 0.0}
+        # CRIT-R6-3 fix: zero_detection_n 連続全ゼロ値は DummyProvider と判定される。
+        # valid provider の意図テストでは非ゼロ値で確認する。
+        provider = lambda: {"pnl_day_usd": 1.0, "drawdown_pct": 0.01, "latency_ms": 5.0}
         config = MonitorConfig(
             daily_loss_usd=-400.0,
             pushover_enabled=False,
