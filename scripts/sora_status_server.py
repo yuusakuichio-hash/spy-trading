@@ -630,7 +630,8 @@ def build_html() -> str:
         sora_line = f"<div class='line'>session <code>{latest.stem[:8]}</code> / main proc {proc_total} (active {proc_active})</div>"
 
     # 全 subagent 検出
-    agents = find_all_active_subagents(now_utc.timestamp(), max_age_sec=1800)
+    # 2026-04-25: 30 分 → 90 分に拡張 (1 時間以内のバースト的並列起動を全て可視化)
+    agents = find_all_active_subagents(now_utc.timestamp(), max_age_sec=5400)
     if agents:
         kind_emoji = {
             "builder": "🔨",
