@@ -73,21 +73,71 @@ def _categorize(entries: list[dict]) -> tuple[list[dict], list[dict], list[dict]
     return auto_fix, detect_only, high_priority
 
 
-def _build_auth_budget_section() -> str:
-    """認証試行予算サマリー行を返す（失敗や残少ない場合のみ）"""
+def _auth_recent_failures(service: str, window_sec: int, limit: int = 3) -> list[str]:
+    """指定 window 内の失敗試行 note を新しい順で最大 limit 件返す。"""
     try:
-        from common.auth_budget import AuthBudget
+        from common import auth_budget as _ab
+        recs = _ab._read_attempts_in_window(service, window_sec)
+    except Exception:
+        return []
+    failures = [r for r in recs if not r.get("success", True)]
+    failures.sort(key=lambda r: r.get("ts", 0), reverse=True)
+    notes: list[str] = []
+    for r in failures[:limit]:
+        n = r.get("note", "")
+        if n:
+            notes.append(n)
+    return notes
+
+
+def _auth_next_reset_jst(service: str, window_sec: int) -> str:
+    """次の試行枠リセット時刻 (oldest_ts + window_sec) を 'HH:MM JST' で返す。
+    試行ゼロなら '未使用'。"""
+    try:
+        from common import auth_budget as _ab
+        recs = _ab._read_attempts_in_window(service, window_sec)
+    except Exception:
+        return "未使用"
+    if not recs:
+        return "未使用"
+    oldest_ts = min(r.get("ts", 0.0) for r in recs)
+    reset_ts = oldest_ts + window_sec
+    jst = time.gmtime(reset_ts + 9 * 3600)
+    return f"{jst.tm_hour:02d}:{jst.tm_min:02d} JST"
+
+
+def _build_auth_budget_section() -> str:
+    """認証試行予算サマリー行を返す（失敗や残少ない場合のみ）。
+
+    出力例:
+        認証試行:
+          [CRITICAL] opend: 上限到達 3/3 / 次リセット 12:30 JST
+          tradovate_demo: 残り1回 / 次リセット 13:15 JST
+          mffu: 成功率33% (3回) — AUTH_FAIL_A, AUTH_FAIL_B
+    """
+    try:
+        from common.auth_budget import AuthBudget, SERVICES
         summary = AuthBudget.get_summary()
-        alerts = []
+        alerts: list[str] = []
         for svc, info in summary.items():
             if info["count"] == 0:
                 continue
+            spec = SERVICES.get(svc, {})
+            window_sec = spec.get("window_sec", 3600)
+            critical_prefix = "[CRITICAL] " if spec.get("critical") else ""
+            reset_str = _auth_next_reset_jst(svc, window_sec)
+
             if info["remaining"] == 0:
-                alerts.append(f"  {svc}: 上限到達 {info['count']}/{info['max']}")
+                line = f"  {critical_prefix}{svc}: 上限到達 {info['count']}/{info['max']} / 次リセット {reset_str}"
             elif info["remaining"] <= 1:
-                alerts.append(f"  {svc}: 残り{info['remaining']}回")
+                line = f"  {critical_prefix}{svc}: 残り{info['remaining']}回 / 次リセット {reset_str}"
             elif info["success_rate"] < 50 and info["count"] >= 2:
-                alerts.append(f"  {svc}: 成功率{info['success_rate']}% ({info['count']}回)")
+                fails = _auth_recent_failures(svc, window_sec, limit=2)
+                tail = f" — {', '.join(fails)}" if fails else ""
+                line = f"  {critical_prefix}{svc}: 成功率{info['success_rate']}% ({info['count']}回){tail}"
+            else:
+                continue
+            alerts.append(line)
         if not alerts:
             return ""
         return "認証試行:\n" + "\n".join(alerts)
