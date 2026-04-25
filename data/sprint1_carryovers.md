@@ -783,3 +783,20 @@ grep -l "Sprint 1" /Users/yuusakuichio/trading/data/sprint1_carryovers.md && \
 - `/tmp` は再起動で消える可能性あり → Sprint 2 冒頭で `data/archive/` に移動するか最終判断
 - 現時点の作業ツリーは 9141243 相当（HEAD 4fa008d に対する legitimate な変更なし）
 
+---
+
+## C-026 完遂記録（2026-04-26 07:55 fork session）: archive 移動完了
+
+**ステータス**: ✅ 完遂 (carryover close)
+
+**実態**:
+- `data/archive/2026-04-24_legacy_bot_stash/` に同一 patch 2 件が既に保管されていたことを実測確認
+- MD5: spy_bot_diff = `28288d3e71637162e61c883a301c4fdc` / chronos_bot_diff = `eaf314ed35124319d73f2e53a9dd9256`
+- SHA256: spy_bot_diff = `09fc7aa8f81dba5d248ee502ea7f530ff16e0a93ebad95a08247d479b75d967b`（archive と /tmp 完全一致）
+- `/tmp` 側は重複コピーのため削除（情報損失ゼロ・archive に正本残存）
+
+**最終位置**:
+- `data/archive/2026-04-24_legacy_bot_stash/spy_bot_diff_20260424_0257.patch` (86295 bytes)
+- `data/archive/2026-04-24_legacy_bot_stash/chronos_bot_diff_20260424_0257.patch` (24050 bytes)
+- `data/archive/2026-04-24_legacy_bot_stash/README.md` (1775 bytes・経緯説明)
+
