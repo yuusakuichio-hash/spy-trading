@@ -1,0 +1,69 @@
+# config/atlas_desired_state.yaml — Atlas K8s-style Desired State 宣言
+#
+# Reconciler がこのファイルを読み込み、実際の running state と diff を取り
+# idempotent に修復する。フラグ変更は必ずここを編集 → reconciler が自動反映。
+#
+# boolean フラグ: true/false (YAML標準)
+# launchd_services: 各サービスの desired 起動状態
+# kill_switch: desired kill_switch 状態 (false=解除済が正常)
+#
+# 2026-04-25 初版
+
+version: "1.0"
+
+# ── グローバル制御フラグ ──────────────────────────────────────────────────────
+flags:
+  # paper_mode: true = 本番発注禁止・ペーパー専用
+  paper_mode: true
+
+  # pdt_constrained: true = PDT (Pattern Day Trader) 制約下での運用
+  pdt_constrained: true
+
+  # chaos_mode: true = Chaos Weekly Runner 有効（本番では false）
+  chaos_mode: false
+
+  # engine_enabled: false = エンジン全停止（緊急時に false に変更）
+  engine_enabled: true
+
+  # reconciler_dry_run: true = 修復アクションを実行せず diff ログのみ出力
+  reconciler_dry_run: false
+
+# ── Kill Switch desired state ─────────────────────────────────────────────────
+# kill_switch.armed: false = 解除状態が desired（true = 発動状態が desired）
+kill_switch:
+  armed: false
+
+# ── launchd サービス desired state ───────────────────────────────────────────
+# running: true = 起動しているべき / false = 停止しているべき
+launchd_services:
+  - label: com.soralab.atlas-paper
+    running: true
+
+  - label: com.soralab.atlas-trader
+    running: true
+
+  - label: com.soralab.sentinel-watchdog
+    running: true
+
+  - label: com.soralab.supervisor
+    running: true
+
+  - label: com.soralab.moomoo-opend-relogin
+    running: true
+
+  - label: com.soralab.self-monitor
+    running: true
+
+  - label: com.soralab.chaos-weekly
+    # chaos_mode フラグに連動: reconciler が flags.chaos_mode で上書きする
+    running: false
+
+  - label: com.soralab.dead-man-switch
+    running: true
+
+# ── state_v3 ファイル存在チェック ─────────────────────────────────────────────
+# 存在必須ファイル: reconciler が不在なら空ファイルで作成する
+required_state_files:
+  - data/state_v3/kill_switch_audit.jsonl
+  - data/state_v3/monitor_state.jsonl
+  - data/state_v3/latency_samples.jsonl
