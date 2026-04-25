@@ -394,6 +394,69 @@ def _build_market_data(mode: str):
         return None, None
 
 
+def _build_broker(mode: str):
+    """mode に応じて BrokerClient 実装を返す。
+
+    paper モード: moomoo SIMULATE 経由 MoomooPaperBroker を注入 (実 paper 発注)。
+    dry / test-connect モード: _StubBroker (発注 skip)。
+    live モード: 別 broker class が必要 (未実装・safety で stub 返却)。
+
+    Returns
+    -------
+    (broker, trade_ctx_to_close): BrokerClient 実装 + cleanup 用 trade_ctx (None 可)
+    """
+    if mode != "paper":
+        if mode == "live":
+            log.error(
+                "[main] live broker は未実装・_StubBroker fallback (発注 skip 安全側)",
+            )
+        return None, None  # build_engine_native で _StubBroker fallback
+
+    try:
+        import futu as ft
+        from atlas_v3.broker.moomoo_paper import MoomooPaperBroker
+
+        # paper 専用 OpenSecTradeContext (FUTUJP)
+        trade_ctx = ft.OpenSecTradeContext(
+            filter_trdmarket=ft.TrdMarket.US,
+            host="127.0.0.1",
+            port=11111,
+            security_firm=ft.SecurityFirm.FUTUJP,
+        )
+        # paper account ID 取得 (SIMULATE 環境)
+        ret, acc_data = trade_ctx.get_acc_list()
+        if ret != ft.RET_OK or acc_data is None or len(acc_data) == 0:
+            log.warning("[main] get_acc_list 失敗・_StubBroker fallback")
+            try:
+                trade_ctx.close()
+            except Exception:
+                pass
+            return None, None
+
+        sim_rows = acc_data[acc_data["trd_env"] == ft.TrdEnv.SIMULATE]
+        if len(sim_rows) == 0:
+            log.warning("[main] SIMULATE account なし・_StubBroker fallback")
+            try:
+                trade_ctx.close()
+            except Exception:
+                pass
+            return None, None
+
+        paper_acc_id = int(sim_rows.iloc[0]["acc_id"])
+        broker = MoomooPaperBroker(trade_ctx, paper_acc_id=paper_acc_id)
+        log.info(
+            "[main] MoomooPaperBroker 注入完了 (mode=%s) acc_id=%d・実 SIMULATE 発注経路アクティブ",
+            mode, paper_acc_id,
+        )
+        return broker, trade_ctx
+    except Exception as exc:
+        log.warning(
+            "[main] MoomooPaperBroker 注入失敗・_StubBroker fallback: %s",
+            exc,
+        )
+        return None, None
+
+
 def _main_start_run_loop(disable_names: list[str], mode: str) -> int:
     """paper / dry / live モード: AtlasEngine を組み立てて run_loop を起動する。
 
@@ -405,29 +468,33 @@ def _main_start_run_loop(disable_names: list[str], mode: str) -> int:
     stop_event = threading.Event()
     setup_graceful_shutdown(stop_event)
     market_data, quote_ctx_to_close = _build_market_data(mode)
+    broker, trade_ctx_to_close = _build_broker(mode)
     try:
         engine = build_engine_native(
             disable_names=disable_names,
             market_data=market_data,
+            broker=broker,
         )
     except Exception as exc:
         log.error("[main] AtlasEngine 組み立て失敗: %s", exc, exc_info=True)
-        if quote_ctx_to_close is not None:
-            try:
-                quote_ctx_to_close.close()
-            except Exception:
-                pass
+        for ctx in (quote_ctx_to_close, trade_ctx_to_close):
+            if ctx is not None:
+                try:
+                    ctx.close()
+                except Exception:
+                    pass
         return 1
     log.info("[main] run_loop 開始 (mode=%s)", mode)
     try:
         return run_loop(engine=engine, stop_event=stop_event)
     finally:
-        if quote_ctx_to_close is not None:
-            try:
-                quote_ctx_to_close.close()
-                log.info("[main] quote_ctx close 完了")
-            except Exception as e:
-                log.warning("[main] quote_ctx close 失敗: %s", e)
+        for label, ctx in (("quote_ctx", quote_ctx_to_close), ("trade_ctx", trade_ctx_to_close)):
+            if ctx is not None:
+                try:
+                    ctx.close()
+                    log.info("[main] %s close 完了", label)
+                except Exception as e:
+                    log.warning("[main] %s close 失敗: %s", label, e)
 
 
 # ---------------------------------------------------------------------------
