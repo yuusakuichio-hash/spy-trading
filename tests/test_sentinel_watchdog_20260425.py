@@ -261,10 +261,16 @@ class TestRunCheckCycle:
         assert sw._consecutive_failures == 0
 
     def test_sw16_one_failure_increments_and_restarts(self):
-        """SW-16: 1 回異常 → consecutive_failures=1 + restart_dms 呼出。"""
+        """SW-16: 1 回異常 + heartbeat 古い → consecutive_failures=1 + restart_dms 呼出。
+
+        2026-04-25 修正: heartbeat fresh ガード追加につき、test も
+        _is_dms_heartbeat_fresh=False を patch して「真に死んだ」シナリオを再現する。
+        """
         restart_mock = MagicMock(return_value=True)
         with patch("scripts.sentinel_watchdog.check_dms_health",
                    return_value=(False, "proc=DEAD")), \
+             patch("scripts.sentinel_watchdog._is_dms_heartbeat_fresh",
+                   return_value=False), \
              patch("scripts.sentinel_watchdog.restart_dms", restart_mock), \
              patch("scripts.sentinel_watchdog._send_p1_alert"), \
              patch("scripts.sentinel_watchdog._activate_kill_switch"), \

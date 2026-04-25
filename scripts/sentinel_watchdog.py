@@ -65,16 +65,13 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── 閾値 ──────────────────────────────────────────────────────────────────────
 CHECK_INTERVAL_SEC: int = int(os.environ.get("SENTINEL_CHECK_INTERVAL", "30"))
-# dead_man_switch.plist の ThrottleInterval=900s (15min 周期) に合わせ、
-# 18 min (15min + 3min grace) 以内の heartbeat 更新を新鮮と判定する。
-# 元の 180s (3min) は long-running daemon を想定しており、ワンショット 15min 周期と
-# 不整合で false-positive を起こす (2026-04-25 sentinel KILL_SWITCH 連鎖事故の真因)。
-HEARTBEAT_STALE_SEC: int = int(os.environ.get("SENTINEL_HB_STALE_SEC", "1100"))
-# 同じ理由で「直近 N 分の最低 beat 件数」も 15min 周期に合わせる。
-# 元の 5min/3beat は DMS が 15min 毎の場合 2/3 の時間 false 判定する。
-# 18min 窓で 1 beat 以上 (= DMS が 1 サイクル走った) で OK 扱い。
-MIN_BEATS_IN_5MIN: int = int(os.environ.get("SENTINEL_MIN_BEATS", "1"))
-BEATS_WINDOW_SEC: int = int(os.environ.get("SENTINEL_BEATS_WINDOW_SEC", "1100"))
+# dead_man_switch.plist の ThrottleInterval を 60s に短縮済 (2026-04-25 修正)。
+# DMS が 60s 毎に走り 5 component beacon を書くので 5min 窓に余裕で 25 beat 蓄積。
+# 元 180s/3beat の sensitivity を維持しながら DMS 死亡を 3 min 以内に検知できる。
+# (1100s/1beat への緩和案は redteam 指摘で却下: 古い beacon が窓に残り false-OK)
+HEARTBEAT_STALE_SEC: int = int(os.environ.get("SENTINEL_HB_STALE_SEC", "180"))
+MIN_BEATS_IN_5MIN: int = int(os.environ.get("SENTINEL_MIN_BEATS", "3"))
+BEATS_WINDOW_SEC: int = int(os.environ.get("SENTINEL_BEATS_WINDOW_SEC", "300"))
 MAX_CONSECUTIVE_FAILURES: int = int(os.environ.get("SENTINEL_MAX_FAILURES", "3"))
 SENTINEL_HEARTBEAT_INTERVAL: int = int(os.environ.get("SENTINEL_HB_INTERVAL", "30"))
 
@@ -330,8 +327,18 @@ def run_check_cycle() -> None:
     )
 
     # 再起動試行
-    restarted = restart_dms()
-    log.info("restart_dms result=%s", restarted)
+    # 2026-04-25 修正: heartbeat が新鮮な場合は launchd 自然スケジュールを妨げない
+    # (kickstart -k 連発 → launchctl 競合 → DMS 実行間隔広がる → beats 不足 → 自家中毒ループ)
+    # heartbeat が真に古い (>HEARTBEAT_STALE_SEC) 場合のみ強制再起動する。
+    if _is_dms_heartbeat_fresh():
+        log.info(
+            "restart_dms skipped: heartbeat fresh — trusting launchd schedule "
+            "(beats may catch up next cycle)"
+        )
+        restarted = True  # 介入不要 = 健全側として扱う (consecutive_failures は加算済み)
+    else:
+        restarted = restart_dms()
+        log.info("restart_dms result=%s", restarted)
 
     if _consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
         msg = (

@@ -104,26 +104,27 @@ class VolTargetSizer:
             )
 
         # 実現ボラ (日次 std × sqrt(252))
-        # NaN を含むと statistics.stdev() が AttributeError を出すので事前除外。
-        clean = [r for r in recent if not math.isnan(r)]
+        # NaN/Inf を含むと statistics.stdev() が AttributeError or 異常値を出すので事前除外。
+        # (2026-04-25 redteam 指摘: Inf 残置で min(1.0, target/Inf)≈0 → 発注 size 0 で戦略停止)
+        clean = [r for r in recent if math.isfinite(r)]
         if len(clean) < 2:
             return VolTargetResult(
                 size_factor=1.0,
                 realized_vol_ann=0.0,
                 target_vol=self._target_vol,
                 daily_returns=len(clean),
-                reason="insufficient finite returns after NaN filter: size_factor=1.0",
+                reason="insufficient finite returns after NaN/Inf filter: size_factor=1.0",
             )
         daily_std = statistics.stdev(clean)
         realized_vol_ann = daily_std * ANNUALIZATION_FACTOR
 
-        if realized_vol_ann <= 0.0 or math.isnan(realized_vol_ann):
+        if realized_vol_ann <= 0.0 or not math.isfinite(realized_vol_ann):
             return VolTargetResult(
                 size_factor=1.0,
                 realized_vol_ann=0.0,
                 target_vol=self._target_vol,
                 daily_returns=n,
-                reason=f"realized_vol=0 or NaN: size_factor=1.0",
+                reason=f"realized_vol=0/NaN/Inf: size_factor=1.0",
             )
 
         # AQR 式: min(1.0, target / realized)
