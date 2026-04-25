@@ -65,8 +65,16 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── 閾値 ──────────────────────────────────────────────────────────────────────
 CHECK_INTERVAL_SEC: int = int(os.environ.get("SENTINEL_CHECK_INTERVAL", "30"))
-HEARTBEAT_STALE_SEC: int = int(os.environ.get("SENTINEL_HB_STALE_SEC", "180"))
-MIN_BEATS_IN_5MIN: int = int(os.environ.get("SENTINEL_MIN_BEATS", "3"))
+# dead_man_switch.plist の ThrottleInterval=900s (15min 周期) に合わせ、
+# 18 min (15min + 3min grace) 以内の heartbeat 更新を新鮮と判定する。
+# 元の 180s (3min) は long-running daemon を想定しており、ワンショット 15min 周期と
+# 不整合で false-positive を起こす (2026-04-25 sentinel KILL_SWITCH 連鎖事故の真因)。
+HEARTBEAT_STALE_SEC: int = int(os.environ.get("SENTINEL_HB_STALE_SEC", "1100"))
+# 同じ理由で「直近 N 分の最低 beat 件数」も 15min 周期に合わせる。
+# 元の 5min/3beat は DMS が 15min 毎の場合 2/3 の時間 false 判定する。
+# 18min 窓で 1 beat 以上 (= DMS が 1 サイクル走った) で OK 扱い。
+MIN_BEATS_IN_5MIN: int = int(os.environ.get("SENTINEL_MIN_BEATS", "1"))
+BEATS_WINDOW_SEC: int = int(os.environ.get("SENTINEL_BEATS_WINDOW_SEC", "1100"))
 MAX_CONSECUTIVE_FAILURES: int = int(os.environ.get("SENTINEL_MAX_FAILURES", "3"))
 SENTINEL_HEARTBEAT_INTERVAL: int = int(os.environ.get("SENTINEL_HB_INTERVAL", "30"))
 
@@ -206,7 +214,7 @@ def check_dms_health() -> tuple[bool, str]:
     """
     proc_alive = _is_dms_process_alive()
     hb_fresh = _is_dms_heartbeat_fresh()
-    beat_count = _count_dms_beats_in_window(300)
+    beat_count = _count_dms_beats_in_window(BEATS_WINDOW_SEC)
     beats_ok = beat_count >= MIN_BEATS_IN_5MIN
 
     # ワンショット設計: heartbeat が新鮮 かつ beats が十分なら正常
