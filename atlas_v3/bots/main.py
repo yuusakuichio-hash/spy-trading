@@ -1,58 +1,112 @@
-"""atlas_v3/bots/main.py — subprocess 境界 spy_bot.py launcher。
+"""atlas_v3/bots/main.py — AtlasEngine native ランチャー。
 
-設計方針（Redteam 対案 2026-04-25 採択）
------------------------------------------
-- delegate 禁止: spy_bot.py を import して SPYCreditSpreadBot を直接呼ぶ実装は却下。
-- subprocess 境界: sys.executable + spy_bot.py を Popen で起動し、プロセス間を
-  完全に隔離する。logger / env / PID はすべて spy_bot プロセス側で完結する。
-- SIGTERM forward: launchd が atlas_v3.bots プロセスを停止するとき、
-  子プロセス (spy_bot) にも SIGTERM を転送して二重プロセス残留を防ぐ。
-- exit code 透過: spy_bot の終了コードをそのまま sys.exit() に渡す。
-- spy_bot.py 書換ゼロ: このモジュールは spy_bot.py を一切変更しない。
+設計方針（β-2 配線実装 2026-04-25）
+--------------------------------------
+- subprocess.Popen(spy_bot.py) 経路を完全廃止。
+- AtlasEngine を直接インスタンス化し TacticRegistry 経由で 11 戦術を登録。
+- paper / dry-run モードでは stub providers を注入してブローカー接続なしで動作。
+- SIGTERM / KeyboardInterrupt で graceful shutdown（engine.stop_event セット → loop 終了）。
+- spy_bot.py / common/* / chronos* / atlas_v3/core/engine.py / registry.py は変更禁止。
 
 使用例
 ------
     python3 -m atlas_v3.bots --mode paper
     python3 -m atlas_v3.bots --mode paper --dry-run
-    python3 -m atlas_v3.bots --mode paper --test-connect
-    python3 -m atlas_v3.bots --mode live
     python3 -m atlas_v3.bots --mode paper --no-orb --no-calendar --no-multi
+    python3 -m atlas_v3.bots --mode live
 
-argv → spy_bot.py argv 変換表
-------------------------------
-    --mode paper        → --paper
-    --mode live         → (フラグなし、spy_bot のデフォルト)
-    --mode dry          → --paper --dry-test   (dry は paper + dry-test の組合せ)
-    --mode test-connect → --paper --test-connect
-    --dry-run           → --dry-test
-    --test-connect      → --test-connect
-    --no-orb            → --no-orb
-    --no-calendar       → --no-calendar
-    --no-multi          → --no-multi
+フラグ → TacticRegistry disable_names 変換表
+-------------------------------------------
+    --no-orb       → "orb_native" を除外
+    --no-calendar  → "diagonal_spread" を除外
+    --no-multi     → 現在 atlas_v3 では multi-symbol 概念が tactic 単位でないため
+                     ログ警告のみ（将来の tactic 追加時に対応）
 """
 from __future__ import annotations
 
 import argparse
+import dataclasses
+import datetime
 import logging
-import os
-import pathlib
 import signal
-import subprocess
-import sys
-from typing import Optional
+import threading
+import time
+import uuid
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from atlas_v3.core.engine import AtlasEngine
 
 log = logging.getLogger("atlas.bots.main")
 
-# spy_bot.py は trading リポジトリルートに存在する（schg lock で変更不可）
-_TRADING_ROOT = pathlib.Path(__file__).resolve().parents[2]  # atlas_v3/bots/main.py → trading/
-_SPY_BOT_PATH = _TRADING_ROOT / "spy_bot.py"
+# ---------------------------------------------------------------------------
+# Stub providers（paper / dry-run 時に注入）
+# ---------------------------------------------------------------------------
 
+from atlas_v3.core.env_observer import MarketEnvironment
+from atlas_v3.core.engine import OrderRequest, OrderResult
+
+
+# _StubMarketData 固定値定数（マジックナンバー排除）
+_STUB_VIX: float = 16.0
+_STUB_VRP: float = 0.0
+_STUB_GEX: float = 0.0
+_STUB_TERM_RATIO: float = 1.0
+_STUB_BIAS: str = "neutral"
+_STUB_IVR_SPY: float = 40.0
+
+
+class _StubMarketData:
+    """dry-run / paper モード用 MarketDataClient stub。
+
+    get_environment() は固定の中立 MarketEnvironment を返す。
+    Phase 2 で MoomooProvider / YFinanceProvider に差し替える。
+    """
+
+    def get_environment(self) -> MarketEnvironment:
+        return MarketEnvironment(
+            vix=_STUB_VIX,
+            vrp=_STUB_VRP,
+            gex=_STUB_GEX,
+            term_ratio=_STUB_TERM_RATIO,
+            bias=_STUB_BIAS,
+            ivr_by_symbol={"SPY": _STUB_IVR_SPY},
+        )
+
+
+class _StubBroker:
+    """dry-run / paper モード用 BrokerClient stub。
+
+    place_order() は発注をスキップして dry_run_skip ステータスを返す。
+    Phase 2 で MoomooBroker / PaperBroker に差し替える。
+    """
+
+    def place_order(self, request: OrderRequest) -> OrderResult:
+        log.info(
+            "[_StubBroker] dry-run skip: symbol=%s side=%s qty=%d tactic=%s",
+            request.symbol,
+            request.side,
+            request.quantity,
+            request.tactic_name,
+        )
+        return OrderResult(
+            order_id=f"stub-{uuid.uuid4().hex[:8]}",
+            symbol=request.symbol,
+            status="dry_run_skip",
+            tactic_name=request.tactic_name,
+            detail="stub broker: order skipped in dry-run/paper mode",
+        )
+
+
+# ---------------------------------------------------------------------------
+# argparse
+# ---------------------------------------------------------------------------
 
 def build_parser() -> argparse.ArgumentParser:
     """ArgumentParser を構築して返す（テストから単体呼び出し可能）。"""
     parser = argparse.ArgumentParser(
         prog="python3 -m atlas_v3.bots",
-        description="atlas_v3.bots — subprocess 境界で spy_bot.py を起動する薄い launcher",
+        description="atlas_v3.bots — AtlasEngine native ランチャー",
     )
     parser.add_argument(
         "--mode",
@@ -62,7 +116,7 @@ def build_parser() -> argparse.ArgumentParser:
             "実行モード: "
             "paper=ペーパートレード / "
             "live=本番 / "
-            "dry=paper+dry-test (futu 接続なし) / "
+            "dry=paper+dry-run (接続なし) / "
             "test-connect=接続テストのみ"
         ),
     )
@@ -70,117 +124,271 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         dest="dry_run",
         action="store_true",
-        help="futu 接続なし・市場時間外でも全ロジックをテスト (spy_bot --dry-test 相当)",
+        help="接続なし・市場時間外でも全ロジックをテスト（stub providers 使用）",
     )
     parser.add_argument(
         "--no-orb",
         dest="no_orb",
         action="store_true",
-        help="ORB 買い戦略を無効化（spy_bot --no-orb に転送）",
+        help="ORB 買い戦略を無効化（tactic_name='orb_native' を除外）",
     )
     parser.add_argument(
         "--no-calendar",
         dest="no_calendar",
         action="store_true",
-        help="カレンダースプレッド戦略を無効化（spy_bot --no-calendar に転送）",
+        help="カレンダースプレッド戦略を無効化（tactic_name='diagonal_spread' を除外）",
     )
     parser.add_argument(
         "--no-multi",
         dest="no_multi",
         action="store_true",
-        help="マルチ銘柄同時運用を無効化（spy_bot --no-multi に転送）",
+        help="マルチ銘柄同時運用を無効化（将来の multi-symbol tactic 除外に対応）",
     )
     return parser
 
 
-def build_spy_bot_argv(args: argparse.Namespace) -> list[str]:
-    """parser 解析済み args から spy_bot.py に渡す argv を構築する。
+# ---------------------------------------------------------------------------
+# disable_names 計算
+# ---------------------------------------------------------------------------
+
+# --no-* フラグ → 除外する tactic_name のマッピング
+_FLAG_TO_TACTIC_NAMES: dict[str, list[str]] = {
+    "no_orb": ["orb_native"],
+    "no_calendar": ["diagonal_spread"],
+    # no_multi: atlas_v3 v3.0 時点では tactic 単位の multi-symbol 概念なし
+    # 将来 multi_symbol_* tactic が追加された際にここに追記する
+    "no_multi": [],
+}
+
+
+def build_disable_names(args: argparse.Namespace) -> list[str]:
+    """parser 解析済み args から除外する tactic_name リストを返す。
 
     Returns
     -------
     list[str]
-        spy_bot.py 以降の引数リスト（sys.executable と spy_bot パスは含まない）。
+        TacticRegistry からフィルタアウトする tactic_name の一覧。
     """
-    spy_argv: list[str] = []
-
-    # --mode 変換
-    if args.mode == "paper":
-        spy_argv.append("--paper")
-    elif args.mode == "live":
-        pass  # spy_bot のデフォルトが live
-    elif args.mode == "dry":
-        spy_argv.extend(["--paper", "--dry-test"])
-    elif args.mode == "test-connect":
-        spy_argv.extend(["--paper", "--test-connect"])
-
-    # --dry-run は --dry-test に変換（mode=dry と重複しても idempotent）
-    if args.dry_run and "--dry-test" not in spy_argv:
-        spy_argv.append("--dry-test")
-
-    # フラグは名前変換なしでそのまま転送
-    if args.no_orb:
-        spy_argv.append("--no-orb")
-    if args.no_calendar:
-        spy_argv.append("--no-calendar")
-    if args.no_multi:
-        spy_argv.append("--no-multi")
-
-    return spy_argv
+    disable: list[str] = []
+    for flag, names in _FLAG_TO_TACTIC_NAMES.items():
+        if getattr(args, flag, False):
+            disable.extend(names)
+            if not names:
+                log.warning(
+                    "[main] --%s 指定: atlas_v3 v3.0 では対応 tactic なし（ログのみ）",
+                    flag.replace("_", "-"),
+                )
+    return disable
 
 
-def launch_spy_bot(
-    spy_argv: list[str],
-    spy_bot_path: pathlib.Path = _SPY_BOT_PATH,
-    inherit_stdio: bool = True,
-) -> subprocess.Popen:
-    """spy_bot.py を subprocess で起動して Popen オブジェクトを返す。
+# ---------------------------------------------------------------------------
+# AtlasEngine ファクトリ
+# ---------------------------------------------------------------------------
+
+def build_engine_native(
+    disable_names: list[str],
+    market_data: object | None = None,
+    broker: object | None = None,
+) -> "AtlasEngine":
+    """TacticRegistry 経由で AtlasEngine を組み立てて返す。
 
     Parameters
     ----------
-    spy_argv : list[str]
-        spy_bot.py に渡す引数リスト（build_spy_bot_argv の返値）。
-    spy_bot_path : pathlib.Path
-        spy_bot.py の絶対パス。テストで差し替え可能。
-    inherit_stdio : bool
-        True のとき stdout/stderr を親プロセスに継承する（launchd 運用時）。
-        False のとき PIPE にする（テスト用）。
-    """
-    cmd = [sys.executable, str(spy_bot_path)] + spy_argv
-    log.info("launch_spy_bot: cmd=%s", cmd)
+    disable_names : list[str]
+        除外する tactic_name リスト（--no-orb 等から生成）。
+    market_data : object | None
+        MarketDataClient 実装。None のとき _StubMarketData を使用。
+    broker : object | None
+        BrokerClient 実装。None のとき _StubBroker を使用。
 
-    kwargs: dict = {
-        "cwd": str(spy_bot_path.parent),
-        "env": os.environ.copy(),
-    }
-    if inherit_stdio:
-        kwargs["stdout"] = None  # 継承
-        kwargs["stderr"] = None  # 継承
+    Returns
+    -------
+    AtlasEngine
+        disable_names を除いた戦術が登録済みのエンジン。
+    """
+    from atlas_v3.bots.engines.registry import TacticRegistry
+    from atlas_v3.core.engine import AtlasEngine
+
+    registry = TacticRegistry()
+
+    if disable_names:
+        log.info("[main] disable_names=%s を除外して AtlasEngine を組み立て", disable_names)
+        tactics = [t for t in registry.all_tactics() if t.tactic_name not in disable_names]
     else:
-        kwargs["stdout"] = subprocess.PIPE
-        kwargs["stderr"] = subprocess.PIPE
+        tactics = registry.all_tactics()
 
-    return subprocess.Popen(cmd, **kwargs)
+    log.info(
+        "[main] AtlasEngine 組み立て: 戦術数=%d / 全体=%d",
+        len(tactics),
+        len(registry),
+    )
+
+    md = market_data if market_data is not None else _StubMarketData()
+    bk = broker if broker is not None else _StubBroker()
+
+    return AtlasEngine(
+        market_data=md,
+        broker=bk,
+        tactics=tactics,
+    )
 
 
-def _setup_sigterm_forward(proc: subprocess.Popen) -> None:
-    """SIGTERM を受け取ったら子プロセスにも転送するハンドラを登録する。
+# ---------------------------------------------------------------------------
+# run loop
+# ---------------------------------------------------------------------------
 
-    launchd が親プロセスに SIGTERM を送ると、このハンドラが子プロセスにも
-    SIGTERM を転送し、二重プロセス残留を防ぐ。
+# tick 間隔（秒）— Phase 2 で動的調整予定
+_TICK_INTERVAL_SECS: float = 60.0
+
+
+def _run_one_tick(
+    engine: "AtlasEngine",
+    tick_count: int,
+    session_id_prefix: str,
+) -> tuple[object, bool]:
+    """1 tick 分の engine.run_session を実行して (result, kill_switch_triggered) を返す。
+
+    Parameters
+    ----------
+    engine : AtlasEngine
+        実行対象エンジン。
+    tick_count : int
+        現在の tick 番号（session_id 生成に使用）。
+    session_id_prefix : str
+        session_id プレフィックス。
+
+    Returns
+    -------
+    tuple[object, bool]
+        (SessionResult | None, Kill Switch が発動したか)
     """
-    def _forward(signum: int, frame: object) -> None:
-        log.info("SIGTERM 受信 → spy_bot (pid=%d) に転送", proc.pid)
-        try:
-            proc.send_signal(signal.SIGTERM)
-        except (ProcessLookupError, OSError):
-            pass  # すでに終了していれば無視
+    now_jst = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
+    session_id = f"{session_id_prefix}tick-{tick_count}-{now_jst.strftime('%Y%m%dT%H%M%S')}"
+    log.info("[run_loop] tick=%d session_id=%s", tick_count, session_id)
+    try:
+        result = engine.run_session(session_id=session_id)
+    except Exception as exc:  # noqa: BLE001 — run_session は内部例外を外へ漏らさない設計（ループ継続優先）
+        log.error("[run_loop] tick=%d 例外: %s", tick_count, exc, exc_info=True)
+        result = None
+    kill_switch = bool(result is not None and result.terminated_by_kill_switch)
+    return result, kill_switch
 
-    signal.signal(signal.SIGTERM, _forward)
-    log.info("SIGTERM forward 登録完了 (spy_bot pid=%d)", proc.pid)
 
+def run_loop(
+    engine: "AtlasEngine",
+    stop_event: threading.Event,
+    tick_interval_secs: float = _TICK_INTERVAL_SECS,
+    session_id_prefix: str = "",
+) -> int:
+    """AtlasEngine の tick loop を SIGTERM / stop_event まで回し続ける。
+
+    Parameters
+    ----------
+    engine : AtlasEngine
+        実行対象エンジン。
+    stop_event : threading.Event
+        セットされたらループ終了。SIGTERM ハンドラがセットする。
+    tick_interval_secs : float
+        tick 間隔（秒）。デフォルト 60 秒。0 以下は不正。
+    session_id_prefix : str
+        session_id プレフィックス（テストで識別用）。
+
+    Returns
+    -------
+    int
+        終了コード（0=正常, 1=Kill Switch 等による異常）。
+    """
+    assert tick_interval_secs > 0, f"tick_interval_secs は正の値が必要: {tick_interval_secs}"
+    log.info("[run_loop] 開始: tick_interval=%.1fs", tick_interval_secs)
+    tick_count = 0
+    terminated_by_ks = False
+
+    while not stop_event.is_set():
+        tick_count += 1
+        _, kill_switch = _run_one_tick(engine, tick_count, session_id_prefix)
+        if kill_switch:
+            log.warning("[run_loop] Kill Switch ARMED — ループ終了")
+            terminated_by_ks = True
+            break
+        # 次の tick まで待機（stop_event がセットされれば即抜け）
+        stop_event.wait(timeout=tick_interval_secs)
+
+    log.info(
+        "[run_loop] 終了: ticks=%d kill_switch=%s",
+        tick_count,
+        terminated_by_ks,
+    )
+    return 1 if terminated_by_ks else 0
+
+
+# ---------------------------------------------------------------------------
+# SIGTERM graceful shutdown
+# ---------------------------------------------------------------------------
+
+def setup_graceful_shutdown(stop_event: threading.Event) -> None:
+    """SIGTERM / SIGINT を受け取ったら stop_event をセットするハンドラを登録する。
+
+    Parameters
+    ----------
+    stop_event : threading.Event
+        ループ停止フラグ。
+    """
+    def _handle(signum: int, frame: object) -> None:
+        log.info("[main] シグナル受信 (signum=%d) → stop_event セット", signum)
+        stop_event.set()
+
+    signal.signal(signal.SIGTERM, _handle)
+    signal.signal(signal.SIGINT, _handle)
+    log.info("[main] graceful shutdown ハンドラ登録完了 (SIGTERM / SIGINT)")
+
+
+# ---------------------------------------------------------------------------
+# main サブルーティン
+# ---------------------------------------------------------------------------
+
+def _main_test_connect(disable_names: list[str]) -> int:
+    """test-connect モード: AtlasEngine 組み立てのみ行い即終了する。
+
+    Returns
+    -------
+    int
+        0=成功, 1=失敗。
+    """
+    log.info("[main] test-connect モード: engine 組み立てのみで終了")
+    try:
+        build_engine_native(disable_names=disable_names)
+        log.info("[main] test-connect OK: AtlasEngine 組み立て完了")
+        return 0
+    except Exception as exc:
+        log.error("[main] test-connect FAIL: %s", exc, exc_info=True)
+        return 1
+
+
+def _main_start_run_loop(disable_names: list[str], mode: str) -> int:
+    """paper / dry / live モード: AtlasEngine を組み立てて run_loop を起動する。
+
+    Returns
+    -------
+    int
+        run_loop の終了コード（0=正常, 1=Kill Switch 等による異常）。
+    """
+    stop_event = threading.Event()
+    setup_graceful_shutdown(stop_event)
+    try:
+        engine = build_engine_native(disable_names=disable_names)
+    except Exception as exc:
+        log.error("[main] AtlasEngine 組み立て失敗: %s", exc, exc_info=True)
+        return 1
+    log.info("[main] run_loop 開始 (mode=%s)", mode)
+    return run_loop(engine=engine, stop_event=stop_event)
+
+
+# ---------------------------------------------------------------------------
+# main
+# ---------------------------------------------------------------------------
 
 def main(argv: Optional[list[str]] = None) -> int:
-    """CLI エントリポイント。spy_bot の終了コードを返す。
+    """CLI エントリポイント。終了コード (0=正常, 非0=異常) を返す。
 
     Parameters
     ----------
@@ -191,33 +399,27 @@ def main(argv: Optional[list[str]] = None) -> int:
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
-
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    spy_argv = build_spy_bot_argv(args)
+    is_dry_run = args.dry_run or args.mode in ("dry", "test-connect")
+    is_paper = args.mode in ("paper", "dry", "test-connect") or args.dry_run
     log.info(
-        "atlas_v3.bots.main: mode=%s dry_run=%s no_orb=%s no_calendar=%s no_multi=%s "
-        "→ spy_argv=%s",
+        "[main] 起動: mode=%s dry_run=%s no_orb=%s no_calendar=%s no_multi=%s "
+        "is_dry_run=%s is_paper=%s",
         args.mode, args.dry_run, args.no_orb, args.no_calendar, args.no_multi,
-        spy_argv,
+        is_dry_run, is_paper,
     )
 
-    proc = launch_spy_bot(spy_argv, inherit_stdio=True)
-    _setup_sigterm_forward(proc)
+    disable_names = build_disable_names(args)
+    if disable_names:
+        log.info("[main] 除外 tactic_names: %s", disable_names)
 
-    log.info("spy_bot 起動完了 (pid=%d) — 終了を待機", proc.pid)
-    try:
-        proc.wait()
-    except KeyboardInterrupt:
-        log.info("KeyboardInterrupt — spy_bot (pid=%d) に SIGTERM 送信", proc.pid)
-        proc.send_signal(signal.SIGTERM)
-        proc.wait()
-
-    rc = proc.returncode
-    log.info("spy_bot 終了 (pid=%d, rc=%d)", proc.pid, rc)
-    return rc if rc is not None else 1
+    if args.mode == "test-connect":
+        return _main_test_connect(disable_names)
+    return _main_start_run_loop(disable_names, args.mode)
 
 
 if __name__ == "__main__":
+    import sys
     sys.exit(main())
