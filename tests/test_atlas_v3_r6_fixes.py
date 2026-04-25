@@ -267,6 +267,7 @@ class TestC3_KillSwitchZombieState:
                 import types
                 mock_ks = types.ModuleType("common_v3.risk.kill_switch")
                 mock_ks.deactivate = fake_deactivate
+                mock_ks._deactivate_raw = fake_deactivate
                 sys.modules["common_v3.risk.kill_switch"] = mock_ks
                 try:
                     result = daemon._probe_recovery()

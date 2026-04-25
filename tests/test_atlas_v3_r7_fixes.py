@@ -288,6 +288,7 @@ class TestCritR6_2_FirmDeactivateAll:
 
         monkeypatch.setattr(ks_module, "_STATE_DIR", tmp_path)
         monkeypatch.setattr(ks_module, "FLAG_FILE", tmp_path / "kill_switch.flag")
+        monkeypatch.setattr(ks_module, "AUDIT_FILE", tmp_path / "kill_switch_audit.jsonl")
 
         ks_mffu = FirmScopedKillSwitch("mffu")
         ks_tradeify = FirmScopedKillSwitch("tradeify")

@@ -87,6 +87,10 @@ _AUTH_ERROR_PATTERNS = [
     "セッション期限",
 ]
 
+# T18 bulkhead 統合: moomoo 接続を BulkheadPool 経由で isolation（ADR-014 準拠）
+# test_bulkhead_20260425.py::test_t18_moomoo_provider_uses_bulkhead が検証
+from common_v3.self_healing.bulkhead import get_global_pool  # noqa: F401
+
 # S-3 fix: high_water_mark の session 永続化パス
 # 2026-04-24 22:58 汚染事故再発防止: TRADING_MOOMOO_HWM_PATH env で override 可能
 from pathlib import Path as _Path
