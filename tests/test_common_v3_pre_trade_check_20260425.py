@@ -40,15 +40,21 @@ _NONWHITELIST_SYMBOL = "US.UNKNOWN_XYZ"
 
 
 def _ctx(**kw) -> OrderCtx:
-    """正常系 OrderCtx のデフォルト (Layer 全通過基準)"""
+    """正常系 OrderCtx のデフォルト (Layer 全通過基準)
+
+    2026-04-25: β-1 採択 (commit 6e4acd2) で fail-open → fail-closed 化された後、
+    est_margin=0.0 / capital_usd=0.0 / option_price=0.0 はいずれも fail-closed reject
+    対象になったため、正常系 default は値を入れる。skip 系 test (test_skip_when_*) は
+    意図的に 0 を override し、新仕様で reject されることを assert する。
+    """
     defaults = dict(
         symbol=_WHITELIST_SYMBOL,
         qty=1,
         option_price=10.0,
         side="SELL",
         is_long=False,
-        est_margin=0.0,
-        capital_usd=0.0,
+        est_margin=100.0,
+        capital_usd=10000.0,
         open_margin_total=0.0,
     )
     defaults.update(kw)
@@ -115,10 +121,12 @@ class TestLayer1DeepITM:
         assert result is None
 
     def test_skip_when_price_zero(self):
-        """option_price=0.0 (不明) はスキップ"""
+        """option_price=0.0 (不明) は β-1 採択後 fail-closed で reject (旧 skip 仕様廃止)"""
         ctx = _ctx(is_long=True, option_price=0.0, side="BUY")
         result = _check_layer1_deep_itm(ctx, _cfg())
-        assert result is None
+        assert result is not None
+        assert not result.allowed
+        assert result.layer == "L1"
 
     def test_custom_threshold(self):
         """custom threshold=$75 → $74.99 は通過、$75 はブロック"""
@@ -235,16 +243,20 @@ class TestLayer3MarginCap:
         assert result is None
 
     def test_skip_when_capital_zero(self):
-        """capital=0 は証拠金不明としてスキップ"""
+        """capital=0 は β-1 採択後 fail-closed で reject (旧 skip 仕様廃止)"""
         ctx = _ctx(est_margin=99999.0, capital_usd=0.0)
         result = _check_layer3_margin(ctx, _cfg())
-        assert result is None
+        assert result is not None
+        assert not result.allowed
+        assert result.layer == "L3"
 
     def test_skip_when_margin_zero(self):
-        """est_margin=0 はスキップ"""
+        """est_margin=0 は β-1 採択後 fail-closed で reject (旧 skip 仕様廃止)"""
         ctx = _ctx(est_margin=0.0, capital_usd=100_000.0)
         result = _check_layer3_margin(ctx, _cfg())
-        assert result is None
+        assert result is not None
+        assert not result.allowed
+        assert result.layer == "L3"
 
     def test_check_order_l3_integration(self):
         """check_order() 経由で L3 ブロックが発火する (80% margin)"""
