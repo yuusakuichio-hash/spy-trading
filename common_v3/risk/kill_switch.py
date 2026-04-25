@@ -278,6 +278,9 @@ class FirmScopedKillSwitch:
         self,
         firm: Literal["mffu", "tradeify", "apex", "bulenox"],
     ) -> None:
+        # C-025: 境界条件 invariant (型 + 非 None 検査)
+        assert firm is not None, "firm must not be None"
+        assert isinstance(firm, str), f"firm must be str, got {type(firm).__name__}"
         if firm not in _VALID_FIRMS:
             raise ValueError(
                 f"firm must be one of {_VALID_FIRMS}, got {firm!r}"
@@ -302,6 +305,10 @@ class FirmScopedKillSwitch:
             True  — 新規発動 (per-firm flag を新たに作成した)
             False — 既に ARMED (冪等スキップ)
         """
+        # C-025: 境界条件 invariant (state 健全性 + 引数検査)
+        assert self.firm in _VALID_FIRMS, f"self.firm corrupted: {self.firm!r}"
+        assert isinstance(reason, str), f"reason must be str, got {type(reason).__name__}"
+        assert isinstance(activator, str), f"activator must be str, got {type(activator).__name__}"
         _ensure_dirs()
         lock_path = _STATE_DIR / f".kill_switch_{self.firm}.lock"
         lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -358,6 +365,9 @@ class FirmScopedKillSwitch:
             True  — 正常解除
             False — per-firm FLAG_FILE 不在 (early return)
         """
+        # C-025: 境界条件 invariant
+        assert isinstance(activator, str), f"activator must be str, got {type(activator).__name__}"
+        assert self.firm in _VALID_FIRMS, f"self.firm corrupted: {self.firm!r}"
         if not self._flag_path.exists():
             return False
 

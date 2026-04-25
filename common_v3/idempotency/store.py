@@ -65,7 +65,11 @@ class IdempotencyStore:
     """
 
     def __init__(self, path: Path | None = None) -> None:
+        # C-025: 境界条件 invariant (path 型 + 解決可能性)
+        if path is not None:
+            assert isinstance(path, Path), f"path must be Path, got {type(path).__name__}"
         self._path: Path = path or _DEFAULT_STORE_PATH
+        assert self._path is not None, "_path must not be None after init"
         self._lock: threading.Lock = threading.Lock()
 
     # ------------------------------------------------------------------
@@ -87,6 +91,10 @@ class IdempotencyStore:
         Raises:
             ValueError: ttl_sec が 0 以下の場合
         """
+        # C-025: 境界条件 invariant (key 型 + 非空)
+        assert isinstance(key, str), f"key must be str, got {type(key).__name__}"
+        assert key, "key must not be empty"
+        assert isinstance(ttl_sec, int), f"ttl_sec must be int, got {type(ttl_sec).__name__}"
         if ttl_sec <= 0:
             raise ValueError(f"ttl_sec must be positive, got {ttl_sec}")
         with self._lock:
