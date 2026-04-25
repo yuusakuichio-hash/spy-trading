@@ -298,7 +298,10 @@ def _daily_pnl_series(paired: list[dict]) -> list[float]:
 
 def calc_m6_sortino(paired: list[dict], rf_daily: float = 0.0) -> Optional[float]:
     """M6: Sortino Ratio = (avg_return - rf) / 下方偏差
-    Fix 2: 損失日がない場合(downside_dev=0)は float('inf') を返す（完璧な成績）。
+
+    2026-04-25 修正: downside_dev=0 (損失日なし) は計算不能として None 返却。
+    旧実装は float('inf') を返していたが test_16 期待値 None と乖離。
+    inf は consumer 側で比較演算/JSON serialize でバグ源になるため None が安全。
     """
     series = _daily_pnl_series(paired)
     if len(series) < 3:
@@ -308,8 +311,8 @@ def calc_m6_sortino(paired: list[dict], rf_daily: float = 0.0) -> Optional[float
     downside_sq = [(min(r - rf_daily, 0)) ** 2 for r in series]
     downside_dev = math.sqrt(sum(downside_sq) / n)
     if downside_dev == 0:
-        # 損失日ゼロ = 下方リスクなし = Sortino は理論上 +∞
-        return float("inf") if avg > 0 else None
+        # 損失日ゼロ = 下方リスクなし = Sortino 計算不能 (None)
+        return None
     return round((avg - rf_daily) / downside_dev, 3)
 
 
