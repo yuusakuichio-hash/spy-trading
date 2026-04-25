@@ -220,3 +220,122 @@ def estimate_vix_from_spy_atm(
     except Exception as e:
         log.warning("[VIX-ATM-IV] 計算失敗: %s", e)
         return None
+
+
+def estimate_atm_iv_for_dte(
+    quote_ctx,
+    underlying_code: str,
+    target_dte_days: int,
+    now_et: Optional[datetime.datetime] = None,
+) -> Optional[float]:
+    """指定 DTE (Days To Expiry) の ATM Call/Put IV 平均を返す (% 単位).
+
+    term_ratio (異 DTE IV slope) 算出に使用。
+    moomoo に VIX9D / VIX3M index 不在のため、SPY 異期日の ATM IV で代替。
+
+    Args:
+        quote_ctx: futu.OpenQuoteContext
+        underlying_code: "US.SPY"
+        target_dte_days: 目標 DTE (例: 9 = 9 日後 expiry)
+        now_et: ET 現在時刻
+
+    Returns:
+        ATM IV (% 単位) または None
+    """
+    if quote_ctx is None:
+        return None
+
+    try:
+        import futu as ft
+    except ImportError:
+        return None
+
+    if now_et is None:
+        now_et = datetime.datetime.now(_ET)
+
+    try:
+        # SPY 現在値
+        ret, spy_snap = quote_ctx.get_market_snapshot([underlying_code])
+        if ret != ft.RET_OK or spy_snap is None or len(spy_snap) == 0:
+            return None
+        spy_price = float(spy_snap.iloc[0].get("last_price", 0) or 0)
+        if spy_price <= 0:
+            return None
+
+        # target DTE expiry を取得 (option_expiration_date list から最も近いもの)
+        ret_e, exp_df = quote_ctx.get_option_expiration_date(code=underlying_code)
+        if ret_e != ft.RET_OK or exp_df is None or len(exp_df) == 0:
+            return None
+        target_date = (now_et.date() + datetime.timedelta(days=target_dte_days))
+        # 最も近い expiry を選択 (絶対差最小)
+        exp_df = exp_df.copy()
+        exp_df["strike_time_dt"] = exp_df["strike_time"].apply(
+            lambda s: datetime.datetime.strptime(str(s)[:10], "%Y-%m-%d").date()
+        )
+        exp_df["dist"] = exp_df["strike_time_dt"].apply(
+            lambda d: abs((d - target_date).days)
+        )
+        chosen = exp_df.loc[exp_df["dist"].idxmin()]
+        chosen_expiry = chosen["strike_time"]
+
+        # ATM Call/Put IV 平均
+        iv_values: list[float] = []
+        for opt_type_ft in (ft.OptionType.CALL, ft.OptionType.PUT):
+            ret_c, chain_df = quote_ctx.get_option_chain(
+                underlying_code, start=chosen_expiry, end=chosen_expiry,
+                option_type=opt_type_ft,
+            )
+            if ret_c != ft.RET_OK or chain_df is None or len(chain_df) == 0:
+                continue
+
+            chain_df = chain_df.copy()
+            chain_df["strike_price"] = chain_df["strike_price"].astype(float)
+            chain_df["dist"] = (chain_df["strike_price"] - spy_price).abs()
+            atm_row = chain_df.loc[chain_df["dist"].idxmin()]
+            atm_code = atm_row["code"]
+
+            ret_s, opt_snap = quote_ctx.get_market_snapshot([atm_code])
+            if ret_s != ft.RET_OK or opt_snap is None or len(opt_snap) == 0:
+                continue
+            srow = opt_snap.iloc[0]
+            iv_direct = float(srow.get("option_implied_volatility", 0) or 0)
+            if iv_direct > 0:
+                # 小数 / % 形式の自動判別
+                iv_pct = iv_direct * 100.0 if iv_direct < 1.0 else iv_direct
+                iv_values.append(iv_pct)
+
+        if not iv_values:
+            return None
+
+        return sum(iv_values) / len(iv_values)
+
+    except Exception as e:
+        log.debug("[ATM-IV-DTE] 計算失敗 (dte=%d): %s", target_dte_days, e)
+        return None
+
+
+def estimate_term_ratio(
+    quote_ctx,
+    underlying_code: str = "US.SPY",
+    near_dte: int = 9,
+    far_dte: int = 30,
+) -> Optional[float]:
+    """異 DTE の ATM IV 比 = term_ratio (近 IV / 遠 IV) を返す.
+
+    moomoo に VIX9D / VIX3M index 不在のため SPY 異期日 ATM IV で代替.
+
+    解釈:
+    - term_ratio < 0.85: contango (上昇 bias 候補・低 short term IV)
+    - term_ratio > 0.95: backwardation (下降 bias 候補・高 short term IV)
+    - else: neutral
+    """
+    near_iv = estimate_atm_iv_for_dte(quote_ctx, underlying_code, near_dte)
+    far_iv = estimate_atm_iv_for_dte(quote_ctx, underlying_code, far_dte)
+    if near_iv is None or far_iv is None or far_iv <= 0:
+        return None
+    ratio = near_iv / far_iv
+    log.info(
+        "[TermRatio] near_dte=%d IV=%.2f / far_dte=%d IV=%.2f → ratio=%.3f",
+        near_dte, near_iv, far_dte, far_iv, ratio,
+    )
+    return ratio

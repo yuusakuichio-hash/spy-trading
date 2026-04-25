@@ -33,7 +33,8 @@ import time
 from typing import Optional
 
 from atlas_v3.core.env_observer import MarketEnvironment
-from atlas_v3.ops.vix_estimator import estimate_vix_from_spy_atm
+from atlas_v3.ops.vix_estimator import estimate_vix_from_spy_atm, estimate_term_ratio
+from atlas_v3.ops.gex_estimator import estimate_gex_from_moomoo
 from atlas_v3.ops.realized_volatility import estimate_hv_from_moomoo, estimate_ivr_proxy_from_hv_history
 
 log = logging.getLogger(__name__)
@@ -76,8 +77,20 @@ class MoomooMarketDataAdapter:
         self._cache_ts = 0.0
         self._cache_env: Optional[MarketEnvironment] = None
 
-    def _estimate_bias(self, vix: float) -> str:
-        """VIX 帯から bias 推定 (β-2 簡易版・後段で term ratio + put-call 比 統合)."""
+    def _estimate_bias(self, vix: float, term_ratio: Optional[float]) -> str:
+        """VIX 帯 + term_ratio で bias 推定.
+
+        term_ratio (= 近 DTE IV / 遠 DTE IV) が **明確な signal** の場合のみ採用:
+        - < 0.85: contango (短期 IV が低い = 上昇 bias 候補)
+        - > 1.05: backwardation (短期 IV が高い = 下降 bias 候補)
+        - 0.85-1.05 中間域は VIX 帯のみで判定 (default 1.0 で誤 bear 判定を回避)
+        """
+        if term_ratio is not None:
+            if term_ratio < 0.85 and vix < _BIAS_BEAR_VIX_MIN:
+                return "bull"
+            if term_ratio > 1.05:
+                return "bear"
+        # VIX 帯 fallback
         if vix < _BIAS_BULL_VIX_MAX:
             return "bull"
         if vix > _BIAS_BEAR_VIX_MIN:
@@ -111,19 +124,30 @@ class MoomooMarketDataAdapter:
         else:
             vrp = _DEFAULT_VRP
 
-        # 3. bias: VIX 帯から推定 (簡易版)
-        bias = self._estimate_bias(vix)
+        # 3. term_ratio: 異 DTE IV slope (9 日 / 30 日 ATM IV 比)
+        term_ratio = estimate_term_ratio(
+            self._quote_ctx, self._underlying_code, near_dte=9, far_dte=30,
+        )
+        if term_ratio is None:
+            term_ratio = _DEFAULT_TERM_RATIO
 
-        # 4. ivr_by_symbol: 252 日 HV percentile rank で IVR proxy
+        # 4. bias: VIX 帯 + term_ratio から推定
+        bias = self._estimate_bias(vix, term_ratio)
+
+        # 5. ivr_by_symbol: 252 日 HV percentile rank で IVR proxy
         ivr = estimate_ivr_proxy_from_hv_history(self._quote_ctx, self._underlying_code)
         ivr_dict = {"SPY": ivr if ivr is not None else _DEFAULT_IVR_SPY}
 
-        # 5. GEX / term_ratio: β-2 最終段 (option chain gamma weight / 異 DTE IV slope)
+        # 6. GEX: option chain gamma × OI × spot² 集計 (BS gamma fallback)
+        gex = estimate_gex_from_moomoo(self._quote_ctx, self._underlying_code)
+        if gex is None:
+            gex = _DEFAULT_GEX
+
         env = MarketEnvironment(
             vix=vix,
             vrp=vrp,
-            gex=_DEFAULT_GEX,
-            term_ratio=_DEFAULT_TERM_RATIO,
+            gex=gex,
+            term_ratio=term_ratio,
             bias=bias,
             ivr_by_symbol=ivr_dict,
         )

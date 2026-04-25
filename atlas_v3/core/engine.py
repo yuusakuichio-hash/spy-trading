@@ -29,7 +29,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 from datetime import datetime, timezone
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Optional, Protocol, runtime_checkable
 
 from atlas_v3.core.env_observer import MarketEnvironment
 from atlas_v3.strategies.base import TacticBase
@@ -77,6 +77,8 @@ class OrderRequest:
     order_type: str = "market"
     tactic_name: str = ""
     idempotency_key: str = ""
+    # 2026-04-25: limit 注文対応 (None=market 互換維持・既存 caller 影響なし)
+    limit_price: Optional[float] = None
 
 
 @dataclasses.dataclass(frozen=True)

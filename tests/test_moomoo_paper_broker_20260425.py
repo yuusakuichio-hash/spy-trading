@@ -129,3 +129,52 @@ class TestMoomooPaperBrokerIdempotency:
 
         kwargs = ctx.place_order.call_args.kwargs
         assert kwargs["remark"] == "test_idem_001"
+
+
+# ===========================================================================
+# 6. limit order 型対応
+# ===========================================================================
+
+class TestMoomooPaperBrokerLimitOrder:
+    def test_limit_order_uses_normal_type_with_price(self):
+        import futu as ft
+        from atlas_v3.core.engine import OrderRequest
+        from atlas_v3.broker.moomoo_paper import MoomooPaperBroker
+
+        ctx = MagicMock()
+        ctx.place_order = MagicMock(return_value=(
+            ft.RET_OK, pd.DataFrame([{"order_id": "LIM_1"}]),
+        ))
+        broker = MoomooPaperBroker(ctx, paper_acc_id=1173421)
+        req = OrderRequest(
+            symbol="US.SPY", side="buy", quantity=2,
+            order_type="limit", tactic_name="t", idempotency_key="i",
+            limit_price=560.5,
+        )
+        result = broker.place_order(req)
+
+        assert result.status == "submitted"
+        kwargs = ctx.place_order.call_args.kwargs
+        assert kwargs["order_type"] == ft.OrderType.NORMAL
+        assert kwargs["price"] == 560.5
+
+    def test_limit_order_invalid_price_falls_back_to_market(self):
+        import futu as ft
+        from atlas_v3.core.engine import OrderRequest
+        from atlas_v3.broker.moomoo_paper import MoomooPaperBroker
+
+        ctx = MagicMock()
+        ctx.place_order = MagicMock(return_value=(
+            ft.RET_OK, pd.DataFrame([{"order_id": "MKT"}]),
+        ))
+        broker = MoomooPaperBroker(ctx, paper_acc_id=1173421)
+        # limit 指定だが limit_price=None → market fallback
+        req = OrderRequest(
+            symbol="US.SPY", side="buy", quantity=1,
+            order_type="limit", limit_price=None,
+        )
+        result = broker.place_order(req)
+        assert result.status == "submitted"
+        kwargs = ctx.place_order.call_args.kwargs
+        assert kwargs["order_type"] == ft.OrderType.MARKET
+        assert kwargs["price"] == 0.0

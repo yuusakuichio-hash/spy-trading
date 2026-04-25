@@ -61,12 +61,23 @@ class MoomooPaperBroker:
                 detail=f"unsupported side: {request.side}",
             )
 
-        # order_type mapping (現状 market only・limit は OrderRequest 拡張後)
-        if request.order_type.lower() == "market":
+        # order_type mapping (market / limit / 未対応は market fallback)
+        order_type_lower = request.order_type.lower()
+        if order_type_lower == "market":
             order_type = ft.OrderType.MARKET
             price = 0.0
+        elif order_type_lower == "limit":
+            if request.limit_price is None or request.limit_price <= 0:
+                log.warning(
+                    "[MoomooPaperBroker] limit 注文だが limit_price 不正 (%r)・market fallback",
+                    request.limit_price,
+                )
+                order_type = ft.OrderType.MARKET
+                price = 0.0
+            else:
+                order_type = ft.OrderType.NORMAL  # moomoo の limit は NORMAL
+                price = float(request.limit_price)
         else:
-            # 未対応 order_type は market にフォールバック
             log.warning(
                 "[MoomooPaperBroker] order_type=%r 未対応・market にフォールバック",
                 request.order_type,
