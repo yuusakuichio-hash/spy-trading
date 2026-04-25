@@ -317,24 +317,54 @@ class AtlasEngine:
     def _dispatch_portfolio_reactive(
         self, tactic: Any, env: MarketEnvironment
     ) -> list[OrderResult]:
-        """Type B: PortfolioReactiveTactic dispatch（Phase 2 で完全実装）。"""
+        """Type B: PortfolioReactiveTactic dispatch (β-2 最小配線・発注は後段で)."""
+        if not hasattr(tactic, "observe"):
+            return []
+        try:
+            tactic.observe(env)
+        except (TypeError, NotImplementedError):
+            return []
         if not hasattr(tactic, "should_react"):
+            return []
+        try:
+            tactic.should_react(env)
+        except (TypeError, NotImplementedError):
             return []
         return []
 
     def _dispatch_state_carrying(
         self, tactic: Any, env: MarketEnvironment
     ) -> list[OrderResult]:
-        """Type C: StateCarryingTactic dispatch（Phase 2 で完全実装）。"""
+        """Type C: StateCarryingTactic dispatch (β-2 最小配線・発注は後段で)."""
         if not hasattr(tactic, "observe"):
+            return []
+        try:
+            tactic.observe(env)
+        except (TypeError, NotImplementedError):
+            return []
+        if not hasattr(tactic, "should_enter"):
+            return []
+        try:
+            tactic.should_enter(env)
+        except (TypeError, NotImplementedError):
             return []
         return []
 
     def _dispatch_hybrid(
         self, tactic: Any, env: MarketEnvironment
     ) -> list[OrderResult]:
-        """Type D: HybridTactic dispatch（Phase 2 で完全実装）。"""
+        """Type D: HybridTactic dispatch (β-2 最小配線・発注は後段で)."""
         if not hasattr(tactic, "observe"):
+            return []
+        try:
+            tactic.observe(env)
+        except (TypeError, NotImplementedError):
+            return []
+        if not hasattr(tactic, "should_enter"):
+            return []
+        try:
+            tactic.should_enter(env)
+        except (TypeError, NotImplementedError):
             return []
         return []
 
