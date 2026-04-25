@@ -399,8 +399,11 @@ class TestStartupOrphanOrderCleanup:
         ])
         eng.trade_ctx.order_list_query.return_value = (0, order_df)
 
+        # 2026-04-26: full-suite で string-target mock.patch("spy_bot.pushover_alert") が
+        # 機能せず実 pushover_alert が走る事象あり。test 冒頭 import 済の sb 参照経由で
+        # mock.patch.object に切替えると確実に mock target が効く。
         with self._with_futu_available():
-            with mock.patch("spy_bot.pushover_alert") as mock_push:
+            with mock.patch.object(sb, "pushover_alert") as mock_push:
                 count = eng.cancel_all_open_orders(reason="test_filled_part")
 
         # FILLED_PART はキャンセルしない

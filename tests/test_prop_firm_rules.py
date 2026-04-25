@@ -372,22 +372,32 @@ class TestCheckInactivity:
         ok, _ = check_inactivity(None)
         assert ok
 
+    @staticmethod
+    def _et_today():
+        try:
+            import zoneinfo as _zi
+            _tz = _zi.ZoneInfo("America/New_York")
+        except ImportError:
+            import pytz as _pytz
+            _tz = _pytz.timezone("America/New_York")
+        return datetime.datetime.now(tz=_tz).date()
+
     def test_recent_ok(self):
-        ok, _ = check_inactivity(datetime.date.today() - datetime.timedelta(days=3))
+        ok, _ = check_inactivity(self._et_today() - datetime.timedelta(days=3))
         assert ok
 
     def test_day_6_warning(self):
-        ok, msg = check_inactivity(datetime.date.today() - datetime.timedelta(days=6))
+        ok, msg = check_inactivity(self._et_today() - datetime.timedelta(days=6))
         assert not ok
         assert "予兆" in msg
 
     def test_day_7_expired(self):
-        ok, msg = check_inactivity(datetime.date.today() - datetime.timedelta(days=7))
+        ok, msg = check_inactivity(self._et_today() - datetime.timedelta(days=7))
         assert not ok
         assert "失効" in msg
 
     def test_day_8_expired(self):
-        ok, msg = check_inactivity(datetime.date.today() - datetime.timedelta(days=8))
+        ok, msg = check_inactivity(self._et_today() - datetime.timedelta(days=8))
         assert not ok
 
 

@@ -329,7 +329,11 @@ class TestExecuteEntryDryTest:
 
         pos = self._with_ks_and_cutoff(_run)
         assert pos is not None
-        assert isinstance(pos, StraddleNativePosition)
+        # 2026-04-26: conftest._reload_flaky_modules で straddle_native module が
+        # 毎テスト reload されるため、test ファイル冒頭 import の StraddleNativePosition
+        # と engine 生成 instance の class identity が乖離する。動的 import で最新参照取得。
+        from atlas_v3.bots.engines.straddle_native import StraddleNativePosition as _CurCls
+        assert isinstance(pos, _CurCls)
 
     def test_sets_entry_done(self, straddle_dry):
         def _run():

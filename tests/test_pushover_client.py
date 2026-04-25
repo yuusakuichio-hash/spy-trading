@@ -28,7 +28,16 @@ import pytest
 # legacy common/pushover_client.py は legacy_write_block で書換禁止。
 # 旧 API に依存した test 期待値が drift。Atlas Paper では common_v3 側使用のため
 # production 影響なし。chronos_v3 統合時に書き直し TODO。
-pytestmark = pytest.mark.skip(reason="legacy common/pushover_client.py drift — common_v3 移植時 rewrite (2026-04-25)")
+#
+# 2026-04-26: module-level で `sys.modules["requests"] = MagicMock()` を実行していた
+# ため、collection 時に永続的に requests 汚染 → flaky 16 件 (orb_multi_symbol 10 +
+# redteam_critical 2 + task9 1 + straddle_gamma 3) の根本原因。
+# allow_module_level=True で import 自体をスキップして汚染を物理的に防止。
+pytest.skip(
+    "legacy common/pushover_client.py drift — common_v3 移植時 rewrite (2026-04-25・"
+    "module-level requests pollution の物理的防止のため allow_module_level skip)",
+    allow_module_level=True,
+)
 
 # ── プロジェクトルートをパスに追加 ────────────────────────────────────────────
 _ROOT = Path(__file__).resolve().parents[1]
