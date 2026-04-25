@@ -785,6 +785,11 @@ class GammaScalpNativeEngine:
         self._scalp_count_today: int   = 0
         self._last_scalp_ts:     Optional[datetime.datetime] = None
         self._min_scalp_interval_min: float = GAMMA_SCALP_MIN_INTERVAL_MIN
+        # 2026-04-25: Medium #8 dynamic ATR — _atr_multiplier は ATR(14) に対する
+        # 閾値倍率。gamma_scalp_dynamic.apply_vix_to_gamma_engine が VIX 帯に応じ
+        # 0.5-1.5 で上書きする。default は GAMMA_SCALP_ATR_TRIGGER (旧固定 0.40)
+        # と同値にして既存挙動互換を保つ。
+        self._atr_multiplier:    float = GAMMA_SCALP_ATR_TRIGGER
 
     # ------------------------------------------------------------------
     # 日次リセット
@@ -809,6 +814,36 @@ class GammaScalpNativeEngine:
             log.info("[GammaScalpNative] ATR(14)=%.2f (%s)", self._atr14, ticker)
         else:
             log.warning("[GammaScalpNative] ATR(14) 計算失敗 → スキャルプ無効 (%s)", ticker)
+
+    def initialize_atr_with_vix(self, vix: float) -> None:
+        """ATR 初期化 + VIX-based 動的パラメータ適用 (Medium #8 dynamic ATR)。
+
+        2026-04-25 補完: gamma_scalp_dynamic.apply_vix_to_gamma_engine の
+        public method ラッパー。test_t14_initialize_atr_with_vix_applies_params
+        が期待する API。
+        """
+        self.initialize_atr()
+        self.update_vix(vix)
+
+    def update_vix(self, vix: Optional[float]) -> None:
+        """VIX 値を engine に反映 (動的 interval / atr_multiplier)。
+
+        2026-04-25 補完: gamma_scalp_dynamic._apply_fields_direct を直接呼ぶ。
+        apply_vix_to_gamma_engine は hasattr(initialize_atr_with_vix) を判定して
+        method 経由で呼び戻すため、ここから呼ぶと無限再帰になる。
+        vix=None なら no-op (既存パラメータ維持)。
+        """
+        if vix is None:
+            return
+        try:
+            from atlas_v3.bots.engines.gamma_scalp_dynamic import (
+                get_gamma_scalp_params,
+                _apply_fields_direct,
+            )
+            params = get_gamma_scalp_params(float(vix))
+            _apply_fields_direct(self, params, float(vix))
+        except Exception as exc:
+            log.warning("[GammaScalpNative.update_vix] %s", exc)
 
     # ------------------------------------------------------------------
     # 価格更新
@@ -847,7 +882,10 @@ class GammaScalpNativeEngine:
         if move is None:
             return None
 
-        threshold = self._atr14 * GAMMA_SCALP_ATR_TRIGGER
+        # 2026-04-25: dynamic ATR (Medium #8) — _atr_multiplier (default 1.0) を反映。
+        # gamma_scalp_dynamic.apply_vix_to_gamma_engine が VIX 帯に応じて 0.5-1.5 で上書き。
+        # 旧固定値 GAMMA_SCALP_ATR_TRIGGER は _atr_multiplier に subsumed (二重 scaling 回避)。
+        threshold = self._atr14 * self._atr_multiplier
         if abs(move) < threshold:
             return None
 
