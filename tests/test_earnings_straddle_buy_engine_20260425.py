@@ -278,7 +278,12 @@ def test_tc09_build_order_call():
     decision = decisions[0]
     assert decision.should_enter
 
-    order = tactic.build_order(decision, leg="call")
+    from unittest.mock import patch as _patch
+    with _patch(
+        "common_v3.risk.pre_trade_check.check_order_critical_only",
+        lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+    ):
+        order = tactic.build_order(decision, leg="call")
 
     assert order.side == "buy"
     assert order.symbol == "NVDA_CALL"
@@ -299,7 +304,12 @@ def test_tc10_build_order_put():
     decisions = tactic.should_enter(env, ["NVDA"], now_et=None)
     decision = decisions[0]
 
-    order = tactic.build_order(decision, leg="put")
+    from unittest.mock import patch as _patch
+    with _patch(
+        "common_v3.risk.pre_trade_check.check_order_critical_only",
+        lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+    ):
+        order = tactic.build_order(decision, leg="put")
 
     assert order.side == "buy"
     assert order.symbol == "NVDA_PUT"

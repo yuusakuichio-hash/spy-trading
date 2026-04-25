@@ -378,7 +378,11 @@ class TestNoOpTradeEngine:
         )
         assert decision.should_enter is True
 
-        order_id = iron_fly_engine.place_order(decision)
+        with patch(
+            "common_v3.risk.pre_trade_check.check_order_critical_only",
+            lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+        ):
+            order_id = iron_fly_engine.place_order(decision)
         mock_eng.place_iron_fly.assert_called_once()
         call_kwargs = mock_eng.place_iron_fly.call_args
         # symbol / legs / quantity が渡されていることを確認

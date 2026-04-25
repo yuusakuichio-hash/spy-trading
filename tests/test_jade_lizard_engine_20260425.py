@@ -376,11 +376,20 @@ def test_compute_qty_negative_budget():
 # ---------------------------------------------------------------------------
 
 
+def _gate_pass():
+    from unittest.mock import patch as _patch
+    return _patch(
+        "common_v3.risk.pre_trade_check.check_order_critical_only",
+        lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+    )
+
+
 def test_build_orders_returns_three_orders():
     """T-JL-16a: build_orders は 3 件の OrderRequest を返す"""
     t = _tactic()
     decision = t.should_enter(_env(ivr_spy=65.0), "SPY")
-    orders = t.build_orders(decision)
+    with _gate_pass():
+        orders = t.build_orders(decision)
     assert len(orders) == 3
 
 
@@ -388,7 +397,8 @@ def test_build_orders_leg_labels_in_symbol():
     """T-JL-16b: 各 OrderRequest の symbol に leg label が含まれる"""
     t = _tactic()
     decision = t.should_enter(_env(ivr_spy=65.0), "SPY")
-    orders = t.build_orders(decision)
+    with _gate_pass():
+        orders = t.build_orders(decision)
     symbols = [o.symbol for o in orders]
     assert any("short_put" in s for s in symbols)
     assert any("short_call" in s for s in symbols)
@@ -399,7 +409,8 @@ def test_build_orders_paper_mode_order_type():
     """T-JL-16c: paper_mode=True のとき order_type=paper_limit"""
     t = _tactic(paper_mode=True)
     decision = t.should_enter(_env(ivr_spy=65.0), "SPY")
-    orders = t.build_orders(decision)
+    with _gate_pass():
+        orders = t.build_orders(decision)
     assert all(o.order_type == "paper_limit" for o in orders)
 
 

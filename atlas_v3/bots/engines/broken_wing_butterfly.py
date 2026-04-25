@@ -591,7 +591,14 @@ class BrokenWingButterflyEngine(TacticBase):
                 f"[BWBEngine.place_order] should_enter=False: {decision}"
             )
         from common_v3.risk.pre_trade_check import OrderCtx as _Ctx, check_order_critical_only as _gate
-        _gr = _gate(_Ctx(symbol=decision.symbol, qty=decision.quantity, side="SELL", is_long=False))
+        # 2026-04-25: PreTradeGate L2 whitelist は "US.XXX" 形式・L3 margin は capital_usd+est_margin 必須。
+        # est_margin = 全 leg 数量合計 × 100 (1 contract = 100 株 proxy)。本来は moomoo provider から実 margin 取得。
+        sym = decision.symbol if decision.symbol.startswith("US.") else f"US.{decision.symbol}"
+        est_margin = sum(abs(leg.quantity) for leg in decision.legs) * 100
+        _gr = _gate(_Ctx(
+            symbol=sym, qty=decision.quantity, side="SELL", is_long=False,
+            est_margin=est_margin, capital_usd=capital_usd,
+        ))
         if not _gr.allowed:
             raise ValueError(f"[BWBEngine.place_order] PreTradeGate BLOCKED: {_gr.reason}")
 

@@ -614,7 +614,13 @@ class PMCCTactic(TacticBase):
                 "[PMCCTactic.build_orders] should_enter=False の decision が渡されました。"
             )
         from common_v3.risk.pre_trade_check import OrderCtx as _Ctx, check_order_critical_only as _gate
-        _gr = _gate(_Ctx(symbol=decision.symbol, qty=decision.quantity, side="BUY", is_long=True))
+        # 2026-04-25: PreTradeGate L2 whitelist は "US.XXX" 形式・L3 margin は capital_usd+est_margin 必須。
+        sym = decision.symbol if decision.symbol.startswith("US.") else f"US.{decision.symbol}"
+        est_margin = sum(abs(leg.quantity) for leg in decision.legs) * 100 if decision.legs else decision.quantity * 100
+        _gr = _gate(_Ctx(
+            symbol=sym, qty=decision.quantity, side="BUY", is_long=True,
+            est_margin=est_margin, capital_usd=capital_usd,
+        ))
         if not _gr.allowed:
             raise ValueError(f"[PMCCTactic.build_orders] PreTradeGate BLOCKED: {_gr.reason}")
 

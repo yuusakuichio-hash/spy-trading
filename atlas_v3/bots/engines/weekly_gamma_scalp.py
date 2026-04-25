@@ -757,7 +757,13 @@ class WeeklyGammaScalpTactic(TacticBase):
         # Per-leg gate check: use first leg qty as representative (each leg checked individually)
         _first_qty = entry.legs[0].quantity if entry.legs else 1
         from common_v3.risk.pre_trade_check import OrderCtx as _Ctx, check_order_critical_only as _gate
-        _gr = _gate(_Ctx(symbol=entry.symbol, qty=_first_qty, side="BUY", is_long=True))
+        # 2026-04-25: PreTradeGate L2 whitelist は "US.XXX" 形式・L3 margin は capital_usd+est_margin 必須。
+        sym = entry.symbol if entry.symbol.startswith("US.") else f"US.{entry.symbol}"
+        est_margin = sum(abs(leg.quantity) for leg in entry.legs) * 100 if entry.legs else _first_qty * 100
+        _gr = _gate(_Ctx(
+            symbol=sym, qty=_first_qty, side="BUY", is_long=True,
+            est_margin=est_margin, capital_usd=capital_usd,
+        ))
         if not _gr.allowed:
             raise ValueError(f"[WeeklyGammaScalp.build_orders] PreTradeGate BLOCKED: {_gr.reason}")
 

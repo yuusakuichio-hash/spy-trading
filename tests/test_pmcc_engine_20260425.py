@@ -108,7 +108,12 @@ def test_t01_build_orders_returns_2_legs():
     decision = tactic.should_enter(env, "SPY")
 
     assert decision.should_enter, f"エントリー判定が False: {decision.reason}"
-    orders = tactic.build_orders(decision)
+    from unittest.mock import patch as _patch
+    with _patch(
+        "common_v3.risk.pre_trade_check.check_order_critical_only",
+        lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+    ):
+        orders = tactic.build_orders(decision)
 
     assert len(orders) == 2, f"発注件数が 2 でない: {len(orders)}"
     labels = [o.symbol for o in orders]

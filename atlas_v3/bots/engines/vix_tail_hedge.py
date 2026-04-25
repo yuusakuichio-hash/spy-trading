@@ -451,9 +451,15 @@ class VixTailHedgeEngine(TacticBase):
                 f"should_enter=False の decision が渡された: {decision}"
             )
         from common_v3.risk.pre_trade_check import OrderCtx as _Ctx, check_order_critical_only as _gate
+        # 2026-04-25: PreTradeGate L2 whitelist は "US.XXX" 形式・L3 margin は capital_usd+est_margin 必須。
+        sym = decision.symbol if decision.symbol.startswith("US.") else f"US.{decision.symbol}"
         _option_price = getattr(decision, "option_price", 0.0) or 0.0
-        _gr = _gate(_Ctx(symbol=decision.symbol, qty=decision.quantity, side="BUY", is_long=True,
-                         option_price=float(_option_price)))
+        est_margin = max(decision.quantity * 100, int(float(_option_price) * decision.quantity * 100))
+        _gr = _gate(_Ctx(
+            symbol=sym, qty=decision.quantity, side="BUY", is_long=True,
+            option_price=float(_option_price),
+            est_margin=est_margin, capital_usd=capital_usd,
+        ))
         if not _gr.allowed:
             raise ValueError(f"[VixTailHedgeEngine.build_order] PreTradeGate BLOCKED: {_gr.reason}")
 

@@ -638,7 +638,14 @@ class ShortStrangle0DTEEngine(TacticBase):
                 f"should_enter=False の decision が渡された: {decision}"
             )
         from common_v3.risk.pre_trade_check import OrderCtx as _Ctx, check_order_critical_only as _gate
-        _gr = _gate(_Ctx(symbol=decision.symbol, qty=decision.quantity, side="SELL", is_long=False))
+        # 2026-04-25: PreTradeGate L2 whitelist は "US.XXX" 形式・L3 margin は capital_usd+est_margin 必須。
+        # StrangleEntryDecision は legs を持たないため quantity から proxy 算出。
+        sym = decision.symbol if decision.symbol.startswith("US.") else f"US.{decision.symbol}"
+        est_margin = decision.quantity * 100
+        _gr = _gate(_Ctx(
+            symbol=sym, qty=decision.quantity, side="SELL", is_long=False,
+            est_margin=est_margin, capital_usd=capital_usd,
+        ))
         if not _gr.allowed:
             raise ValueError(f"[ShortStrangle0DTEEngine.build_order] PreTradeGate BLOCKED: {_gr.reason}")
 
