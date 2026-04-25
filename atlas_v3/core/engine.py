@@ -308,6 +308,14 @@ class AtlasEngine:
             decision = tactic.should_enter(env, symbol="")
         except NotImplementedError:
             return []
+        except ValueError as e:
+            # multi-symbol tactic (weekly_gamma_scalp 等) は symbol="" で ValueError raise。
+            # β-2 最小配線では symbol ループ未実装のため info ログで skip (silent skip 禁止規律準拠)。
+            log.info(
+                "[AtlasEngine] tactic=%s: should_enter skipped (multi-symbol or invalid symbol): %s",
+                tactic.tactic_name, e,
+            )
+            return []
 
         if decision is None or not getattr(decision, "should_enter", False):
             return []
