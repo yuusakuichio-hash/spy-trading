@@ -29,20 +29,6 @@ class TestMoomooProviderSkeleton:
         provider = MoomooMetricProvider()
         assert provider is not None
 
-    def test_get_metrics_raises_not_implemented(self):
-        """実装前なので get_metrics は NotImplementedError。"""
-        from atlas_v3.ops.moomoo_provider import MoomooMetricProvider, MoomooProviderNotImplementedError
-        provider = MoomooMetricProvider()
-        with pytest.raises(MoomooProviderNotImplementedError):
-            provider.get_metrics()
-
-    def test_smoke_test_raises_not_implemented(self):
-        """実装前なので smoke_test は NotImplementedError。"""
-        from atlas_v3.ops.moomoo_provider import MoomooMetricProvider, MoomooProviderNotImplementedError
-        provider = MoomooMetricProvider()
-        with pytest.raises(MoomooProviderNotImplementedError):
-            provider.smoke_test()
-
     def test_exception_can_be_instantiated_with_message(self):
         """C-017 本実装後の更新: skeleton の Sprint 2 prepend は廃止。
         例外は通常の NotImplementedError として message を保持するのみ。"""

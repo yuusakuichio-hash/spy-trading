@@ -1,34 +1,170 @@
 {
-  "last_updated": "2026-04-25 09:19 JST",
+  "last_updated": "2026-04-25 12:06 JST",
   "current_phase_id": "monday-preopen-prep",
   "current_phase_label": "月曜 (2026-04-27 ET) Paper 開始 pre-open 準備 + Medium gap 全消化済",
   "overall_note": "Phase 2 Engine 移植 9/9 完了 (commit d4929a7・505 tests PASS) / Knight Capital TOP5 fix (10戦術 wiring) / 案 F preemptive relogin 完遂 (b4bc64e Login successful) / 動的パラメータ + TraderProfile 4 preset 実装済 / Medium gap 5/5 全完了: GammaScalp(20PASS) + TracerBullet(25PASS) + MorningDigest(15PASS) + Hypothesis(43新規) + K8sReconcile(29PASS) / 残: 月曜 ET pre-open canary smoke + PDT live wiring",
   "phases": [
-    {"id": "1A", "name": "Sprint 1-A: 土台構築", "status": "completed", "artifact": "commit faa9106"},
-    {"id": "1B", "name": "Sprint 1-B Phase B: ペーパー運用要件", "status": "completed", "artifact": "atlas_v3/ops/* (commit 2e35d14)"},
-    {"id": "2-pre", "name": "Sprint 2 前倒し", "status": "completed", "artifact": "15 commits (2e35d14 → d20e225)"},
-    {"id": "adr-015-done", "name": "ADR-015 採択完了 (Mac mini 保持 + yfinance fallback)", "status": "completed", "artifact": "f3325f7 + f44bd75"},
-    {"id": "2-D1-done", "name": "Sprint 2 Day 1: allowlist 本番 lock (chflags schg)", "status": "completed", "artifact": "spy_bot/chronos_bot/atlas_agent/common kswitch schg 確認済"},
-    {"id": "2-D2-done", "name": "Sprint 2 Day 2: moomoo 実接続 C-017", "status": "completed", "artifact": "commit 31bbe98 / 13/13 PASS"},
-    {"id": "heartbeat-incident", "name": "atlas-paper dead heartbeat 事故 止血", "status": "completed", "artifact": "5a9f2e6 + f619c01"},
-    {"id": "dashboard-live-health-done", "name": "ダッシュボード Live Health 実測セクション", "status": "completed", "artifact": "ca8db19 + eb188e6"},
-    {"id": "auth-deep-fix-done", "name": "moomoo 認証根治 案 F: preemptive relogin 完遂", "status": "completed", "artifact": "b403b05 (実装) + b4bc64e (dry-run Login successful)"},
-    {"id": "pytest-isolation-done", "name": "pytest test isolation 本番汚染根治", "status": "completed", "artifact": "4a3381c / TRADING_STATE_DIR + conftest autouse"},
-    {"id": "ntfy-backoff-done", "name": "ntfy 429 backoff 自動沈黙 (3連→30分)", "status": "completed", "artifact": "4a3381c"},
-    {"id": "spy-bot-emergency-fixes", "name": "spy_bot.py 緊急修正 (paper 発注動作実証)", "status": "completed", "artifact": "4769990 + 11ff046 / calc_ivr typo + ChainGuard center + SYMBOL_MISMATCH"},
-    {"id": "knight-capital-top5", "name": "Knight Capital wiring fix TOP5 (10戦術 prod 経路接続)", "status": "completed", "artifact": "34ca362 / dispatch_state_carrying/portfolio_reactive/hybrid + CB state + self_monitor + 4-layer gate v3 + earnings"},
-    {"id": "10tactics-implementation", "name": "10新戦術実装 (jade_lizard/iron_fly/short_strangle_0dte/earnings_straddle_buy/diagonal/ratio/broken_wing_butterfly/pmcc/vix_tail_hedge/weekly_gamma_scalp)", "status": "completed", "artifact": "34ca362 / atlas_v3/bots/engines/* + registry + tests PASS"},
-    {"id": "phase2-engine-native-9-9", "name": "Phase 2 Engine 移植 9/9 (atlas_v3 native 化)", "status": "completed", "artifact": "db1ff45 + d4929a7 + 7c5ae35 / 505/505 tests PASS"},
-    {"id": "dynamic-params-trader-profiles", "name": "動的パラメータ VIX 5バンド + TraderProfile 4 preset", "status": "completed", "artifact": "atlas_v3/bots/engines/dynamic_params.py + trader_profiles.py / 9 軸"},
-    {"id": "pdt-guard-prod", "name": "PDTGuard ($25K + 5日3トレード)", "status": "completed", "artifact": "atlas_v3/bots/engines/pdt_guard.py / paper bypass"},
-    {"id": "user-instruction-ledger", "name": "ユーザー指示 ledger + 自動 mark-done 系統", "status": "completed", "artifact": "5 hooks 新設 / 78 entries 記録中"},
-    {"id": "supervisor-tree-launchd", "name": "Erlang OTP Supervisor Tree + launchd 統合", "status": "completed", "artifact": "atlas_v3/supervision/* + plist 6件"},
-    {"id": "medium-gamma-dynamic", "name": "Medium #8 GammaScalp 動的 ATR (VIX 5バンド)", "status": "completed", "artifact": "atlas_v3/bots/engines/gamma_scalp_dynamic.py + tests 20/20 PASS"},
-    {"id": "medium-tracer-bullet", "name": "Medium #19 Daily Tracer Bullet 1c smoke (毎朝 21:00 JST)", "status": "completed", "artifact": "scripts/daily_tracer_bullet_20260427.sh + plist + tests 25/25 PASS"},
-    {"id": "medium-morning-digest-auth", "name": "Medium #6 Morning Digest auth_budget セクション拡張", "status": "completed", "artifact": "scripts/morning_digest_send.py 拡張 + tests 15/15 PASS"},
-    {"id": "medium-hypothesis-property", "name": "Medium #4 Hypothesis property-based (ChainGuard regex / Greeks 一貫性 / Engine 境界値)", "status": "completed", "artifact": "tests/property/* 3 ファイル + requirements-dev.txt / 43 新規 + 既存 49 = 92 PASS"},
-    {"id": "medium-k8s-reconcile", "name": "Medium #2 K8s Reconciliation Loop (desired vs running drift 自動修復)", "status": "completed", "artifact": "atlas_v3/reconcile/{drift_detector,reconciler}.py + config/atlas_desired_state.yaml + tests 29/29 PASS"},
-    {"id": "monday-preopen-prep", "name": "月曜 2026-04-27 ET pre-open 準備", "status": "in_progress", "blocker": "canary smoke dry-run + spy_bot.py PDT live wiring (sudo unlock 月曜朝)", "eta_hr": 4},
-    {"id": "paper", "name": "Paper 開始 (2026-04-27 ET / JST 22:30〜・30 日実走)", "status": "pending"}
+    {
+      "id": "1A",
+      "name": "Sprint 1-A: 土台構築",
+      "status": "completed",
+      "artifact": "commit faa9106"
+    },
+    {
+      "id": "1B",
+      "name": "Sprint 1-B Phase B: ペーパー運用要件",
+      "status": "completed",
+      "artifact": "atlas_v3/ops/* (commit 2e35d14)"
+    },
+    {
+      "id": "2-pre",
+      "name": "Sprint 2 前倒し",
+      "status": "completed",
+      "artifact": "15 commits (2e35d14 → d20e225)"
+    },
+    {
+      "id": "adr-015-done",
+      "name": "ADR-015 採択完了 (Mac mini 保持 + yfinance fallback)",
+      "status": "completed",
+      "artifact": "f3325f7 + f44bd75"
+    },
+    {
+      "id": "2-D1-done",
+      "name": "Sprint 2 Day 1: allowlist 本番 lock (chflags schg)",
+      "status": "completed",
+      "artifact": "spy_bot/chronos_bot/atlas_agent/common kswitch schg 確認済"
+    },
+    {
+      "id": "2-D2-done",
+      "name": "Sprint 2 Day 2: moomoo 実接続 C-017",
+      "status": "completed",
+      "artifact": "commit 31bbe98 / 13/13 PASS"
+    },
+    {
+      "id": "heartbeat-incident",
+      "name": "atlas-paper dead heartbeat 事故 止血",
+      "status": "completed",
+      "artifact": "5a9f2e6 + f619c01"
+    },
+    {
+      "id": "dashboard-live-health-done",
+      "name": "ダッシュボード Live Health 実測セクション",
+      "status": "completed",
+      "artifact": "ca8db19 + eb188e6"
+    },
+    {
+      "id": "auth-deep-fix-done",
+      "name": "moomoo 認証根治 案 F: preemptive relogin 完遂",
+      "status": "completed",
+      "artifact": "b403b05 (実装) + b4bc64e (dry-run Login successful)"
+    },
+    {
+      "id": "pytest-isolation-done",
+      "name": "pytest test isolation 本番汚染根治",
+      "status": "completed",
+      "artifact": "4a3381c / TRADING_STATE_DIR + conftest autouse"
+    },
+    {
+      "id": "ntfy-backoff-done",
+      "name": "ntfy 429 backoff 自動沈黙 (3連→30分)",
+      "status": "completed",
+      "artifact": "4a3381c"
+    },
+    {
+      "id": "spy-bot-emergency-fixes",
+      "name": "spy_bot.py 緊急修正 (paper 発注動作実証)",
+      "status": "completed",
+      "artifact": "4769990 + 11ff046 / calc_ivr typo + ChainGuard center + SYMBOL_MISMATCH"
+    },
+    {
+      "id": "knight-capital-top5",
+      "name": "Knight Capital wiring fix TOP5 (10戦術 prod 経路接続)",
+      "status": "completed",
+      "artifact": "34ca362 / dispatch_state_carrying/portfolio_reactive/hybrid + CB state + self_monitor + 4-layer gate v3 + earnings"
+    },
+    {
+      "id": "10tactics-implementation",
+      "name": "10新戦術実装 (jade_lizard/iron_fly/short_strangle_0dte/earnings_straddle_buy/diagonal/ratio/broken_wing_butterfly/pmcc/vix_tail_hedge/weekly_gamma_scalp)",
+      "status": "completed",
+      "artifact": "34ca362 / atlas_v3/bots/engines/* + registry + tests PASS"
+    },
+    {
+      "id": "phase2-engine-native-9-9",
+      "name": "Phase 2 Engine 移植 9/9 (atlas_v3 native 化)",
+      "status": "completed",
+      "artifact": "db1ff45 + d4929a7 + 7c5ae35 / 505/505 tests PASS"
+    },
+    {
+      "id": "dynamic-params-trader-profiles",
+      "name": "動的パラメータ VIX 5バンド + TraderProfile 4 preset",
+      "status": "completed",
+      "artifact": "atlas_v3/bots/engines/dynamic_params.py + trader_profiles.py / 9 軸"
+    },
+    {
+      "id": "pdt-guard-prod",
+      "name": "PDTGuard ($25K + 5日3トレード)",
+      "status": "completed",
+      "artifact": "atlas_v3/bots/engines/pdt_guard.py / paper bypass"
+    },
+    {
+      "id": "user-instruction-ledger",
+      "name": "ユーザー指示 ledger + 自動 mark-done 系統",
+      "status": "completed",
+      "artifact": "5 hooks 新設 / 78 entries 記録中"
+    },
+    {
+      "id": "supervisor-tree-launchd",
+      "name": "Erlang OTP Supervisor Tree + launchd 統合",
+      "status": "completed",
+      "artifact": "atlas_v3/supervision/* + plist 6件"
+    },
+    {
+      "id": "medium-gamma-dynamic",
+      "name": "Medium #8 GammaScalp 動的 ATR (VIX 5バンド)",
+      "status": "completed",
+      "artifact": "atlas_v3/bots/engines/gamma_scalp_dynamic.py + tests 20/20 PASS"
+    },
+    {
+      "id": "medium-tracer-bullet",
+      "name": "Medium #19 Daily Tracer Bullet 1c smoke (毎朝 21:00 JST)",
+      "status": "completed",
+      "artifact": "scripts/daily_tracer_bullet_20260427.sh + plist + tests 25/25 PASS"
+    },
+    {
+      "id": "medium-morning-digest-auth",
+      "name": "Medium #6 Morning Digest auth_budget セクション拡張",
+      "status": "completed",
+      "artifact": "scripts/morning_digest_send.py 拡張 + tests 15/15 PASS"
+    },
+    {
+      "id": "medium-hypothesis-property",
+      "name": "Medium #4 Hypothesis property-based (ChainGuard regex / Greeks 一貫性 / Engine 境界値)",
+      "status": "completed",
+      "artifact": "tests/property/* 3 ファイル + requirements-dev.txt / 43 新規 + 既存 49 = 92 PASS"
+    },
+    {
+      "id": "medium-k8s-reconcile",
+      "name": "Medium #2 K8s Reconciliation Loop (desired vs running drift 自動修復)",
+      "status": "completed",
+      "artifact": "atlas_v3/reconcile/{drift_detector,reconciler}.py + config/atlas_desired_state.yaml + tests 29/29 PASS"
+    },
+    {
+      "id": "skeleton-test-cleanup-20260425",
+      "name": "C-017 skeleton 不要 test 削除 + 全体回帰",
+      "status": "in_progress",
+      "artifact": "tests/test_atlas_v3_moomoo_provider_skeleton.py: 2 obsolete guard tests removed / 21 PASS / regression 進行中"
+    },
+    {
+      "id": "monday-preopen-prep",
+      "name": "月曜 2026-04-27 ET pre-open 準備",
+      "status": "in_progress",
+      "blocker": "canary smoke dry-run + spy_bot.py PDT live wiring (sudo unlock 月曜朝)",
+      "eta_hr": 4
+    },
+    {
+      "id": "paper",
+      "name": "Paper 開始 (2026-04-27 ET / JST 22:30〜・30 日実走)",
+      "status": "pending"
+    }
   ]
 }
