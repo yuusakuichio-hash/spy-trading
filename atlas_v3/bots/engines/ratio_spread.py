@@ -701,7 +701,15 @@ class RatioSpreadEngine(TacticBase):
                 f"[RatioSpreadEngine.place_order] should_enter=False: {decision}"
             )
         from common_v3.risk.pre_trade_check import OrderCtx as _Ctx, check_order_critical_only as _gate
-        _gr = _gate(_Ctx(symbol=decision.symbol, qty=decision.quantity, side="SELL", is_long=False))
+        # 2026-04-25: PreTradeGate L2 whitelist は "US.XXX" 形式。decision.symbol が
+        # 短縮形の場合は prefix を補う。L3 margin は capital_usd + est_margin 必須。
+        sym = decision.symbol if decision.symbol.startswith("US.") else f"US.{decision.symbol}"
+        # ratio spread の est_margin = 全 leg の数量合計 (proxy)。capital_usd は引数 capital_usd。
+        est_margin = sum(abs(leg.quantity) for leg in decision.legs) * 100  # 1 contract = 100 株
+        _gr = _gate(_Ctx(
+            symbol=sym, qty=decision.quantity, side="SELL", is_long=False,
+            est_margin=est_margin, capital_usd=capital_usd,
+        ))
         if not _gr.allowed:
             raise ValueError(f"[RatioSpreadEngine.place_order] PreTradeGate BLOCKED: {_gr.reason}")
 

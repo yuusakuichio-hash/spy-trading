@@ -313,9 +313,10 @@ class TestKillSwitchRetry:
         )
         daemon = MonitorDaemon(config)
 
-        # common_v3.risk.kill_switch.activate をパッチ
+        # 2026-04-25: monitor は @sync_only 違反回避で _activate_raw 経路を使用するため
+        # patch 対象を _activate_raw に変更 (test は activate を patch していたが旧経路)
         with patch("atlas_v3.ops.monitor.MonitorDaemon._trigger_andon_emergency") as mock_andon:
-            with patch("common_v3.risk.kill_switch.activate", side_effect=OSError("disk full")):
+            with patch("common_v3.risk.kill_switch._activate_raw", side_effect=OSError("disk full")):
                 ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
                 chk = HealthCheck(
                     ts=ts, level=AlertLevel.EMERGENCY,
@@ -336,7 +337,8 @@ class TestKillSwitchRetry:
         m = LatencyMonitor(config)
 
         with patch("atlas_v3.ops.latency_monitor.LatencyMonitor._trigger_andon_emergency") as mock_andon:
-            with patch("common_v3.risk.kill_switch.activate", side_effect=OSError("disk full")):
+            # 2026-04-25: latency_monitor も _activate_raw 経路に統一済 (sync-only 違反根治)
+            with patch("common_v3.risk.kill_switch._activate_raw", side_effect=OSError("disk full")):
                 m._activate_kill_switch(p99=600.0)
             mock_andon.assert_called_once()
 

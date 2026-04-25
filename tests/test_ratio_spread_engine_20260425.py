@@ -209,7 +209,7 @@ class TestRollback:
         decision = eng.should_enter(env, "QQQ", atm_strike=450.0, net_credit=1.5)
         assert decision.should_enter is True
 
-        order_id, result_decision = eng.place_order(decision)
+        order_id, result_decision = eng.place_order(decision, capital_usd=100_000.0)
         assert order_id == ""
         assert result_decision.rollback_triggered is True
 
@@ -221,7 +221,7 @@ class TestRollback:
         decision = eng.should_enter(env, "QQQ", atm_strike=450.0, net_credit=1.5)
         assert decision.should_enter is True
 
-        order_id, result_decision = eng.place_order(decision)
+        order_id, result_decision = eng.place_order(decision, capital_usd=100_000.0)
         assert order_id == ""
         assert result_decision.rollback_triggered is True
         # rollback 後は placed_orders が空になっているはず

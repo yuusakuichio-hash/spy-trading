@@ -176,6 +176,9 @@ class MonitorConfig:
     probe_on_consecutive_failure: bool = False  # CRIT-R4-4: 連続失敗後の自動 probe（opt-in）
                                                # True にすると連続失敗後に _probe_recovery() を呼ぶ
                                                # デフォルト False = 後方互換（即停止）
+    self_monitor_enabled: bool = False  # 2026-04-25: WR-11/12 — _run_loop 内で
+                                        # self_monitor.recover() を呼ぶか (opt-in)
+                                        # デフォルト False = 既存挙動維持
 
     # C4 fix: Schmitt Trigger hysteresis（振動脆弱修正）
     # hysteresis_upper: counter 増加トリガー上閾値（drawdown がここを超えると carry-counter++）
@@ -1087,6 +1090,14 @@ class MonitorDaemon:
             if now - last_hb_touch >= self._config.heartbeat_write_interval_secs:
                 self._touch_heartbeat_file()
                 last_hb_touch = now
+
+            # 2026-04-25 WR-11/12: self_monitor_enabled=True の場合 sentinel 死活監視
+            if self._config.self_monitor_enabled:
+                try:
+                    from atlas_v3.supervision.self_monitor import recover_sentinel_if_needed
+                    recover_sentinel_if_needed()
+                except Exception as exc:
+                    log.warning("[Monitor] self_monitor.recover_sentinel_if_needed: %s", exc)
 
             try:
                 # RT-R2-001: provider から実データを取得して check_once() に注入
