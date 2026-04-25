@@ -139,11 +139,16 @@ class TestHandleStale:
         mock_pushover.assert_called_once()  # 通知1回
         mock_kickstart.assert_called_once_with("chronos_agent")
 
-    @pytest.mark.xfail(reason="legacy sora_heartbeat_monitor.py の test 期待と実装乖離 (attempts=1 で +1 → threshold 1 超え early return)・atlas_v3 移植時に rewrite", strict=False)
     def test_successful_kickstart_resets_counter(self, tmp_trading_dir, monkeypatch):
-        """kickstart 成功でカウンタがリセットされること。"""
+        """kickstart 成功でカウンタがリセットされること.
+
+        2026-04-25 修正: 仕様 (sora_heartbeat_monitor.py) は market_hours threshold=1 で
+        attempts=1 から +1 → 2 が threshold 超え → emergency early return。
+        test の前提 attempts=1 では仕様上 reset 経路に到達しない。attempts=0 が正しい
+        前提（試行前 state）で kickstart 成功 → reset 0 になる。
+        """
         mon = self._get_monitor_module()
-        attempts = {"chronos_agent": 1}
+        attempts = {"chronos_agent": 0}  # 試行前 state
 
         monkeypatch.setattr(mon, "_kickstart", MagicMock(return_value=True))
         monkeypatch.setattr(mon, "pushover", MagicMock())

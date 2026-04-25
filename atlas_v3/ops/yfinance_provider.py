@@ -39,6 +39,8 @@ import logging
 import time
 from typing import Optional
 
+from common_v3.self_healing.breaker_config import breaker
+
 log = logging.getLogger(__name__)
 
 # SPY の 1 contract 相当の代理 notional（代理 PnL 換算用）
@@ -135,11 +137,13 @@ class YFinanceMetricProvider:
         change_pct = abs(current_price - self._last_price) / self._last_price
         return change_pct >= _FLASH_CRASH_THRESHOLD_PCT
 
+    @breaker("moomoo_quote")
     def get_metrics(self) -> dict:
         """当日の代理 PnL / drawdown / latency を返す。
 
         HIGH-R6-2 fix: cache_ttl 自動調整 + Flash Crash 即時 bypass
         HIGH-R6-3 fix: yfinance 失敗時 fallback → degraded mode
+        2026-04-25: @breaker("moomoo_quote") wrap 追加 (ゆうさく指示「flaky 全件 root cause 修正」)
 
         Returns:
             dict with keys:

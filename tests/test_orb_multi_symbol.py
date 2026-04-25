@@ -29,6 +29,22 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from spy_bot import ORBEngine, ORBPosition
 
 
+# 2026-04-25: full-suite で別 test の monkeypatch leak (spy_bot.requests / cache 等) を
+# autouse fixture で毎テスト reset・xfail 削除可能化
+@pytest.fixture(autouse=True)
+def _reset_spy_bot_state(monkeypatch):
+    """spy_bot module の monkeypatch leak を毎テスト開始時に reset."""
+    try:
+        import spy_bot
+        import requests as real_requests
+        # spy_bot.requests を real requests に強制差し戻し
+        if hasattr(spy_bot, "requests"):
+            monkeypatch.setattr(spy_bot, "requests", real_requests, raising=False)
+    except ImportError:
+        pass
+    yield
+
+
 # ── ヘルパー ─────────────────────────────────────────────────────────────────
 
 FALLBACK_PRICES = {
@@ -87,7 +103,6 @@ def _mock_finnhub(ticker: str):
 
 # ── _get_underlying_price テスト ─────────────────────────────────────────────
 
-@pytest.mark.xfail(reason="spy_bot.requests patch leak in full suite (single PASS) — atlas_v3 移植時に rewrite")
 def test_get_underlying_price_spy():
     """SPY価格がフォールバックで返る（Finnhubモック使用）。"""
     orb = _make_orb("US.SPY")
@@ -97,7 +112,6 @@ def test_get_underlying_price_spy():
     assert price == 560.0
 
 
-@pytest.mark.xfail(reason="spy_bot.requests patch leak in full suite (single PASS) — atlas_v3 移植時に rewrite")
 def test_get_underlying_price_qqq():
     """QQQ価格がフォールバックで返る（SPYと異なる値）。"""
     orb = _make_orb("US.QQQ")
@@ -108,7 +122,6 @@ def test_get_underlying_price_qqq():
     assert price != 560.0  # SPYと異なる
 
 
-@pytest.mark.xfail(reason="spy_bot.requests patch leak in full suite (single PASS) — atlas_v3 移植時に rewrite")
 def test_get_underlying_price_tsla():
     """TSLA価格がフォールバックで返る。"""
     orb = _make_orb("US.TSLA")
@@ -118,7 +131,6 @@ def test_get_underlying_price_tsla():
     assert price == 250.0
 
 
-@pytest.mark.xfail(reason="spy_bot.requests patch leak in full suite (single PASS) — atlas_v3 移植時に rewrite")
 def test_get_spy_price_backward_compat():
     """_get_spy_price() は _get_underlying_price() に委譲する（同じ値を返す）。"""
     orb = _make_orb("US.SPY")
@@ -130,7 +142,6 @@ def test_get_spy_price_backward_compat():
 
 # ── record_opening_range テスト ───────────────────────────────────────────────
 
-@pytest.mark.xfail(reason="spy_bot.requests patch leak in full suite (single PASS) — atlas_v3 移植時に rewrite")
 def test_record_opening_range_spy():
     """SPYのORBレンジが設定される。"""
     orb = _make_orb("US.SPY")
@@ -145,7 +156,6 @@ def test_record_opening_range_spy():
     assert abs(orb.orb_high - 560.5) < 1.0
 
 
-@pytest.mark.xfail(reason="spy_bot.requests patch leak in full suite (single PASS) — atlas_v3 移植時に rewrite")
 def test_record_opening_range_qqq():
     """QQQのORBレンジが設定される（underlying_code参照）。"""
     orb = _make_orb("US.QQQ")
@@ -157,7 +167,6 @@ def test_record_opening_range_qqq():
     assert abs(orb.orb_high - 480.5) < 1.0
 
 
-@pytest.mark.xfail(reason="spy_bot.requests patch leak in full suite (single PASS) — atlas_v3 移植時に rewrite")
 def test_record_opening_range_tsla():
     """TSLAのORBレンジが設定される。"""
     orb = _make_orb("US.TSLA")
@@ -171,7 +180,6 @@ def test_record_opening_range_tsla():
 
 # ── check_breakout テスト ─────────────────────────────────────────────────────
 
-@pytest.mark.xfail(reason="spy_bot.requests patch leak in full suite (single PASS) — atlas_v3 移植時に rewrite")
 def test_check_breakout_call_spy():
     """SPYのCALLブレイクアウトを検出する。"""
     orb = _make_orb("US.SPY")
@@ -186,7 +194,6 @@ def test_check_breakout_call_spy():
     assert result == "CALL"
 
 
-@pytest.mark.xfail(reason="spy_bot.requests patch leak in full suite (single PASS) — atlas_v3 移植時に rewrite")
 def test_check_breakout_put_qqq():
     """QQQのPUTブレイクアウトを検出する。"""
     orb = _make_orb("US.QQQ")
@@ -202,7 +209,6 @@ def test_check_breakout_put_qqq():
     assert result == "PUT"
 
 
-@pytest.mark.xfail(reason="spy_bot.requests patch leak in full suite (single PASS) — atlas_v3 移植時に rewrite")
 def test_check_breakout_no_signal():
     """レンジ内は None を返す（SPY=560はレンジ555〜565の内側）。"""
     orb = _make_orb("US.SPY")

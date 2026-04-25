@@ -389,7 +389,6 @@ class TestStartupOrphanOrderCleanup:
             count = eng.cancel_all_open_orders(reason="test_empty")
         assert count == 0
 
-    @pytest.mark.xfail(reason="spy_bot legacy 依存 full-suite flaky / single PASS — atlas_v3 移植時に rewrite")
     def test_cancel_all_open_orders_filled_part_alert(self):
         """FILLED_PART注文はキャンセルせずpushover通知する"""
         eng = self._make_engine()

@@ -295,7 +295,6 @@ class TestCritical6UsdjpyDynamic:
         rate = _sb.get_usdjpy_rate()
         assert rate == pytest.approx(148.2), f"yfinanceから取得した値が正しくない: {rate}"
 
-    @pytest.mark.xfail(reason="spy_bot legacy 依存 (USDJPY cache) full-suite flaky / single PASS — atlas_v3 移植時に rewrite")
     def test_all_fail_returns_fallback(self, tmp_path, monkeypatch):
         """yfinance・Finnhub両方失敗時はフォールバック値を返す"""
         import spy_bot as _sb
@@ -317,7 +316,6 @@ class TestCritical6UsdjpyDynamic:
         # フォールバック値（150.0か前日キャッシュ値）が返ることを確認
         assert rate > 50, f"フォールバック値が50円未満（異常値）: {rate}"
 
-    @pytest.mark.xfail(reason="spy_bot legacy 依存 (USDJPY cache) full-suite flaky / single PASS — atlas_v3 移植時に rewrite")
     def test_stale_cache_used_as_fallback(self, tmp_path, monkeypatch):
         """全取得失敗 + 古いキャッシュがある場合は古いキャッシュを使う"""
         import spy_bot as _sb

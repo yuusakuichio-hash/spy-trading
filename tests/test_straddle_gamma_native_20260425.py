@@ -194,7 +194,6 @@ class TestHelpers:
         result = _calc_atr14(closes)
         assert result is not None
 
-    @pytest.mark.xfail(reason="full-suite flaky / single PASS — upstream test の mock or sys.modules leak (β-2 で test 分離強化時に再評価)")
     def test_fetch_closes_network_error(self, monkeypatch):
         """ネットワークエラー時は空リストを返す。"""
         monkeypatch.setattr(
@@ -643,7 +642,6 @@ class TestExecuteScalpDry:
         assert result is True
         assert gamma_dry._scalp_count_today == 1
 
-    @pytest.mark.xfail(reason="full-suite flaky / single PASS — upstream test の mock or sys.modules leak (β-2 で test 分離強化時に再評価)")
     def test_put_scalp_updates_put_code(self, gamma_dry, monkeypatch):
         pos = self._make_pos_and_set(gamma_dry)
         monkeypatch.setattr(
@@ -657,7 +655,6 @@ class TestExecuteScalpDry:
             gamma_dry.execute_scalp("PUT")
         assert pos.put_code != old_put
 
-    @pytest.mark.xfail(reason="full-suite flaky / single PASS — upstream test の mock or sys.modules leak (β-2 で test 分離強化時に再評価)")
     def test_call_scalp_updates_call_code(self, gamma_dry, monkeypatch):
         pos = self._make_pos_and_set(gamma_dry)
         monkeypatch.setattr(

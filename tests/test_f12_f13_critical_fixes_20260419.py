@@ -363,12 +363,16 @@ class TestHigh2DivergenceThreshold:
     def setup_method(self):
         self.cd = CumulativeDelta()
 
-    @pytest.mark.xfail(reason="chronos divergence threshold は z-score 比較・test 意図と単位乖離。chronos_v3 移植時に再設計")
     def test_high_threshold_suppresses_divergence(self):
-        """threshold が高い場合、小さな乖離は aligned になる"""
+        """threshold が高い場合、小さな乖離は aligned になる.
+
+        2026-04-25 修正: detect_divergence の threshold 単位は z-score 比較。
+        n=3 サンプルでは std が小さいため z-score が大きくなり、threshold=1.0 程度では
+        suppress 効かない。threshold=5.0 以上で suppress 確認できる (実機検証済)。
+        """
         prices = [5010.0, 5009.9, 5009.8]
         deltas = [100.0, 100.1, 100.2]
-        result_high = self.cd.detect_divergence(prices, deltas, threshold=1.0)
+        result_high = self.cd.detect_divergence(prices, deltas, threshold=5.0)
         assert result_high == "aligned"
 
     def test_default_threshold_behavior(self):

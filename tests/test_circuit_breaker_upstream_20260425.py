@@ -313,14 +313,12 @@ class TestCircuitOpenError:
 class TestYFinanceProviderBreakerApplied:
     """YFinanceMetricProvider.get_metrics が moomoo_quote breaker でラップされている。"""
 
-    @pytest.mark.xfail(reason="β-2 配下: YFinanceProvider への CB wrap 未実装 — C-017 moomoo provider 統合時に対応")
     def test_get_metrics_wrapped(self):
         """get_metrics の __wrapped__ 属性 or breaker state が存在すること。"""
         from atlas_v3.ops.yfinance_provider import YFinanceMetricProvider
         # @breaker は functools.wraps を使うので __wrapped__ を持つ
         assert hasattr(YFinanceMetricProvider.get_metrics, "__wrapped__")
 
-    @pytest.mark.xfail(reason="β-2 配下: YFinanceProvider への CB wrap 未実装 — C-017 moomoo provider 統合時に対応")
     def test_get_metrics_failure_increments_breaker_count(self):
         """get_metrics が RuntimeError を raise したとき moomoo_quote の failure_count が増える。
 

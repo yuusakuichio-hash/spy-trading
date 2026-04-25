@@ -162,12 +162,11 @@ class TestCritical8CloseAllPositions:
             result = eng.close_all_positions(reason="test")
         assert result is True
 
-    @pytest.mark.xfail(reason="spy_bot.py legacy (schg lock) の close_all_positions に依存。atlas_v3 移植時に再設計")
     def test_short_leg_failure_sets_pending_close_and_returns_false(self):
         """SHORT buyback 失敗 -> _pending_close にコード記録 + False 返却"""
         eng = self._make_engine()
         positions = [
-            {"code": "US.SPY260420P00550000", "qty": -1, "position_side": "SHORT"},
+            {"code": "US.SPY270420P00550000", "qty": -1, "position_side": "SHORT"},
         ]
 
         # get_open_positions は active positions を返す
@@ -180,7 +179,7 @@ class TestCritical8CloseAllPositions:
 
         assert result is False
         assert len(eng._pending_close) > 0
-        assert "US.SPY260420P00550000" in eng._pending_close
+        assert "US.SPY270420P00550000" in eng._pending_close
         # Pushover が naked risk メッセージで呼ばれた
         called_titles = [str(c.args[0]) for c in mock_push.call_args_list]
         assert any("naked risk" in t.lower() or "leg failed" in t.lower()
@@ -191,7 +190,7 @@ class TestCritical8CloseAllPositions:
         eng = self._make_engine()
         # SHORT position のみ
         positions = [
-            {"code": "US.SPY260420P00550000", "qty": -1, "position_side": "SHORT"},
+            {"code": "US.SPY270420P00550000", "qty": -1, "position_side": "SHORT"},
         ]
 
         import pandas as pd
@@ -214,8 +213,8 @@ class TestCritical8CloseAllPositions:
         """SHORT脚が LONG より先に place_order される"""
         eng = self._make_engine()
         positions = [
-            {"code": "US.SPY260420P00555000", "qty": 1, "position_side": "LONG"},
-            {"code": "US.SPY260420P00550000", "qty": -1, "position_side": "SHORT"},
+            {"code": "US.SPY270420P00555000", "qty": 1, "position_side": "LONG"},
+            {"code": "US.SPY270420P00550000", "qty": -1, "position_side": "SHORT"},
         ]
 
         import pandas as pd
