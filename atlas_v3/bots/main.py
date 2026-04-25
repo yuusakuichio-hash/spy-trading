@@ -362,6 +362,38 @@ def _main_test_connect(disable_names: list[str]) -> int:
         return 1
 
 
+def _build_market_data(mode: str):
+    """mode に応じて MarketDataClient 実装を返す。
+
+    paper / live モード: moomoo OpenD 経由で MoomooMarketDataAdapter (実 VIX 等) を注入。
+    moomoo 接続失敗時は _StubMarketData fallback (degraded mode 警告 log 付)。
+    dry / test-connect モード: 常に _StubMarketData (テスト用固定値)。
+
+    Returns
+    -------
+    (market_data, quote_ctx_to_close): MarketDataClient 実装 + cleanup 用 quote_ctx (None 可)
+    """
+    if mode in ("dry", "test-connect"):
+        return None, None  # build_engine_native で _StubMarketData fallback
+
+    try:
+        import futu as ft
+        from atlas_v3.ops.market_data_adapter import MoomooMarketDataAdapter
+        quote_ctx = ft.OpenQuoteContext(host="127.0.0.1", port=11111)
+        adapter = MoomooMarketDataAdapter(quote_ctx)
+        log.info(
+            "[main] MoomooMarketDataAdapter 注入完了 (mode=%s)・実 VIX 取得経路アクティブ",
+            mode,
+        )
+        return adapter, quote_ctx
+    except Exception as exc:
+        log.warning(
+            "[main] MoomooMarketDataAdapter 注入失敗・_StubMarketData fallback: %s",
+            exc,
+        )
+        return None, None
+
+
 def _main_start_run_loop(disable_names: list[str], mode: str) -> int:
     """paper / dry / live モード: AtlasEngine を組み立てて run_loop を起動する。
 
@@ -372,13 +404,30 @@ def _main_start_run_loop(disable_names: list[str], mode: str) -> int:
     """
     stop_event = threading.Event()
     setup_graceful_shutdown(stop_event)
+    market_data, quote_ctx_to_close = _build_market_data(mode)
     try:
-        engine = build_engine_native(disable_names=disable_names)
+        engine = build_engine_native(
+            disable_names=disable_names,
+            market_data=market_data,
+        )
     except Exception as exc:
         log.error("[main] AtlasEngine 組み立て失敗: %s", exc, exc_info=True)
+        if quote_ctx_to_close is not None:
+            try:
+                quote_ctx_to_close.close()
+            except Exception:
+                pass
         return 1
     log.info("[main] run_loop 開始 (mode=%s)", mode)
-    return run_loop(engine=engine, stop_event=stop_event)
+    try:
+        return run_loop(engine=engine, stop_event=stop_event)
+    finally:
+        if quote_ctx_to_close is not None:
+            try:
+                quote_ctx_to_close.close()
+                log.info("[main] quote_ctx close 完了")
+            except Exception as e:
+                log.warning("[main] quote_ctx close 失敗: %s", e)
 
 
 # ---------------------------------------------------------------------------
