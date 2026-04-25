@@ -1,5 +1,5 @@
 {
-  "last_updated": "2026-04-25 12:08 JST",
+  "last_updated": "2026-04-25 12:25 JST",
   "current_phase_id": "monday-preopen-prep",
   "current_phase_label": "月曜 (2026-04-27 ET) Paper 開始 pre-open 準備 + Medium gap 全消化済",
   "overall_note": "Phase 2 Engine 移植 9/9 完了 (commit d4929a7・505 tests PASS) / Knight Capital TOP5 fix (10戦術 wiring) / 案 F preemptive relogin 完遂 (b4bc64e Login successful) / 動的パラメータ + TraderProfile 4 preset 実装済 / Medium gap 5/5 全完了: GammaScalp(20PASS) + TracerBullet(25PASS) + MorningDigest(15PASS) + Hypothesis(43新規) + K8sReconcile(29PASS) / 残: 月曜 ET pre-open canary smoke + PDT live wiring",
@@ -153,6 +153,18 @@
       "name": "C-017 skeleton 不要 test 削除 + 全体回帰",
       "status": "completed",
       "artifact": "commit f8dbc15 / 21 PASS / navigator GO / bug率極低"
+    },
+    {
+      "id": "medium-6-helper-fix-20260425",
+      "name": "Medium #6 morning_digest auth_budget helper 補完 (false-completion 訂正)",
+      "status": "completed",
+      "artifact": "commit 82ef027 / 15/15 PASS / _auth_next_reset_jst + _auth_recent_failures + section 拡張"
+    },
+    {
+      "id": "gmail-test-collection-fix-20260425",
+      "name": "test_gmail_notify_improve collection error 復旧 (legacy drift で 38 test skip)",
+      "status": "completed",
+      "artifact": "commit 8e1ced2 / SPX_LOG_DIR tmp 化 + module-level skip / collection blocker 解消"
     },
     {
       "id": "monday-preopen-prep",
