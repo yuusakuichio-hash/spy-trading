@@ -754,15 +754,22 @@ grep -l "Sprint 1" /Users/yuusakuichio/trading/data/sprint1_carryovers.md && \
 
 ---
 
-## C-025 進捗（2026-04-24）: 境界条件 assert 部分実装
+## C-025 完遂記録（2026-04-26 fork session 確認）: 境界条件 assert 全件実装済
 
-**実装済**（commit 待ち）:
-- `common_v3/risk/engine.py` `check_max_notional` / `check_max_daily_loss` / `check_max_drawdown` に NaN/inf ガード追加
-- pytest 199 tests（risk_engine + kill_switch 関連）全 pass / 回帰 0
+**ステータス**: ✅ 全項目完遂 (carryover close)
 
-**Sprint 2 本体で継続**:
-- `RiskEngine.check_var` / `_check_kill_switch` / `_check_nan_inf_inputs` 等への境界条件 assert 追加
-- `FirmScopedKillSwitch` / `store.py` への assert 追加
+**完遂内訳**（commit + 実装位置）:
+
+| 項目 | commit | 実装位置 | assert 内容 |
+|---|---|---|---|
+| `check_max_notional` / `check_max_daily_loss` / `check_max_drawdown` | `ac22185` (04-24) | `common_v3/risk/engine.py` | NaN/inf ガード |
+| `RiskEngine.check_var` | `ac22185` (04-24) | `common_v3/risk/engine.py:577-581` | `isinstance(portfolio, PortfolioSnapshot)` + `self._config is not None` |
+| `RiskEngine._check_kill_switch` | `ac22185` (04-24) | `common_v3/risk/engine.py:656-657` | `self._config is not None` |
+| `RiskEngine._check_nan_inf_inputs` | `ac22185` (04-24) | `common_v3/risk/engine.py:821-827` | `isinstance(portfolio, PortfolioSnapshot)` + `isinstance(request_notional, (int, float))` |
+| `FirmScopedKillSwitch` (`__init__` / `activate` / `deactivate`) | `7e4aaba9` (04-26 00:13) | `common_v3/risk/kill_switch.py` | firm 非 None + str 型 / activator str 型 |
+| `IdempotencyStore` (`__init__` / `check_and_mark`) | `7e4aaba9` (04-26 00:13) | `common_v3/idempotency/store.py` | path Path 型 + key str 非空 + ttl_sec int 型 |
+
+**検証**: pytest 全件 6,264 PASS / 0 FAIL / 15 xfail (commit `080d6ad7`・194.79s) で回帰 0 確認済
 
 ---
 
