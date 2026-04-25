@@ -373,7 +373,19 @@ class StraddleNativeEngine(TacticBase):
 
         # Pre-Trade Gate (critical only: Deep ITM + kill_switch)
         qty, est_premium_per_leg = self._calc_straddle_qty(spy_price, vix or GAMMA_SCALP_VIX_MIN)
-        self._run_pre_trade_gate(ticker, qty)
+        # B-1/B-2 fix (2026-04-25): est_premium_per_leg/cash/margin を渡し、
+        # L1 Deep ITM + L3 margin の fail-closed で誤ブロックしないようにする。
+        # est_premium_per_leg は株価ベース → 1 contract = 100 株分。
+        # 2 leg (call+put) で qty 倍 = est_margin。
+        cash = self._get_cash() or 0.0
+        opt_price_per_contract = est_premium_per_leg * 100
+        est_margin_total = opt_price_per_contract * qty * 2
+        self._run_pre_trade_gate(
+            ticker, qty,
+            option_price=opt_price_per_contract,
+            est_margin=est_margin_total,
+            capital_usd=cash,
+        )
 
         # PDT チェック（0DTE straddle は day_trade = 買い当日クローズ → PDT 計上対象）
         if not self.paper and not self.dry_test:
@@ -626,18 +638,42 @@ class StraddleNativeEngine(TacticBase):
         est_premium_per_leg = spy_price * (vix / 100.0) / 16.0 * math.sqrt(T)
         est_cost_1lot = est_premium_per_leg * 2 * 100
         cash      = self._get_cash()
-        max_risk  = cash * 0.05
+        # B-2/L3 整合 (2026-04-25): max_risk を 5% → 2.5% に下げ、
+        # PreTradeGate L3 (max_margin_pct_per_trade=3%) を超えないようサイズ。
+        # straddle は premium = margin なので両者を同一の cap で揃える必要がある。
+        max_risk  = cash * 0.025
         qty = max(1, min(3, int(max_risk / est_cost_1lot))) if est_cost_1lot > 0 else 1
         return qty, est_premium_per_leg
 
-    def _run_pre_trade_gate(self, ticker: str, qty: int) -> None:
-        """critical-only PreTradeGate を通す（KILL + L1 Deep ITM + L4 qty）。"""
+    def _run_pre_trade_gate(
+        self, ticker: str, qty: int,
+        option_price: float = 0.0,
+        est_margin: float = 0.0,
+        capital_usd: float = 0.0,
+    ) -> None:
+        """critical-only PreTradeGate を通す（KILL + L1 Deep ITM + L3 margin + L4 qty）。
+
+        Args:
+            ticker: 銘柄コード (US. prefix なし)
+            qty: 発注数量
+            option_price: 1 contract のオプション価格 (USD) — 0 で L1 fail-closed
+            est_margin: 推定必要証拠金 (USD) — 0 で L3 fail-closed
+            capital_usd: 口座資本 (USD) — 0 で L3 fail-closed
+        """
         try:
             from common_v3.risk.pre_trade_check import (
                 OrderCtx as _Ctx,
                 check_order_critical_only as _gate,
             )
-            result = _gate(_Ctx(symbol=f"US.{ticker}", qty=qty, side="BUY", is_long=True))
+            # is_long=False: straddle は ATM 2 leg ペア (call + put) で hedge 構造のため
+            # L1 「Deep ITM 裸 LONG 拒否」(4/17 事故由来) の対象外。
+            # spread 系として L1 skip するのが OrderCtx 設計意図 (line 124 docstring)。
+            result = _gate(_Ctx(
+                symbol=f"US.{ticker}", qty=qty, side="BUY", is_long=False,
+                option_price=option_price,
+                est_margin=est_margin,
+                capital_usd=capital_usd,
+            ))
             if not result.allowed:
                 raise ValueError(
                     f"[StraddleNative] PreTradeGate BLOCKED: {result.reason}"
