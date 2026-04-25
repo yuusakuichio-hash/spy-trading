@@ -165,13 +165,21 @@ class TestCritR6_1_BashWriteGuard:
         exit_code = self._run_hook_with_command(command)
         assert exit_code == 0, "CRIT-R6-1: pytest がブロックされた（false positive）。"
 
-    def test_bash_atlas_v3_new_file_not_blocked(self):
-        """許可: atlas_v3/ 配下への書込みはブロックされない。"""
+    def test_bash_atlas_v3_write_blocked_c_r7_2(self):
+        """C-R7-2 fix: atlas_v3/ 配下への Bash 経由書込みはブロックされる。
+
+        旧テスト (CRIT-R6-1 時点) では atlas_v3/ は保護対象外だったが、
+        C-R7-2 fix で atlas_v3/ が PROTECTED_PATTERNS に追加されたため
+        Bash 経由での atlas_v3/ への書込みはブロック対象となった。
+        新規コードは atlas_v3/ に作成するが Edit/Write ツール経由を使用し、
+        Bash 経由の書込み（sed -i, python open 等）は禁止される。
+        """
         command = "python3 -c \"open('atlas_v3/ops/new_file.py','w').write('x')\""
         exit_code = self._run_hook_with_command(command)
-        # atlas_v3/ は保護対象外 → spy_bot.py が含まれないのでブロックされない
-        assert exit_code == 0, (
-            "CRIT-R6-1: atlas_v3/ への書込みが誤ってブロックされた（false positive）。"
+        # C-R7-2: atlas_v3/ は保護対象 → Bash 経由書込みはブロックされる
+        assert exit_code != 0, (
+            "C-R7-2: atlas_v3/ への Bash 経由書込みがブロックされなかった。"
+            "PROTECTED_PATTERNS への atlas_v3/ 追加が機能していない。"
         )
 
     def test_bash_logic_file_exists(self):
@@ -954,4 +962,416 @@ class TestRegR6X_TestDeltaScript:
         assert result.returncode == 0, (
             f"REG-R6-X: r6 テスト / regression ledger で新規 failure が発生: "
             f"{result.stdout[-500:]}"
+        )
+
+
+# ===========================================================================
+# C-R7-1: WRITE_CMD_PATTERNS 13 bypass vectors
+# ===========================================================================
+
+class TestCR7_1_BypassVectors:
+    """C-R7-1: 13 bypass vectors が WRITE_CMD_PATTERNS に追加されブロックされる。"""
+
+    LOGIC_SCRIPT = PROJECT_ROOT / ".claude" / "hooks" / "_bash_write_guard_logic.py"
+
+    def _check(self, command: str) -> str:
+        """_bash_write_guard_logic.py に command を流して BLOCK/OK を返す。"""
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, str(self.LOGIC_SCRIPT)],
+            input=command,
+            capture_output=True,
+            text=True,
+        )
+        return result.stdout.strip()
+
+    def test_shutil_copy_blocks_spy_bot(self):
+        """実攻撃: shutil.copy() で spy_bot.py を上書きしようとした場合にブロック。"""
+        assert self._check("shutil.copy('evil.py', 'spy_bot.py')") == "BLOCK", (
+            "C-R7-1: shutil.copy spy_bot.py がブロックされなかった（bypass vector 未追加）。"
+        )
+
+    def test_pathlib_write_text_blocks_common(self):
+        """実攻撃: pathlib .write_text() で common/ を上書きしようとした場合にブロック。"""
+        assert self._check("Path('common/kill_switch.py').write_text('hacked')") == "BLOCK", (
+            "C-R7-1: pathlib.write_text common/ がブロックされなかった。"
+        )
+
+    def test_pathlib_write_bytes_blocks_atlas_v3(self):
+        """実攻撃: .write_bytes() で atlas_v3/ を上書きしようとした場合にブロック。"""
+        assert self._check("Path('atlas_v3/ops/monitor.py').write_bytes(b'hacked')") == "BLOCK", (
+            "C-R7-1: pathlib.write_bytes atlas_v3/ がブロックされなかった。"
+        )
+
+    def test_os_rename_blocks_common_v3(self):
+        """実攻撃: os.rename() で common_v3/ ファイルを置き換えようとした場合にブロック。"""
+        assert self._check("os.rename('/tmp/evil.py', 'common_v3/risk/kill_switch.py')") == "BLOCK", (
+            "C-R7-1: os.rename common_v3/ がブロックされなかった。"
+        )
+
+    def test_os_replace_blocks_chronos_v3(self):
+        """実攻撃: os.replace() で chronos_v3/ ファイルを置き換えようとした場合にブロック。"""
+        assert self._check("os.replace('/tmp/evil.py', 'chronos_v3/core/bot.py')") == "BLOCK", (
+            "C-R7-1: os.replace chronos_v3/ がブロックされなかった。"
+        )
+
+    def test_git_apply_blocks_atlas_v3(self):
+        """実攻撃: git apply で atlas_v3/ にパッチを当てようとした場合にブロック。"""
+        assert self._check("git apply --reject evil.patch atlas_v3/ops/monitor.py") == "BLOCK", (
+            "C-R7-1: git apply atlas_v3/ がブロックされなかった。"
+        )
+
+    def test_patch_cmd_blocks_spy_bot(self):
+        """実攻撃: patch コマンドで spy_bot.py を変更しようとした場合にブロック。"""
+        assert self._check("patch -p1 spy_bot.py < evil.patch") == "BLOCK", (
+            "C-R7-1: patch -p1 spy_bot.py がブロックされなかった。"
+        )
+
+    def test_install_m_blocks_atlas_v3(self):
+        """実攻撃: install -m で atlas_v3/ にファイルを設置しようとした場合にブロック。"""
+        assert self._check("install -m 644 evil.py atlas_v3/ops/monitor.py") == "BLOCK", (
+            "C-R7-1: install -m atlas_v3/ がブロックされなかった。"
+        )
+
+    def test_ln_sf_blocks_common_v3(self):
+        """実攻撃: ln -sf でシンボリックリンクを上書きしようとした場合にブロック。"""
+        assert self._check("ln -sf /tmp/evil.py common_v3/risk/kill_switch.py") == "BLOCK", (
+            "C-R7-1: ln -sf common_v3/ がブロックされなかった。"
+        )
+
+    def test_tr_redirect_blocks_common(self):
+        """実攻撃: tr ... > common/ で上書きしようとした場合にブロック。"""
+        assert self._check("tr '[:upper:]' '[:lower:]' evil.txt > common/kill_switch.py") == "BLOCK", (
+            "C-R7-1: tr > common/ がブロックされなかった。"
+        )
+
+    def test_open_wb_blocks_spy_bot(self):
+        """実攻撃: open('spy_bot.py', 'wb') での書込みをブロック。"""
+        assert self._check("open('spy_bot.py', 'wb').write(b'x')") == "BLOCK", (
+            "C-R7-1: open(..., 'wb') spy_bot.py がブロックされなかった。"
+        )
+
+    def test_dd_bs_blocks_atlas_v3(self):
+        """実攻撃: dd bs= で atlas_v3/ ファイルを上書きしようとした場合にブロック。"""
+        assert self._check("dd bs=1 if=/dev/zero of=atlas_v3/ops/monitor.py") == "BLOCK", (
+            "C-R7-1: dd bs= atlas_v3/ がブロックされなかった（dd の别形式）。"
+        )
+
+    def test_shutil_move_blocks_common_v3(self):
+        """実攻撃: shutil.move() で common_v3/ ファイルを置き換えようとした場合にブロック。"""
+        assert self._check("shutil.move('/tmp/evil.py', 'common_v3/risk/kill_switch.py')") == "BLOCK", (
+            "C-R7-1: shutil.move common_v3/ がブロックされなかった。"
+        )
+
+    def test_non_write_reads_not_blocked(self):
+        """許可: grep atlas_v3/ は読取のみ → ブロックされない（false positive なし）。"""
+        assert self._check("grep -r 'pattern' atlas_v3/") == "OK", (
+            "C-R7-1: grep atlas_v3/（読取）が誤ってブロックされた（false positive）。"
+        )
+
+
+# ===========================================================================
+# C-R7-2: PROTECTED_PATTERNS atlas_v3/ common_v3/ chronos_v3/ 追加確認
+# ===========================================================================
+
+class TestCR7_2_ProtectedPatterns:
+    """C-R7-2: PROTECTED_PATTERNS に atlas_v3/ common_v3/ chronos_v3/ が含まれる。"""
+
+    LOGIC_SCRIPT = PROJECT_ROOT / ".claude" / "hooks" / "_bash_write_guard_logic.py"
+
+    def _check(self, command: str) -> str:
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, str(self.LOGIC_SCRIPT)],
+            input=command,
+            capture_output=True,
+            text=True,
+        )
+        return result.stdout.strip()
+
+    def test_protected_patterns_contains_atlas_v3(self):
+        """_bash_write_guard_logic.py の PROTECTED_PATTERNS に atlas_v3/ が含まれる。"""
+        content = self.LOGIC_SCRIPT.read_text(encoding="utf-8")
+        assert "atlas_v3/" in content, (
+            "C-R7-2: PROTECTED_PATTERNS に atlas_v3/ が含まれない。"
+        )
+
+    def test_protected_patterns_contains_common_v3(self):
+        """_bash_write_guard_logic.py の PROTECTED_PATTERNS に common_v3/ が含まれる。"""
+        content = self.LOGIC_SCRIPT.read_text(encoding="utf-8")
+        assert "common_v3/" in content, (
+            "C-R7-2: PROTECTED_PATTERNS に common_v3/ が含まれない。"
+        )
+
+    def test_protected_patterns_contains_chronos_v3(self):
+        """_bash_write_guard_logic.py の PROTECTED_PATTERNS に chronos_v3/ が含まれる。"""
+        content = self.LOGIC_SCRIPT.read_text(encoding="utf-8")
+        assert "chronos_v3/" in content, (
+            "C-R7-2: PROTECTED_PATTERNS に chronos_v3/ が含まれない。"
+        )
+
+    def test_sed_blocks_atlas_v3_monitor(self):
+        """実攻撃: sed -i で atlas_v3/ops/monitor.py を変更しようとした場合にブロック。"""
+        assert self._check("sed -i '' 's/probe_auto_deactivate/bypass/' atlas_v3/ops/monitor.py") == "BLOCK", (
+            "C-R7-2: sed -i atlas_v3/ops/monitor.py がブロックされなかった。"
+        )
+
+    def test_sed_blocks_common_v3_kill_switch(self):
+        """実攻撃: sed -i で common_v3/risk/kill_switch.py を変更しようとした場合にブロック。"""
+        assert self._check("sed -i '' 's/fail-closed/fail-open/' common_v3/risk/kill_switch.py") == "BLOCK", (
+            "C-R7-2: sed -i common_v3/ がブロックされなかった。"
+        )
+
+    def test_sed_blocks_chronos_v3(self):
+        """実攻撃: sed -i で chronos_v3/ ファイルを変更しようとした場合にブロック。"""
+        assert self._check("sed -i 's/False/True/' chronos_v3/core/bot.py") == "BLOCK", (
+            "C-R7-2: sed -i chronos_v3/ がブロックされなかった。"
+        )
+
+
+# ===========================================================================
+# C-R7-3: _deactivate_raw が probe_auto_deactivate フラグ判定内に移動
+# ===========================================================================
+
+class TestCR7_3_DeactivateRawUnderFlag:
+    """C-R7-3: _deactivate_raw は probe_auto_deactivate=True 時のみ呼ばれる。"""
+
+    def test_probe_recovery_no_deactivate_when_flag_false(self, tmp_path, monkeypatch):
+        """実攻撃: probe_auto_deactivate=False の時 _deactivate_raw が呼ばれない。
+
+        C-R7-3 の核心: global KillSwitch が probe 成功でも自動解除されないことを確認。
+        """
+        from common_v3.risk import kill_switch as ks_module
+        from atlas_v3.ops.monitor import MonitorConfig, MonitorDaemon
+
+        monkeypatch.setattr(ks_module, "_STATE_DIR", tmp_path)
+        monkeypatch.setattr(ks_module, "FLAG_FILE", tmp_path / "kill_switch.flag")
+        monkeypatch.setattr(ks_module, "AUDIT_FILE", tmp_path / "kill_switch_audit.jsonl")
+
+        # KillSwitch を activate して ARMED 状態にする
+        (tmp_path / "kill_switch.flag").write_text('{"reason":"test","activated_at":"2026-04-25"}')
+
+        deactivate_called = []
+
+        def fake_deactivate_raw(**kwargs):
+            deactivate_called.append(kwargs)
+
+        real_provider = lambda: {"pnl_day_usd": -10.0, "drawdown_pct": 0.05, "latency_ms": 50.0}
+        config = MonitorConfig(
+            daily_loss_usd=-400.0,
+            pushover_enabled=False,
+            kill_switch_on_emergency=False,
+            kill_switch_on_drawdown_breach=False,
+            metric_provider=real_provider,
+            probe_auto_deactivate=False,  # C-R7-3: フラグ False
+        )
+        daemon = MonitorDaemon(config)
+
+        import atlas_v3.ops.monitor as monitor_mod
+        monkeypatch.setattr(
+            "common_v3.risk.kill_switch._deactivate_raw",
+            fake_deactivate_raw,
+            raising=False,
+        )
+
+        result = daemon._probe_recovery()
+
+        # probe は True を返す（回復確認成功）
+        assert result is True, (
+            "C-R7-3: probe_auto_deactivate=False でも _probe_recovery が False を返した。"
+        )
+        # _deactivate_raw は呼ばれていない
+        assert len(deactivate_called) == 0, (
+            f"C-R7-3: probe_auto_deactivate=False なのに _deactivate_raw が呼ばれた: {deactivate_called}。"
+            "LTCM/Therac-25 型の自動復旧暴走リスクが残存している。"
+        )
+
+    def test_probe_recovery_deactivates_when_flag_true(self, tmp_path, monkeypatch):
+        """probe_auto_deactivate=True の時は _deactivate_raw が呼ばれる。"""
+        from common_v3.risk import kill_switch as ks_module
+        from atlas_v3.ops.monitor import MonitorConfig, MonitorDaemon
+
+        monkeypatch.setattr(ks_module, "_STATE_DIR", tmp_path)
+        monkeypatch.setattr(ks_module, "FLAG_FILE", tmp_path / "kill_switch.flag")
+        monkeypatch.setattr(ks_module, "AUDIT_FILE", tmp_path / "kill_switch_audit.jsonl")
+
+        deactivate_called = []
+
+        def fake_deactivate_raw(**kwargs):
+            deactivate_called.append(kwargs)
+
+        real_provider = lambda: {"pnl_day_usd": -10.0, "drawdown_pct": 0.05, "latency_ms": 50.0}
+        config = MonitorConfig(
+            daily_loss_usd=-400.0,
+            pushover_enabled=False,
+            kill_switch_on_emergency=False,
+            kill_switch_on_drawdown_breach=False,
+            metric_provider=real_provider,
+            probe_auto_deactivate=True,  # 明示的 opt-in
+        )
+        daemon = MonitorDaemon(config)
+
+        monkeypatch.setattr(
+            "common_v3.risk.kill_switch._deactivate_raw",
+            fake_deactivate_raw,
+            raising=False,
+        )
+
+        # common_v3.risk.kill_switch をインポートして monkeypatch
+        import common_v3.risk.kill_switch as ks
+        original_raw = getattr(ks, "_deactivate_raw", None)
+        ks._deactivate_raw = fake_deactivate_raw
+        try:
+            result = daemon._probe_recovery()
+        finally:
+            if original_raw is not None:
+                ks._deactivate_raw = original_raw
+
+        assert result is True, "C-R7-3: probe_auto_deactivate=True で probe が False を返した。"
+        assert len(deactivate_called) > 0, (
+            "C-R7-3: probe_auto_deactivate=True なのに _deactivate_raw が呼ばれなかった。"
+        )
+
+    def test_deactivate_raw_after_flag_check_in_source(self):
+        """C-R7-3 構造検証: _probe_recovery のソースで probe_auto_deactivate チェックが
+        _deactivate_raw 呼出しより先に現れる。"""
+        import inspect
+        from atlas_v3.ops.monitor import MonitorDaemon
+        source = inspect.getsource(MonitorDaemon._probe_recovery)
+        idx_flag = source.find("probe_auto_deactivate")
+        idx_raw = source.find("_deactivate_raw")
+        assert idx_flag != -1, "C-R7-3: _probe_recovery に probe_auto_deactivate が存在しない。"
+        assert idx_raw != -1, "C-R7-3: _probe_recovery に _deactivate_raw が存在しない。"
+        assert idx_flag < idx_raw, (
+            "C-R7-3: _deactivate_raw が probe_auto_deactivate チェックより前に配置されている。"
+            "probe_auto_deactivate=False でも global deactivate が実行されてしまう（fail-open）。"
+        )
+
+
+# ===========================================================================
+# C-R7-4: zero_detection_n デフォルト 0→3 + _probe_recovery 呼出箇所明示渡し
+# ===========================================================================
+
+class TestCR7_4_ZeroDetectionDefault:
+    """C-R7-4: _is_dummy_provider のデフォルト zero_detection_n が 3 に変更された。"""
+
+    def test_is_dummy_provider_default_arg_is_3(self):
+        """_is_dummy_provider のデフォルト引数が 3 になっている。"""
+        import inspect
+        from atlas_v3.ops.monitor import MonitorDaemon
+        sig = inspect.signature(MonitorDaemon._is_dummy_provider)
+        default = sig.parameters["zero_detection_n"].default
+        assert default == 3, (
+            f"C-R7-4: _is_dummy_provider の zero_detection_n デフォルトが {default}。"
+            "3 に変更されていない（fail-closed 化が未完了）。"
+        )
+
+    def test_probe_recovery_calls_is_dummy_with_explicit_3(self):
+        """_probe_recovery のソースに _is_dummy_provider(zero_detection_n=3) の記述がある。"""
+        import inspect
+        from atlas_v3.ops.monitor import MonitorDaemon
+        source = inspect.getsource(MonitorDaemon._probe_recovery)
+        assert "zero_detection_n=3" in source, (
+            "C-R7-4: _probe_recovery が _is_dummy_provider を zero_detection_n=3 で呼んでいない。"
+            "C-R7-4 fix の明示渡しが実装されていない。"
+        )
+
+    def test_zero_detection_n_3_detects_zero_lambda(self):
+        """デフォルト (zero_detection_n=3) で 3 連続 zero lambda が Dummy と判定される。"""
+        from atlas_v3.ops.monitor import MonitorConfig, MonitorDaemon
+
+        zero_provider = lambda: {"pnl_day_usd": 0.0, "drawdown_pct": 0.0, "latency_ms": 0.0}
+        config = MonitorConfig(
+            daily_loss_usd=-400.0,
+            pushover_enabled=False,
+            kill_switch_on_emergency=False,
+            kill_switch_on_drawdown_breach=False,
+            metric_provider=zero_provider,
+        )
+        daemon = MonitorDaemon(config)
+        # デフォルト引数（3）で呼ぶ → 3 連続 0 値 → Dummy 判定
+        result = daemon._is_dummy_provider()
+        assert result is True, (
+            "C-R7-4: デフォルト (zero_detection_n=3) で 3 連続ゼロ lambda が Dummy と判定されなかった。"
+        )
+
+    def test_zero_detection_disabled_with_explicit_0(self):
+        """zero_detection_n=0 を明示すると後方互換挙動（zero detection 無効）になる。"""
+        from atlas_v3.ops.monitor import MonitorConfig, MonitorDaemon
+
+        zero_provider = lambda: {"pnl_day_usd": 0.0, "drawdown_pct": 0.0, "latency_ms": 0.0}
+        config = MonitorConfig(
+            daily_loss_usd=-400.0,
+            pushover_enabled=False,
+            kill_switch_on_emergency=False,
+            kill_switch_on_drawdown_breach=False,
+            metric_provider=zero_provider,
+        )
+        daemon = MonitorDaemon(config)
+        # zero_detection_n=0 を明示 → zero detection 無効 → isinstance のみ → lambda は False
+        result = daemon._is_dummy_provider(zero_detection_n=0)
+        assert result is False, (
+            "C-R7-4: zero_detection_n=0 を明示したのに lambda が Dummy と判定された（後方互換破壊）。"
+        )
+
+
+# ===========================================================================
+# C-R7-5: scripts/com.soralab.atlas-paper.plist 新規作成確認
+# ===========================================================================
+
+class TestCR7_5_PlistSrcExists:
+    """C-R7-5: scripts/com.soralab.atlas-paper.plist が存在し正しい内容を持つ。"""
+
+    PLIST_SRC = PROJECT_ROOT / "scripts" / "com.soralab.atlas-paper.plist"
+
+    def test_plist_src_file_exists(self):
+        """scripts/com.soralab.atlas-paper.plist が存在する。"""
+        assert self.PLIST_SRC.exists(), (
+            f"C-R7-5: {self.PLIST_SRC} が存在しない。"
+            "install_atlas_paper_daemon.sh が参照する PLIST_SRC が未作成。"
+        )
+
+    def test_plist_src_is_valid_xml(self):
+        """scripts/com.soralab.atlas-paper.plist が有効な XML である。"""
+        import xml.etree.ElementTree as ET
+        try:
+            ET.parse(str(self.PLIST_SRC))
+        except ET.ParseError as e:
+            pytest.fail(f"C-R7-5: plist が有効な XML でない: {e}")
+
+    def test_plist_src_has_label_com_soralab_atlas_paper(self):
+        """plist の Label が com.soralab.atlas-paper である。"""
+        content = self.PLIST_SRC.read_text(encoding="utf-8")
+        assert "com.soralab.atlas-paper" in content, (
+            "C-R7-5: plist の Label が com.soralab.atlas-paper でない。"
+        )
+
+    def test_plist_src_has_resource_limits(self):
+        """plist に HardResourceLimits と SoftResourceLimits が含まれる（HIGH-R6-4 継承）。"""
+        content = self.PLIST_SRC.read_text(encoding="utf-8")
+        assert "HardResourceLimits" in content, (
+            "C-R7-5: scripts/ plist に HardResourceLimits がない。"
+        )
+        assert "SoftResourceLimits" in content, (
+            "C-R7-5: scripts/ plist に SoftResourceLimits がない。"
+        )
+
+    def test_plist_src_has_keepalive(self):
+        """plist に KeepAlive が含まれる（常駐 daemon 設定）。"""
+        content = self.PLIST_SRC.read_text(encoding="utf-8")
+        assert "KeepAlive" in content, (
+            "C-R7-5: scripts/ plist に KeepAlive がない。"
+        )
+
+    def test_install_script_references_plist_src(self):
+        """install_atlas_paper_daemon.sh が PLIST_SRC として scripts/com.soralab.atlas-paper.plist を参照している。"""
+        install_script = PROJECT_ROOT / "scripts" / "install_atlas_paper_daemon.sh"
+        if not install_script.exists():
+            pytest.skip("install script not found")
+        content = install_script.read_text(encoding="utf-8")
+        assert "com.soralab.atlas-paper.plist" in content, (
+            "C-R7-5: install_atlas_paper_daemon.sh が com.soralab.atlas-paper.plist を参照していない。"
+        )
+        assert "scripts/" in content, (
+            "C-R7-5: install_atlas_paper_daemon.sh が scripts/ ディレクトリを参照していない。"
         )

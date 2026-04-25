@@ -240,16 +240,24 @@ class TestC3_KillSwitchZombieState:
         )
 
     def test_probe_recovery_deactivate_on_success_functional(self):
-        """_probe_recovery が True を返す時に KillSwitch deactivate が呼ばれる（機能テスト）。"""
+        """_probe_recovery が True を返す時に KillSwitch deactivate が呼ばれる（機能テスト）。
+
+        C-R7-3 fix 対応: probe_auto_deactivate=True を明示しないと _deactivate_raw が
+        呼ばれない（fail-closed デフォルト）ため、自動解除テストには True を必須指定する。
+        """
         from atlas_v3.ops.monitor import MonitorConfig, MonitorDaemon
 
-        provider = lambda: {"pnl_day_usd": 0.0, "drawdown_pct": 0.0, "latency_ms": 0.0}
+        # C-R7-4 fix 対応: 全ゼロ lambda はデフォルト zero_detection_n=3 で Dummy 判定される
+        # ため非ゼロ値を返す provider を使用する
+        provider = lambda: {"pnl_day_usd": -5.0, "drawdown_pct": 0.01, "latency_ms": 10.0}
         config = MonitorConfig(
             daily_loss_usd=-400.0,
             pushover_enabled=False,
             kill_switch_on_emergency=False,
             kill_switch_on_drawdown_breach=False,
             metric_provider=provider,
+            # C-R7-3 fix: probe_auto_deactivate=True を明示 (deactivate テストに必須)
+            probe_auto_deactivate=True,
         )
         daemon = MonitorDaemon(config)
 
@@ -593,10 +601,16 @@ class TestH3_DummyProbCollusion:
         )
 
     def test_is_dummy_provider_false_for_real_provider(self):
-        """_is_dummy_provider が lambda（非 Dummy）に対して False を返す。"""
+        """_is_dummy_provider が 非ゼロ値を返す lambda（非 Dummy）に対して False を返す。
+
+        C-R7-4 fix 対応: デフォルト zero_detection_n=3 では全ゼロ lambda が Dummy 判定される。
+        非 Dummy の実 provider テストは非ゼロ値を返す lambda を使用する。
+        全ゼロ lambda を使った後方互換テストは zero_detection_n=0 の明示渡しで行う。
+        """
         from atlas_v3.ops.monitor import MonitorConfig, MonitorDaemon
 
-        provider = lambda: {"pnl_day_usd": 0.0, "drawdown_pct": 0.0, "latency_ms": 0.0}
+        # 非ゼロ値の lambda = 実 provider の代表
+        provider = lambda: {"pnl_day_usd": -5.5, "drawdown_pct": 0.02, "latency_ms": 30.0}
         config = MonitorConfig(
             daily_loss_usd=-400.0,
             pushover_enabled=False,
@@ -606,7 +620,7 @@ class TestH3_DummyProbCollusion:
         )
         daemon = MonitorDaemon(config)
         assert daemon._is_dummy_provider() is False, (
-            "H3: lambda provider を Dummy と誤認した"
+            "H3: 非ゼロ lambda provider を Dummy と誤認した"
         )
 
     def test_dummy_probe_collusion_in_source(self):

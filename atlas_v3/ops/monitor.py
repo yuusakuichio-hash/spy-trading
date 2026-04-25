@@ -1178,7 +1178,7 @@ class MonitorDaemon:
             self._stop_event.wait(timeout=self._config.check_interval_secs)
         log.info("[Monitor] loop stopped")
 
-    def _is_dummy_provider(self, zero_detection_n: int = 0) -> bool:
+    def _is_dummy_provider(self, zero_detection_n: int = 3) -> bool:
         """CRIT-R6-3 fix: metric_provider が Dummy 系 provider か確認する。
 
         旧実装: type(instance).__name__ == "DummyMetricProvider" → 文字列判定
@@ -1190,17 +1190,16 @@ class MonitorDaemon:
         2. runtime zero-value detection: zero_detection_n > 0 の場合のみ有効。
            bound method が取れない場合（lambda 等）で、直近 zero_detection_n 回
            連続で全 metric が 0.0 の provider を「疑わしい」と判定して True を返す。
-           zero_detection_n=0（デフォルト）ではこの機能は無効（後方互換）。
+           zero_detection_n=0 では無効（後方互換用途のみ）。
 
         CRIT-R6-3 修正: SneakyDummy バイパス完全防止。
-
-        後方互換:
-          デフォルト zero_detection_n=0 で旧挙動（isinstance のみ）を維持する。
-          zero detection を有効化する場合は明示的に zero_detection_n=5 を渡す。
-          （r6 テスト: lambda 全ゼロ → False の期待値を維持）
+        C-R7-4 fix: デフォルト 0 → 3 に変更（fail-closed: zero-value detection を
+          デフォルト有効化して lambda 偽装 Dummy を捕捉する）。
+          明示的に無効化する場合は zero_detection_n=0 を渡す（後方互換）。
 
         Args:
-            zero_detection_n: 連続 0 値検出の試行回数。0 = 無効（デフォルト・後方互換）。
+            zero_detection_n: 連続 0 値検出の試行回数。3 = デフォルト有効（C-R7-4 fix）。
+                              0 = 無効（後方互換・既存テストで明示的に使用する場合のみ）。
 
         Returns:
             True: provider が Dummy 系（DummyMetricProvider またはサブクラス、
@@ -1285,7 +1284,8 @@ class MonitorDaemon:
             False: probe 失敗（問題継続 / Dummy 使用中）
         """
         # H3 fix: Dummy 使用中は probe 失敗扱い
-        if self._is_dummy_provider():
+        # C-R7-4 fix: zero_detection_n=3 を明示渡し（デフォルト変更と整合・fail-closed）
+        if self._is_dummy_provider(zero_detection_n=3):
             log.warning(
                 "[Monitor] Recovery probe: DummyMetricProvider detected. "
                 "Probe treated as FAIL to prevent Dummy-probe collusion (H3 fix). "
@@ -1302,6 +1302,19 @@ class MonitorDaemon:
             if not required.issubset(raw.keys()):
                 return False
 
+            # C-R7-3 fix: probe_auto_deactivate=False なら global も firm も一切解除しない（fail-closed）
+            # 旧実装は _deactivate_raw() が probe_auto_deactivate チェックの前にあり、
+            # フラグ=False でも global deactivate が実行されていた（LTCM/Therac-25 型暴走リスク）。
+            # 修正: フラグ判定を先に行い、False なら手動復旧必須として return True のみ行う。
+            if not self._config.probe_auto_deactivate:
+                log.warning(
+                    "[Monitor] probe_recovery: probe_auto_deactivate=False so KillSwitch is NOT "
+                    "automatically deactivated (global nor per-firm). "
+                    "Manual recovery required: python3 scripts/kill_switch_recover.py"
+                )
+                return True
+
+            # probe_auto_deactivate=True の場合のみ自動解除を実行（明示的 opt-in）
             # C3 fix: probe 成功 → global KillSwitch を deactivate して「ゾンビ状態」解消
             # CRIT-R6-2 fix: 全 firm の per-firm flag も一括解除（FirmScopedKillSwitch.deactivate_all()）
             # 状態機械: activate → probe 成功 → deactivate(global+all_firms) → counter reset → 再開
@@ -1328,15 +1341,6 @@ class MonitorDaemon:
 
             # CRIT-R6-2 fix: per-firm flag を全 firm で解除（FirmScopedKillSwitch.deactivate_all）
             # global deactivate とは独立して試みる（失敗でも probe は True を返す）
-            # C-022 fix: probe_auto_deactivate=False なら手動復旧必須化
-            if not self._config.probe_auto_deactivate:
-                log.warning(
-                    "[Monitor] probe_recovery: probe_auto_deactivate=False so KillSwitch is NOT "
-                    "automatically deactivated. Manual recovery required: "
-                    "python3 scripts/kill_switch_recover.py"
-                )
-                return True
-
             try:
                 from common_v3.risk.kill_switch import FirmScopedKillSwitch
                 firm_results = FirmScopedKillSwitch.deactivate_all(
