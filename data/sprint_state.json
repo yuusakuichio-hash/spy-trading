@@ -1,5 +1,5 @@
 {
-  "last_updated": "2026-04-25 12:06 JST",
+  "last_updated": "2026-04-25 12:08 JST",
   "current_phase_id": "monday-preopen-prep",
   "current_phase_label": "月曜 (2026-04-27 ET) Paper 開始 pre-open 準備 + Medium gap 全消化済",
   "overall_note": "Phase 2 Engine 移植 9/9 完了 (commit d4929a7・505 tests PASS) / Knight Capital TOP5 fix (10戦術 wiring) / 案 F preemptive relogin 完遂 (b4bc64e Login successful) / 動的パラメータ + TraderProfile 4 preset 実装済 / Medium gap 5/5 全完了: GammaScalp(20PASS) + TracerBullet(25PASS) + MorningDigest(15PASS) + Hypothesis(43新規) + K8sReconcile(29PASS) / 残: 月曜 ET pre-open canary smoke + PDT live wiring",
@@ -151,8 +151,8 @@
     {
       "id": "skeleton-test-cleanup-20260425",
       "name": "C-017 skeleton 不要 test 削除 + 全体回帰",
-      "status": "in_progress",
-      "artifact": "tests/test_atlas_v3_moomoo_provider_skeleton.py: 2 obsolete guard tests removed / 21 PASS / regression 進行中"
+      "status": "completed",
+      "artifact": "commit f8dbc15 / 21 PASS / navigator GO / bug率極低"
     },
     {
       "id": "monday-preopen-prep",
