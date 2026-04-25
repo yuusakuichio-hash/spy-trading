@@ -520,9 +520,18 @@ def test_register_tactic_succeeds():
 
 
 def test_spy_bot_not_imported_by_jade_lizard():
-    """T-JL-24: jade_lizard モジュールが spy_bot.py を import していないこと (schg lock)"""
+    """T-JL-24: jade_lizard モジュールが spy_bot.py を import していないこと (schg lock)
+
+    全件走行時に他 test で spy_bot が先に import されると sys.modules に残るため、
+    cleanup してから jade_lizard をリロードして純粋な import グラフを測定する。
+    """
     import importlib
     import sys
+
+    # 他 test での spy_bot import 残存を cleanup (full suite での干渉除去)
+    for k in list(sys.modules.keys()):
+        if k == "spy_bot" or k.startswith("spy_bot."):
+            del sys.modules[k]
 
     # jade_lizard をリロードして import グラフを確認
     mod_name = "atlas_v3.bots.engines.jade_lizard"
