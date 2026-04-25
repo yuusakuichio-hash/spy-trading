@@ -42,26 +42,20 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 
 from common.pushover_client import send as pushover_send
 
+# C-007-4 (Sprint 1 carryover): COMPONENTS 二重定義の統合
+# scripts 側の独自定義を排し lib 側を唯一真実源とする。CLI / LaunchAgent / Bot 呼出の監視対象を一本化。
+from common_v3.observability.deadman import COMPONENTS
+
 # ── パス設定 ──────────────────────────────────────────────────────────────────
-_TRADING_DIR = Path(os.environ.get("SORA_TRADING_DIR", _PROJECT_ROOT))
+# C-007-7 (Sprint 1 carryover): env="" で Path("")=cwd 分岐するのを防ぐ
+_env_trading = os.environ.get("SORA_TRADING_DIR", "").strip()
+_TRADING_DIR = Path(_env_trading) if _env_trading else Path(_PROJECT_ROOT)
 PING_DIR = _TRADING_DIR / "data" / "ops" / "heartbeat"
 PING_FILE = PING_DIR / "dead_man_ping.jsonl"
 
 # ── 閾値 ──────────────────────────────────────────────────────────────────────
 WARN_SEC = 30 * 60    # 30分: P2 alert
 CRIT_SEC = 60 * 60    # 60分: fallback log + P2 継続
-
-# ── 監視対象コンポーネント ────────────────────────────────────────────────────
-COMPONENTS = [
-    "spy_bot",
-    "atlas_agent",
-    "chronos_webhook_server",
-    "chronos_traderspost_forwarder",
-    # HIGH 9 fix (2026-04-22): Chronos コアコンポーネント追加
-    "chronos_agent",
-    "chronos_bot",
-    "chronos_webhook_queue_reader",
-]
 
 # ── ロガー ───────────────────────────────────────────────────────────────────
 log = logging.getLogger("dead_man_switch")

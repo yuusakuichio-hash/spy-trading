@@ -15,6 +15,7 @@ beacon path は既存 data/ops/heartbeat/dead_man_ping.jsonl を継承する。
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import logging
@@ -29,13 +30,20 @@ if TYPE_CHECKING:
 
 # ── パス設定 ─────────────────────────────────────────────────────────────────
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-_TRADING_DIR = Path(os.environ.get("SORA_TRADING_DIR", str(_PROJECT_ROOT)))
+# C-007-7: env="" で Path("")=cwd に分岐するのを防ぐ（strip + 空文字なら project root）
+_env_trading = os.environ.get("SORA_TRADING_DIR", "").strip()
+_TRADING_DIR = Path(_env_trading) if _env_trading else _PROJECT_ROOT
 PING_DIR = _TRADING_DIR / "data" / "ops" / "heartbeat"
 PING_FILE = PING_DIR / "dead_man_ping.jsonl"
 
 # ── 閾値 (既存踏襲) ───────────────────────────────────────────────────────────
 WARN_SEC: int = 30 * 60   # 30分
 CRIT_SEC: int = 60 * 60   # 60分
+
+# ── PING_FILE rotation 閾値 (C-007-3 / Redteam H2 / B3) ─────────────────────
+# JSONL 永久成長 → get_last_ping 全件 readlines → OOM 回避のため定期切り詰め
+PING_FILE_MAX_BYTES: int = 10 * 1024 * 1024   # 10 MB を超えたら rotate
+PING_FILE_KEEP_LINES: int = 5000               # 直近 5000 行保持
 
 # ── 監視対象コンポーネント (既存踏襲) ─────────────────────────────────────────
 COMPONENTS: list[str] = [
@@ -62,13 +70,46 @@ def _make_hash(ts_iso: str, component: str) -> str:
 
 # ── 公開 API ──────────────────────────────────────────────────────────────────
 
+def _rotate_ping_file_if_needed() -> None:
+    """PING_FILE が閾値超過時に直近 N 行のみ残して atomic 切り詰め。
+
+    C-007-3 (Redteam H2 / B3): lib 経由で beacon を書き続けると JSONL 永久成長 →
+    get_last_ping 全件 readlines → 数ヶ月で OOM の懸念を解消する。
+
+    rotation は atomic tmp + os.replace で半端な行を残さない（C-007-2 と同根）。
+    rotation 失敗は非致命的（log.warning のみ・呼出側の write は継続）。
+    """
+    if not PING_FILE.exists():
+        return
+    try:
+        size = PING_FILE.stat().st_size
+        if size < PING_FILE_MAX_BYTES:
+            return
+        lines = PING_FILE.read_text(encoding="utf-8").splitlines()
+        kept = lines[-PING_FILE_KEEP_LINES:]
+        tmp = PING_FILE.with_suffix(".jsonl.rotating")
+        tmp.write_text("\n".join(kept) + "\n", encoding="utf-8")
+        os.replace(tmp, PING_FILE)
+        log.info(
+            "PING_FILE rotated: %d -> %d lines (size=%d bytes)",
+            len(lines), len(kept), size,
+        )
+    except OSError as exc:
+        log.warning("PING_FILE rotation failed (non-fatal): %s", exc)
+
+
 def write_beacon(component: str) -> None:
     """ping レコードを JSONL に追記する。
+
+    C-007-2 (Redteam H1 / B4): fcntl.flock + os.fsync で atomic write を保証する。
+    SIGKILL / launchd timeout 中の半端書き込みで JSONDecodeError 連鎖発火する race を遮断。
+    C-007-3: 書き込み前に閾値超過時は rotate して JSONL 永久成長を回避。
 
     Args:
         component: ビーコンを書き込むコンポーネント名。
     """
     PING_DIR.mkdir(parents=True, exist_ok=True)
+    _rotate_ping_file_if_needed()
     now = datetime.now(timezone.utc)
     ts_iso = now.isoformat()
     record = {
@@ -76,8 +117,19 @@ def write_beacon(component: str) -> None:
         "component": component,
         "hash": _make_hash(ts_iso, component),
     }
+    line = json.dumps(record, ensure_ascii=False) + "\n"
     with PING_FILE.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        try:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            f.write(line)
+            f.flush()
+            os.fsync(f.fileno())
+        finally:
+            try:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            except OSError as _unlock_err:
+                # flock unlock 失敗は close で自動解放されるので非致命的
+                log.debug("flock LOCK_UN failed (auto-release on close): %s", _unlock_err)
     log.info("beacon written: component=%s ts=%s", component, ts_iso)
 
 

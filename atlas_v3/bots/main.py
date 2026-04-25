@@ -429,8 +429,10 @@ def _build_broker(mode: str):
             log.warning("[main] get_acc_list 失敗・_StubBroker fallback")
             try:
                 trade_ctx.close()
-            except Exception:
-                pass
+            except Exception as _close_err:
+                # Navigator 追加指摘 silent except 明示化:
+                # 失敗 path での resource cleanup・close 失敗は連鎖的に握り潰さず log 残し
+                log.debug("[main] trade_ctx.close() failed in get_acc_list error path: %s", _close_err)
             return None, None
 
         sim_rows = acc_data[acc_data["trd_env"] == ft.TrdEnv.SIMULATE]
@@ -438,8 +440,10 @@ def _build_broker(mode: str):
             log.warning("[main] SIMULATE account なし・_StubBroker fallback")
             try:
                 trade_ctx.close()
-            except Exception:
-                pass
+            except Exception as _close_err:
+                # Navigator 追加指摘 silent except 明示化:
+                # SIMULATE account 不在の cleanup・close 失敗を debug log で残す
+                log.debug("[main] trade_ctx.close() failed in no-SIMULATE path: %s", _close_err)
             return None, None
 
         paper_acc_id = int(sim_rows.iloc[0]["acc_id"])
@@ -481,8 +485,10 @@ def _main_start_run_loop(disable_names: list[str], mode: str) -> int:
             if ctx is not None:
                 try:
                     ctx.close()
-                except Exception:
-                    pass
+                except Exception as _close_err:
+                    # Navigator 追加指摘 silent except 明示化:
+                    # engine 組み立て失敗時の cleanup・close エラーを debug log で残す
+                    log.debug("[main] ctx.close() failed in engine-build error path: %s", _close_err)
         return 1
     log.info("[main] run_loop 開始 (mode=%s)", mode)
     try:

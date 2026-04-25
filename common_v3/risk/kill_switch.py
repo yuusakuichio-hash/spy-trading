@@ -23,6 +23,7 @@ import datetime
 import fcntl
 import json
 import os
+import secrets
 from pathlib import Path
 from typing import Literal
 
@@ -115,11 +116,15 @@ def _write_flag(path: Path, data: dict) -> None:
     一時ファイル (同じディレクトリ内) を使い os.replace() で置き換えることで
     読み取りと競合しても壊れた中間状態が見えない。
     tmp ファイルは path と同じディレクトリに作成する (os.replace は同一 fs が必要)。
+
+    H-1 fix (C-011-1): tmp 名に pid のみだと同一 pid の並行プロセス（fork 後の
+    子プロセス並走 / containerized pid namespace）で衝突する race。
+    secrets.token_hex(8) を suffix に付けて衝突確率を実質ゼロ化する。
     """
     _ensure_dirs()
     parent = path.parent
     parent.mkdir(parents=True, exist_ok=True)
-    tmp = parent / f".{path.name}.tmp.{os.getpid()}"
+    tmp = parent / f".{path.name}.tmp.{os.getpid()}.{secrets.token_hex(8)}"
     tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, path)
 
@@ -190,6 +195,11 @@ def _deactivate_raw(activator: str = "unknown", reason: str = "") -> bool:
     async_impl 経由の executor スレッドから呼ぶ唯一の合法経路。
     直接呼出禁止 — 公開 API は deactivate() を使うこと。
 
+    H-3 fix (C-011-1): audit 先書き → unlink の順序を厳守する。
+    unlink を先にすると audit 書込前に SIGKILL 等で中断した時に
+    「flag 消滅したが audit 未記録 = 解除操作の trace なし」状態に陥る。
+    audit 先書きなら unlink 失敗時も再 deactivate で idempotent に追従可能。
+
     Returns:
         True  — 正常解除
         False — FLAG_FILE 不在 (early return)
@@ -197,12 +207,17 @@ def _deactivate_raw(activator: str = "unknown", reason: str = "") -> bool:
     if not FLAG_FILE.exists():
         return False
 
-    FLAG_FILE.unlink()
+    # H-3: audit を先に書く（unlink 失敗時も操作 trace を残す）
     _write_audit(
         event="deactivate",
         reason=reason or "manual_deactivate",
         activator=activator,
     )
+    try:
+        FLAG_FILE.unlink()
+    except FileNotFoundError:
+        # M-3 fix (C-011-3): unlink 競合 race で別プロセスが先に消した case を許容
+        pass
     return True
 
 
