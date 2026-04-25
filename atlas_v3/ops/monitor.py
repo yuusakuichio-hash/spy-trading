@@ -198,9 +198,10 @@ class MonitorConfig:
 
     # C-022 Sprint 2 carryover: _probe_recovery 自動 KillSwitch 解除 設計見直し
     # Redteam r7 指摘: probe 成功で global + 全 firm を自動解除 = LTCM/Therac-25 型自動復旧暴走
-    # デフォルト True = 後方互換（従来挙動維持）
-    # False にすると probe 成功しても deactivate を呼ばず・手動 scripts/kill_switch_recover.py 実行必須
-    probe_auto_deactivate: bool = True
+    # 2026-04-25 ゆうさく承認 (B=B-on): デフォルト False = fail-safe 化
+    # 自動解除を停止・KillSwitch 復帰は scripts/kill_switch_recover.py 手動実行必須
+    # 旧デフォルト True は Therac-25 型暴走リスクのため廃止
+    probe_auto_deactivate: bool = False
 
     def __post_init__(self) -> None:
         if self.check_interval_secs <= 0:
