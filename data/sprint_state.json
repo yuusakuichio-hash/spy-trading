@@ -1,5 +1,5 @@
 {
-  "last_updated": "2026-04-25 12:47 JST",
+  "last_updated": "2026-04-25 12:57 JST",
   "current_phase_id": "monday-preopen-prep",
   "current_phase_label": "月曜 (2026-04-27 ET) Paper 開始 pre-open 準備 + Medium gap 全消化済",
   "overall_note": "Phase 2 Engine 移植 9/9 完了 (commit d4929a7・505 tests PASS) / Knight Capital TOP5 fix (10戦術 wiring) / 案 F preemptive relogin 完遂 (b4bc64e Login successful) / 動的パラメータ + TraderProfile 4 preset 実装済 / Medium gap 5/5 全完了: GammaScalp(20PASS) + TracerBullet(25PASS) + MorningDigest(15PASS) + Hypothesis(43新規) + K8sReconcile(29PASS) / 残: 月曜 ET pre-open canary smoke + PDT live wiring",
@@ -189,6 +189,24 @@
       "name": "4 agent 並列残 FAIL fix + redteam + paper baseline 準備",
       "status": "in_progress",
       "artifact": "builder x2 + redteam + analyst dispatched"
+    },
+    {
+      "id": "sentinel-self-poison-fix-20260425",
+      "name": "sentinel 自家中毒ループ停止 + vol_target Inf ガード (redteam 対応)",
+      "status": "completed",
+      "artifact": "commit c083ce13 / dms plist 60s + sentinel restart heartbeat-fresh skip / 25/25+11/11 PASS"
+    },
+    {
+      "id": "r7-bulkhead-fix-20260425",
+      "name": "r7 + bulkhead test FAIL fix (builder #1 並列担当)",
+      "status": "completed",
+      "artifact": "commit edbb22c2 / 76+50 PASS / 3 fix (test mock + bulkhead import)"
+    },
+    {
+      "id": "paper-baseline-spec-20260425",
+      "name": "Paper 30day 判定基準 + P&L baseline spec (analyst 並列担当)",
+      "status": "completed",
+      "artifact": "data/research/paper_30day_judgment_criteria_20260425.md / 仕様 outline"
     },
     {
       "id": "monday-preopen-prep",
