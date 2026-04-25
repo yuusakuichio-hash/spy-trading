@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.soralab.ledger-auditor</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/yuusakuichio/trading/scripts/ledger_audit_run.sh</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/yuusakuichio/trading</string>
+    <key>StartInterval</key>
+    <integer>3600</integer>
+    <key>StandardOutPath</key>
+    <string>/Users/yuusakuichio/trading/data/logs/ledger_auditor.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/yuusakuichio/trading/data/logs/ledger_auditor.err.log</string>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PYTHONPATH</key>
+        <string>/Users/yuusakuichio/trading</string>
+    </dict>
+</dict>
+</plist>
