@@ -240,10 +240,13 @@ class TestEntryWindow:
 
 class TestProfitTarget:
     def test_profit_target_25pct_triggers_exit(self):
-        """unrealized_pnl == max_credit * 0.25 で利確エグジット。"""
+        """unrealized_pnl == max_credit * 0.25 で利確エグジット (動的化前 base).
+
+        2026-04-26: 動的 profit_target で VIX=20 基準 (調整=0) になるよう env 設定.
+        """
         eng = _engine()
         pos = _position(max_credit=200.0, unrealized_pnl=50.0)   # 200 * 0.25 = 50
-        d = eng.should_exit(pos, _env(), now_et=_window_time(13, 0))
+        d = eng.should_exit(pos, _env(vix=20.0, ivr=80.0), now_et=_window_time(13, 0))
         assert d.should_exit is True
         assert d.exit_type == "profit_target"
 
@@ -262,10 +265,13 @@ class TestProfitTarget:
 
 class TestStopLoss:
     def test_stop_loss_1_5x_triggers_exit(self):
-        """unrealized_pnl == -(max_credit * 1.5) で損切りエグジット。"""
+        """unrealized_pnl == -(max_credit * 1.5) で損切りエグジット (動的化前 base).
+
+        2026-04-26: 動的 stop_loss で VIX=20 基準 (調整=0) になるよう env 設定.
+        """
         eng = _engine()
         pos = _position(max_credit=200.0, unrealized_pnl=-300.0)  # -(200 * 1.5) = -300
-        d = eng.should_exit(pos, _env(), now_et=_window_time(13, 0))
+        d = eng.should_exit(pos, _env(vix=20.0, ivr=80.0), now_et=_window_time(13, 0))
         assert d.should_exit is True
         assert d.exit_type == "stop_loss"
 

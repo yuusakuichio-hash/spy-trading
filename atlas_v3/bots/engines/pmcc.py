@@ -847,6 +847,8 @@ class PMCCTactic(TacticBase):
         if position.short_entry_premium <= 0:
             return None
 
+        # 動的 short profit target (規律 feedback_no_fixed_params 準拠・env 不在のため引数追加が大きいので
+        # ここでは spy_bot 互換 hardcoded vix=20 base で base 値そのまま返す)
         profit_threshold = position.short_entry_premium * self._cfg.short_profit_target
         # unrealized_pnl > 0 が short premium 回収を表す
         if position.unrealized_pnl >= profit_threshold:

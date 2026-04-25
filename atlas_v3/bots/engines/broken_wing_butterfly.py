@@ -671,7 +671,12 @@ class BrokenWingButterflyEngine(TacticBase):
                 exit_type="none",
             )
 
-        profit_threshold = position.net_credit * self._cfg.profit_target_pct
+        # 動的 profit_target (規律 feedback_no_fixed_params 準拠)
+        # max_loss_pct (0.0-1.0 % 単位) は get_dynamic_stop_loss の floor=0.80 と
+        # 設計が合わないため動的化対象外 (bwb 仕様: 50% max_loss は固定)
+        from atlas_v3.bots.engines.dynamic_params import get_dynamic_profit_target
+        pt_dyn = get_dynamic_profit_target(env.vix, self._cfg.profit_target_pct)
+        profit_threshold = position.net_credit * pt_dyn
         loss_threshold = -(position.net_credit * self._cfg.max_loss_pct)
 
         # 2. 利確 30%

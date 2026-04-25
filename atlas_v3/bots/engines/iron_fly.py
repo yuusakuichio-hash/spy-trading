@@ -604,8 +604,14 @@ class IronFlyEngine(TacticBase):
             )
             return IronFlyExitDecision(should_exit=False, reason="max_credit_not_set")
 
-        profit_threshold = position.max_credit * self._cfg.profit_target_pct
-        loss_threshold = -(position.max_credit * self._cfg.stop_loss_credit_x)
+        # 動的 profit_target / stop_loss (規律 feedback_no_fixed_params 準拠・VIX 帯で調整)
+        from atlas_v3.bots.engines.dynamic_params import (
+            get_dynamic_profit_target, get_dynamic_stop_loss,
+        )
+        pt_dyn = get_dynamic_profit_target(env.vix, self._cfg.profit_target_pct)
+        sl_dyn = get_dynamic_stop_loss(env.vix, self._cfg.stop_loss_credit_x)
+        profit_threshold = position.max_credit * pt_dyn
+        loss_threshold = -(position.max_credit * sl_dyn)
 
         if position.unrealized_pnl >= profit_threshold:
             log.info(

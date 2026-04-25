@@ -355,10 +355,10 @@ class TestEntryWindowEnd:
 
 class TestProfitTarget30:
     def test_profit_30pct_triggers_exit(self):
-        """unrealized_pnl == net_credit * 0.30 で利確エグジット。"""
+        """unrealized_pnl == net_credit * 0.30 で利確エグジット (動的化前 base)."""
         eng = _engine(profit_target_pct=0.30)
         pos = _position(net_credit=200.0, unrealized_pnl=60.0)  # 200 * 0.30 = 60
-        dec = eng.should_exit(pos, _env(), now_et=_window(12, 0))
+        dec = eng.should_exit(pos, _env(vix=20.0), now_et=_window(12, 0))
         assert dec.should_exit is True
         assert dec.exit_type == "profit_target"
 
@@ -391,7 +391,7 @@ class TestProfitBelowTarget:
 
 class TestMaxLossStop50:
     def test_max_loss_50pct_triggers_exit(self):
-        """unrealized_pnl == -(net_credit * 0.50) で max_loss_stop エグジット。"""
+        """unrealized_pnl == -(net_credit * 0.50) で max_loss_stop エグジット (動的化対象外)."""
         eng = _engine(max_loss_pct=0.50)
         pos = _position(net_credit=200.0, unrealized_pnl=-100.0)  # -(200 * 0.50)
         dec = eng.should_exit(pos, _env(), now_et=_window(12, 0))

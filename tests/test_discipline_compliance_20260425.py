@@ -52,6 +52,24 @@ class TestDynamicParamsCompliance:
             f"(動的パラメータ規律違反・feedback_no_fixed_params.md)"
         )
 
+    # 動的 profit_target を統合した engine (should_exit で env を持つ engine)
+    PROFIT_TARGET_ENGINES = [
+        "iron_fly",
+        "ratio_spread",
+        "diagonal_spread",
+        "broken_wing_butterfly",
+        "jade_lizard",
+    ]
+
+    @pytest.mark.parametrize("engine_name", PROFIT_TARGET_ENGINES)
+    def test_engine_uses_dynamic_profit_target(self, engine_name):
+        """各 engine が get_dynamic_profit_target を利用."""
+        engine_path = Path(f"atlas_v3/bots/engines/{engine_name}.py")
+        text = engine_path.read_text()
+        assert "get_dynamic_profit_target" in text, (
+            f"{engine_name}: get_dynamic_profit_target を利用していない"
+        )
+
 
 # ===========================================================================
 # legacy 参照禁止 (spy_bot.py / chronos_bot.py への直接 import なし)

@@ -601,8 +601,14 @@ class DiagonalSpreadTactic(TacticBase):
                 exit_type="roll_short_expiry",
             )
 
-        profit_threshold = position.net_debit * self._cfg.profit_target_ratio
-        loss_threshold = -position.net_debit * self._cfg.stop_loss_ratio
+        # 動的 profit_target / stop_loss (規律 feedback_no_fixed_params 準拠)
+        from atlas_v3.bots.engines.dynamic_params import (
+            get_dynamic_profit_target, get_dynamic_stop_loss,
+        )
+        pt_dyn = get_dynamic_profit_target(env.vix, self._cfg.profit_target_ratio)
+        sl_dyn = get_dynamic_stop_loss(env.vix, self._cfg.stop_loss_ratio)
+        profit_threshold = position.net_debit * pt_dyn
+        loss_threshold = -position.net_debit * sl_dyn
 
         # 利確: net_debit の 30% 超
         if position.unrealized_pnl >= profit_threshold:
