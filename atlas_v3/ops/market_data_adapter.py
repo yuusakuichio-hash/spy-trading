@@ -34,6 +34,7 @@ from typing import Optional
 
 from atlas_v3.core.env_observer import MarketEnvironment
 from atlas_v3.ops.vix_estimator import estimate_vix_from_spy_atm
+from atlas_v3.ops.realized_volatility import estimate_hv_from_moomoo
 
 log = logging.getLogger(__name__)
 
@@ -48,12 +49,21 @@ _DEFAULT_IVR_SPY = 40.0
 # Cache TTL (60s tick interval を考慮)
 _CACHE_TTL_SEC = 30.0
 
+# bias 推定閾値 (SPY MA20 比 + VIX/VVIX 構造)
+_BIAS_BULL_VIX_MAX = 18.0  # VIX < 18 で bull バイアス候補
+_BIAS_BEAR_VIX_MIN = 25.0  # VIX > 25 で bear バイアス候補
+
 
 class MoomooMarketDataAdapter:
     """moomoo OpenD 経由で MarketEnvironment を構築する adapter.
 
-    Phase 1 (本実装): VIX のみ実値・他 field は default
-    Phase 2 (後段): VRP / bias / ivr_by_symbol を SPY history + option chain で計算
+    実装範囲:
+    - vix: SPY ATM straddle IV 推定 (vix_estimator)
+    - vrp: VIX - HV (HV = SPY 30 日 history std × sqrt(252) × 100)
+    - bias: VIX 帯から推定 (低 VIX → bull / 高 VIX → bear / 中間 → neutral)
+    - gex: 0.0 (option chain gamma weight 後段実装)
+    - term_ratio: 1.0 (異 DTE IV slope 後段実装)
+    - ivr_by_symbol: 252 日 ATM IV percentile 後段実装 (現状 default)
     """
 
     def __init__(
@@ -65,6 +75,14 @@ class MoomooMarketDataAdapter:
         self._underlying_code = underlying_code
         self._cache_ts = 0.0
         self._cache_env: Optional[MarketEnvironment] = None
+
+    def _estimate_bias(self, vix: float) -> str:
+        """VIX 帯から bias 推定 (β-2 簡易版・後段で term ratio + put-call 比 統合)."""
+        if vix < _BIAS_BULL_VIX_MAX:
+            return "bull"
+        if vix > _BIAS_BEAR_VIX_MIN:
+            return "bear"
+        return "neutral"
 
     def get_environment(self) -> MarketEnvironment:
         """MarketEnvironment を取得する (MarketDataClient Protocol 実装)."""
@@ -82,14 +100,27 @@ class MoomooMarketDataAdapter:
                 return self._cache_env  # 前回値継続 (degraded mode)
             vix = _DEFAULT_VIX
 
-        # 2. VRP / GEX / term_ratio / bias / ivr_by_symbol: 現状 default
-        # (β-2 後段で SPY history HV / option chain gamma weight / IV slope / IV rank 実装)
+        # 2. VRP = VIX - HV (HV = SPY 30 日 history 年率 std%)
+        hv = estimate_hv_from_moomoo(self._quote_ctx, self._underlying_code)
+        if hv is not None:
+            vrp = vix - hv
+            log.info(
+                "[MoomooMarketDataAdapter] VRP=%.2f (VIX=%.2f - HV=%.2f)",
+                vrp, vix, hv,
+            )
+        else:
+            vrp = _DEFAULT_VRP
+
+        # 3. bias: VIX 帯から推定 (簡易版)
+        bias = self._estimate_bias(vix)
+
+        # 4. GEX / term_ratio / ivr_by_symbol: β-2 後段
         env = MarketEnvironment(
             vix=vix,
-            vrp=_DEFAULT_VRP,
+            vrp=vrp,
             gex=_DEFAULT_GEX,
             term_ratio=_DEFAULT_TERM_RATIO,
-            bias=_DEFAULT_BIAS,
+            bias=bias,
             ivr_by_symbol={"SPY": _DEFAULT_IVR_SPY},
         )
 
