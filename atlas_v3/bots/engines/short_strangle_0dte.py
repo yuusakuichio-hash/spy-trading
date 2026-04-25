@@ -553,16 +553,19 @@ class ShortStrangle0DTEEngine(TacticBase):
                 reason=f"エントリー窓外 ({now_et.strftime('%H:%M ET')})",
             )
 
-        # 5. デルタ範囲確認
-        if not (self._cfg.delta_min <= call_delta <= self._cfg.delta_max):
+        # 5. デルタ範囲確認 (動的調整・規律 feedback_no_fixed_params 準拠)
+        from atlas_v3.bots.engines.dynamic_params import get_dynamic_delta_range
+        _base_delta_mid = (self._cfg.delta_min + self._cfg.delta_max) / 2.0
+        _d_min_dyn, _d_max_dyn = get_dynamic_delta_range(env.vix, _base_delta_mid)
+        if not (_d_min_dyn <= call_delta <= _d_max_dyn):
             return StrangleEntryDecision(
                 should_enter=False, symbol=symbol,
-                reason=f"call_delta={call_delta:.3f} が範囲外 [{self._cfg.delta_min},{self._cfg.delta_max}]",
+                reason=f"call_delta={call_delta:.3f} が動的範囲外 [{_d_min_dyn:.3f},{_d_max_dyn:.3f}] (VIX={env.vix:.2f})",
             )
-        if not (self._cfg.delta_min <= put_delta <= self._cfg.delta_max):
+        if not (_d_min_dyn <= put_delta <= _d_max_dyn):
             return StrangleEntryDecision(
                 should_enter=False, symbol=symbol,
-                reason=f"put_delta={put_delta:.3f} が範囲外 [{self._cfg.delta_min},{self._cfg.delta_max}]",
+                reason=f"put_delta={put_delta:.3f} が動的範囲外 [{_d_min_dyn:.3f},{_d_max_dyn:.3f}] (VIX={env.vix:.2f})",
             )
 
         # 6. 担保充足チェック

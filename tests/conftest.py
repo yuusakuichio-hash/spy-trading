@@ -108,6 +108,36 @@ def _reset_risk_engine_escalation_state():
 
 
 @pytest.fixture(autouse=True)
+def _reload_flaky_modules():
+    """test 間で kill_switch / requests / position 等の global state leak を防ぐため、
+    主要 module を毎 test 終了時に強制 reload.
+
+    monkeypatch は module attribute を元に戻すが、`from X import Y as Z` の
+    alias 経由で参照された値は scope cleanup 後も別 module に残る。
+    importlib.reload で物理的に新規読み込みを強制し leak を切断する。
+    """
+    yield
+    import importlib
+    targets = [
+        # straddle_gamma flaky 対策
+        "atlas_v3.bots.engines.straddle_native",
+        # spy_bot legacy 干渉対策 (orb_multi_symbol / redteam_critical / task9)
+        "spy_bot",
+        # heartbeat 干渉対策
+        "sora_heartbeat_monitor",
+        # chronos divergence 干渉対策
+        "chronos_cumulative_delta",
+    ]
+    for mod_name in targets:
+        try:
+            import sys
+            if mod_name in sys.modules:
+                importlib.reload(sys.modules[mod_name])
+        except (ImportError, KeyError, Exception):
+            pass
+
+
+@pytest.fixture(autouse=True)
 def _reset_kill_switch_state():
     """2026-04-25: test 間で KillSwitch FLAG_FILE leak が flaky の根因.
 
