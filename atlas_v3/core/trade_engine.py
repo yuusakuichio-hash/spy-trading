@@ -441,13 +441,22 @@ class TradeEngine:
     def check_margin_and_alert(self) -> bool:
         """証拠金使用率を確認してエントリー可否を返す。
 
+        B-6 fix (2026-04-25 Redteam CRITICAL):
+        旧: 取得失敗 return True (許可) コメントは継続優先趣旨だった
+            → margin 不明のまま発注 = Layer 3 ザル化と同じ状態
+        新: 取得失敗 return False (拒否) → fail-safe・margin 可視性回復まで停止
+
         Returns:
             True:  エントリー可 (使用率 < MARGIN_USAGE_MAX_ENTRY)
-            False: エントリー停止
+            False: エントリー停止 (取得失敗含む = fail-closed)
         """
         ratio = self.get_margin_usage_ratio()
         if ratio is None:
-            return True  # 取得失敗 → 許可（サービス継続優先）
+            log.error(
+                "[TradeEngine/Margin] B-6 fail-closed: margin ratio 取得失敗 → エントリー拒否"
+                " (margin 可視性なしで発注は危険・Layer 3 cap 不能)"
+            )
+            return False
 
         if ratio >= _MARGIN_USAGE_ALERT:
             log.error(
@@ -479,17 +488,30 @@ class TradeEngine:
     # ------------------------------------------------------------------
 
     def get_open_positions(self) -> list:
-        """オープンポジション一覧を返す。"""
+        """オープンポジション一覧を返す。
+
+        B-5 fix (2026-04-25 Redteam CRITICAL):
+        旧: position_list_query 失敗時 return [] → 空リストを「ポジションなし」と誤解釈
+            → margin total=0 と算出 → Layer 3 (margin cap) ザル化
+        新: 失敗時 TradeEngineError raise → 呼出側で fail-closed 判断
+            (margin visibility 無しで発注は安全側に拒否)
+        """
         if DRY_TEST:
             return self._virtual_pos.get_positions()
         if not FUTU_AVAILABLE or not self.trade_ctx:
-            return []
+            raise TradeEngineError(
+                "B-5 fail-closed: refusing get_open_positions without trade_ctx "
+                "(margin visibility unavailable)"
+            )
         ret, data = self.trade_ctx.position_list_query(
             trd_env=self.trade_env,
             acc_id=int(self.account_id or 0),
         )
         if ret != RET_OK:
-            return []
+            raise TradeEngineError(
+                f"B-5 fail-closed: position_list_query failed (ret={ret}, data={data!r}). "
+                "Refusing without margin visibility."
+            )
         return data.to_dict("records") if hasattr(data, "to_dict") else []
 
     def is_alive(self) -> bool:
@@ -792,8 +814,20 @@ class TradeEngine:
         env = self.trade_env
         acc = int(self.account_id or 0)
 
+        # B-4 fix (2026-04-25 Redteam CRITICAL):
+        # 旧: price=0.0 ハードコードで gate に渡す → market price 不明のまま gate 通過
+        # 新: init_price が None or <=0 (市場価格不明) なら gate 呼ばず即 fail-closed
+        # 理由: 成行発注で market price 不明は Deep ITM 検知 (B-1) の根拠が成立しない
+        if init_price is None or init_price <= 0.0:
+            log.error(
+                "[TradeEngine] B-4 fail-closed: init_price=%s (None/<=0) for label=%s code=%s. "
+                "Refusing market leg without market price (Deep ITM detection requires real price).",
+                init_price, label, code,
+            )
+            return None, "failed"
+
         ok, reason = self._run_pre_trade_gate(
-            code=code, qty=qty, price=0.0, side_str=side_str,
+            code=code, qty=qty, price=init_price, side_str=side_str,
             capital_usd=capital_usd, est_margin=est_margin,
             open_margin_total=open_margin_total, is_long=is_long, label=label,
         )

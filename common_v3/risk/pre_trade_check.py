@@ -162,7 +162,11 @@ def _check_layer1_deep_itm(ctx: OrderCtx, config: PreTradeConfig) -> GateResult 
 
     4/17 事故再現阻止:
     - is_long=True かつ option_price >= deep_itm_price_threshold → 即ブロック
-    - option_price=0.0 の場合は価格不明扱いでスキップ (non-blocking fail-open)
+    - is_long=True かつ option_price <= 0.0 → fail-closed (B-1 fix 2026-04-25)
+
+    B-1 fix (2026-04-25 Redteam CRITICAL):
+    旧: option_price <=0.0 で return None (pass) → 価格不明で Deep ITM 裸 LONG 通過
+    新: 裸 LONG で価格不明は fail-closed (Deep ITM 判定不能=安全側で拒否)
 
     Returns:
         GateResult (block) or None (pass)
@@ -170,7 +174,12 @@ def _check_layer1_deep_itm(ctx: OrderCtx, config: PreTradeConfig) -> GateResult 
     if not ctx.is_long:
         return None
     if ctx.option_price <= 0.0:
-        return None
+        reason = (
+            f"[L1] B-1 fail-closed: 裸 LONG 発注で option_price={ctx.option_price} (<=0=価格不明)。"
+            f" Deep ITM 判定不能のため拒否。symbol={ctx.symbol} qty={ctx.qty}"
+        )
+        log.critical("[PreTradeGate] %s", reason)
+        return GateResult(allowed=False, layer="L1", reason=reason, severity="critical")
     if ctx.option_price >= config.deep_itm_price_threshold:
         reason = (
             f"[L1] Deep ITM 裸 LONG 拒否: option_price=${ctx.option_price:.2f} "
@@ -201,7 +210,9 @@ def _check_layer2_whitelist(ctx: OrderCtx, config: PreTradeConfig) -> GateResult
 def _check_layer3_margin(ctx: OrderCtx, config: PreTradeConfig) -> GateResult | None:
     """Layer 3: Margin% Cap。
 
-    capital_usd=0.0 または est_margin=0.0 の場合は証拠金情報不明としてスキップ。
+    B-2 fix (2026-04-25 Redteam CRITICAL):
+    旧: capital/margin <=0.0 で return None (pass) → margin 不明で発注通過 = Layer 3 完全ザル
+    新: capital/margin <=0.0 は fail-closed (margin 可視性なしで発注は危険)
 
     チェック 1: 単一発注 margin / capital >= max_margin_pct_per_trade
     チェック 2: (open_margin_total + est_margin) / capital >= max_margin_pct_total
@@ -210,7 +221,12 @@ def _check_layer3_margin(ctx: OrderCtx, config: PreTradeConfig) -> GateResult | 
         GateResult (block) or None (pass)
     """
     if ctx.capital_usd <= 0.0 or ctx.est_margin <= 0.0:
-        return None
+        reason = (
+            f"[L3] B-2 fail-closed: capital_usd={ctx.capital_usd} est_margin={ctx.est_margin}"
+            f" のいずれかが <=0 (margin 可視性なし)。margin cap 判定不能のため拒否。"
+        )
+        log.error("[PreTradeGate] %s", reason)
+        return GateResult(allowed=False, layer="L3", reason=reason, severity="critical")
 
     single_pct = ctx.est_margin / ctx.capital_usd
     if single_pct > config.max_margin_pct_per_trade:
@@ -337,13 +353,12 @@ def check_order_critical_only(
     ctx: OrderCtx,
     config: PreTradeConfig | None = None,
 ) -> GateResult:
-    """Critical-only Pre-Trade Gate (Kill Switch + L1 Deep ITM + L4 qty sanity)。
+    """Critical-only Pre-Trade Gate (Kill Switch + L1 + L2 + L3 + L4)。
 
-    エンジンの place_order / build_order から直接呼ぶ thin gate。
-    L2 (whitelist) と L3 (margin) は AtlasEngine 経由の full check_order() に委ねる。
-    理由: エンジンは bare symbol ("SPY") を使うことが多く、
-    whitelist は "US.SPY" 形式で定義されているため L2 はエンジンで強制しない。
-    4/17 事故防止に直結する L1 (Deep ITM $50+) と L4 (fat finger qty) は必ず通す。
+    B-3 fix (2026-04-25 Redteam CRITICAL): 旧実装は L2/L3 を「AtlasEngine 経由の
+    full check_order() に委ねる」設計だったが、AtlasEngine が dead code (本番経路で
+    instantiate されない) のため L2/L3 が**実質完全スキップ**されていた。
+    本 fix では check_order_critical_only でも L2/L3 fall-through を必須化。
 
     Args:
         ctx:    発注コンテキスト (OrderCtx)
@@ -373,6 +388,16 @@ def check_order_critical_only(
 
     # Layer 1: Deep ITM 裸 LONG — 4/17 事故直接防止
     result = _check_layer1_deep_itm(ctx, cfg)
+    if result is not None:
+        return result
+
+    # Layer 2: Symbol Whitelist (B-3 fix: critical_only でも必須化)
+    result = _check_layer2_whitelist(ctx, cfg)
+    if result is not None:
+        return result
+
+    # Layer 3: Margin% Cap (B-3 fix: critical_only でも必須化)
+    result = _check_layer3_margin(ctx, cfg)
     if result is not None:
         return result
 
