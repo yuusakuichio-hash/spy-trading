@@ -228,7 +228,7 @@ def test_critical4_forwarder_uses_zoneinfo_et():
 # ── CRITICAL 5: X_API_SECRET 非出力 ──────────────────────────────────────────
 def test_critical5_sensitive_keys_not_printed(capsys):
     """_load_env_file で X_API_SECRET は stderr に出力されない"""
-    import tempfile, os, importlib
+    import tempfile, importlib
 
     env_content = "X_API_SECRET=supersecret\nNORMAL_VAR=hello\n"
     with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:
