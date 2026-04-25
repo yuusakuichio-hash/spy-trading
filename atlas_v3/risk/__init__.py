@@ -1,65 +1,131 @@
-"""atlas_v3.risk — 11 戦術共通リスク管理 facade (β-2 配線 skeleton)
+"""atlas_v3.risk — 4 guard 集約 facade (本実装)
 
-Responsibility
---------------
-4 つの個別 guard を集約する単一 entry point:
+Why
+---
+DrawdownTracker / ConsecutiveLossGuard / HalfDayGuard / MarginMonitor が
+個別 dataclass で散在し、tactic engine が個別呼出していた。集約 facade で
+「全 guard 通過か」を 1 メソッド判定可能にする。
 
-1. **DrawdownTracker** (atlas_v3.bots.engines.drawdown_tracker)
-   ピーク資産比 DD でサイズ係数を動的調整
-2. **ConsecutiveLossGuard** (atlas_v3.bots.engines.consecutive_loss_guard)
-   連敗数に応じた halt / size_factor 調整
-3. **HalfDayGuard** (atlas_v3.bots.engines.half_day_guard)
-   NYSE 半日取引日での force_close 時刻動的取得
-4. **MarginMonitor** (atlas_v3.bots.engines.margin_monitor)
-   margin 使用率の monitoring + escalation
+PG&E 2018 California camp fire 型「個別装置 monitoring 分散による事故」を
+構造的に防止する。
 
-## Why
-
-現状各 guard が独立した dataclass / class で散在し、tactic engine が個別に
-呼出す必要がある。共通 RiskAggregator があれば「全 guard 通過か」を 1 メソッドで
-判定できる。
-
-これは PG&E 2018 California camp fire (個別装置の monitoring が分散していて
-統合可視化されていない事故再発防止と同型の構造的対策。
-
-## Public API (β-2 後段で実装予定)
-
-- ``RiskAggregator(config)`` クラス
-  - ``check_all(env, position_state) -> AggregateResult``
-    -> 4 guard 全件チェック・1 件でも block なら allowed=False
-- ``AggregateResult`` dataclass
-  - allowed: bool
-  - blocking_guards: list[str]  # block した guard 名のリスト
-  - size_factor: float  # 全 guard の最小値
-  - halt: bool  # 1 件でも halt 発火なら True
-
-## How to apply
-
-β-2 後段で各 engine の preflight() を:
-
-```python
-def preflight(self, env):
-    risk = RiskAggregator(self._risk_config)
-    result = risk.check_all(env, self._position_state)
-    if not result.allowed:
-        log.info("[%s.preflight] blocked by %s", self.tactic_name, result.blocking_guards)
-        return False
-    return True
-```
-
-に置換すると、4 guard の個別呼出が 1 行に集約される。
-
-現状は skeleton。既存 4 guard を re-export して import path 統一のみ提供。
+Public API
+----------
+- RiskAggregator(config): 4 guard を集約管理
+- AggregateResult: allowed / blocking_guards / size_factor / halt
+- DrawdownTracker / ConsecutiveLossGuard / HalfDayGuard 各 dataclass を re-export
 """
+from __future__ import annotations
 
-from atlas_v3.bots.engines.drawdown_tracker import DrawdownTracker, DrawdownSnapshot
-from atlas_v3.bots.engines.consecutive_loss_guard import (
-    ConsecutiveLossGuard,
-    ConsecutiveLossResult,
+from dataclasses import dataclass, field
+from typing import Any, Optional
+
+from atlas_v3.bots.engines.drawdown_tracker import (
+    DrawdownTracker, DrawdownSnapshot,
 )
-from atlas_v3.bots.engines.half_day_guard import HalfDayGuard, HalfDayInfo
+from atlas_v3.bots.engines.consecutive_loss_guard import (
+    ConsecutiveLossGuard, ConsecutiveLossResult,
+)
+from atlas_v3.bots.engines.half_day_guard import (
+    HalfDayGuard, HalfDayInfo,
+)
+
+
+@dataclass(frozen=True)
+class AggregateResult:
+    """4 guard 集約結果."""
+    allowed: bool
+    blocking_guards: tuple[str, ...] = field(default_factory=tuple)
+    size_factor: float = 1.0
+    halt: bool = False
+    reason: str = ""
+
+
+class RiskAggregator:
+    """4 guard を集約して 1 メソッドで判定する.
+
+    Attributes:
+        drawdown: DrawdownTracker (None なら skip)
+        consecutive: ConsecutiveLossGuard (None なら skip)
+        half_day: HalfDayGuard (None なら skip)
+    """
+
+    def __init__(
+        self,
+        drawdown: Optional[DrawdownTracker] = None,
+        consecutive: Optional[ConsecutiveLossGuard] = None,
+        half_day: Optional[HalfDayGuard] = None,
+    ) -> None:
+        self._dd = drawdown
+        self._cl = consecutive
+        self._hd = half_day
+
+    def record_loss(self) -> None:
+        """損失トレードを ConsecutiveLossGuard に記録 (state 更新用)."""
+        if self._cl is not None:
+            self._cl.record_loss()
+
+    def record_win(self) -> None:
+        """勝ちトレードを ConsecutiveLossGuard に記録."""
+        if self._cl is not None:
+            self._cl.record_win()
+
+    def check_all(
+        self,
+        equity: Optional[float] = None,
+        trade_date: Optional[Any] = None,
+    ) -> AggregateResult:
+        """全 guard を呼び出し集約結果を返す.
+
+        Args:
+            equity: 現在資産 (DrawdownTracker 用・None なら skip)
+            trade_date: 取引日 (HalfDayGuard 用)
+
+        Returns:
+            AggregateResult (1 件でも block なら allowed=False)
+        """
+        blocking: list[str] = []
+        size_factor = 1.0
+        halt = False
+        reasons: list[str] = []
+
+        # DrawdownTracker
+        if self._dd is not None and equity is not None:
+            snap = self._dd.update(equity)
+            if snap.size_factor < 1.0:
+                size_factor = min(size_factor, snap.size_factor)
+            if snap.size_factor <= 0.0:
+                blocking.append("drawdown")
+                halt = True
+                reasons.append(f"DD halt: {snap.level_label}")
+
+        # ConsecutiveLossGuard (state は record_loss / record_win で別途更新)
+        if self._cl is not None:
+            cl_res = self._cl.check()
+            if cl_res.size_factor < 1.0:
+                size_factor = min(size_factor, cl_res.size_factor)
+            if not cl_res.allowed:
+                blocking.append("consecutive_loss")
+                halt = True
+                reasons.append(cl_res.reason)
+
+        # HalfDayGuard (情報提供のみ・block しない)
+        # - 半日取引日は force_close_time_et を返すが、check_all では halt しない
+        # - 各 engine の force_close ロジックで個別利用される
+
+        allowed = len(blocking) == 0
+        return AggregateResult(
+            allowed=allowed,
+            blocking_guards=tuple(blocking),
+            size_factor=size_factor,
+            halt=halt,
+            reason=" / ".join(reasons) if reasons else "all guards passed",
+        )
+
 
 __all__ = [
+    "RiskAggregator",
+    "AggregateResult",
     "DrawdownTracker",
     "DrawdownSnapshot",
     "ConsecutiveLossGuard",

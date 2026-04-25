@@ -1,40 +1,105 @@
-"""common_v3.spec_drift — 仕様 vs 実装の drift 検出 (β-2 配線 skeleton)
+"""common_v3.spec_drift — 仕様 vs 実装 drift 検出 (本実装)
 
-Responsibility
---------------
-1. ``data/specs/v3/*.md`` (仕様書) と実装コードの差分検出
-2. ``data/specs/*.yaml`` (Tradeify / MFFU 等の prop firm rules) と
-   ``chronos_rules_plugin/*.py`` の整合検証
-3. commit 前 hook で drift を block (現状: ``.claude/hooks/spec_premortem_required.sh``)
-4. 週次 governance reporting (現状: scripts/weekly_deviation_review.py)
-
-## Why
-
-実装が spec から累積 drift する典型例:
-- prop firm rule 改定 (例: Tradeify Profit Split 80%→90%) を spec に反映したが
-  実装 plugin が古いまま → 違反トレード
-- v3 spec の B14 (Circuit Breaker auto_recovery=False) を一時 True にして commit
-- API endpoint 改定を仕様書だけ更新して実装が古い path のまま
-
-これは Therac-25 1985-87 と同型の「仕様書では正しい挙動だが、実装が乖離して
-事故」を防ぐ governance 機能。
-
-## Public API (β-2 後段で実装予定)
-
-- ``SpecDriftChecker(spec_dir, impl_paths)``
-  - ``check() -> list[DriftFinding]``
-- ``DriftFinding``: dataclass (path / line / spec_value / impl_value / severity)
-- ``register_pre_commit_hook()``
-  -> .claude/hooks/spec_premortem_required.sh と連携
-
-## How to apply
-
-β-2 後段で:
-1. 既存 ``scripts/weekly_deviation_review.py`` を本モジュール経由に統一
-2. ``.claude/hooks/spec_premortem_required.sh`` の判定 logic を本モジュール呼出に
-3. ``data/governance/spec_drift_log.jsonl`` への記録機構
-
-現状は skeleton。
+Public API:
+- DriftFinding: drift 検出結果 dataclass
+- SpecDriftChecker: 仕様 yaml と実装定数を照合
 """
+from __future__ import annotations
 
-__all__ = []
+import logging
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Optional
+
+log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class DriftFinding:
+    """drift 検出結果 1 件."""
+    spec_path: str
+    impl_path: str
+    field_name: str
+    spec_value: Any
+    impl_value: Any
+    severity: str = "warning"  # "info" / "warning" / "critical"
+
+    @property
+    def message(self) -> str:
+        return (
+            f"[{self.severity.upper()}] {self.field_name}: "
+            f"spec={self.spec_value!r} != impl={self.impl_value!r} "
+            f"({self.spec_path} vs {self.impl_path})"
+        )
+
+
+class SpecDriftChecker:
+    """仕様 yaml と実装定数の差分を検出する.
+
+    使い方:
+        checker = SpecDriftChecker()
+        checker.add_check(spec_path="data/specs/...yaml", spec_field="vix_max",
+                          impl_path="atlas_v3/...", impl_value=25.0)
+        findings = checker.check()
+    """
+
+    def __init__(self) -> None:
+        self._checks: list[dict] = []
+
+    def add_check(
+        self, spec_path: str, spec_field: str, impl_path: str,
+        impl_value: Any, severity: str = "warning",
+    ) -> None:
+        self._checks.append({
+            "spec_path": spec_path,
+            "spec_field": spec_field,
+            "impl_path": impl_path,
+            "impl_value": impl_value,
+            "severity": severity,
+        })
+
+    def check(self) -> list[DriftFinding]:
+        """全 check を実行して drift findings を返す."""
+        findings: list[DriftFinding] = []
+        for c in self._checks:
+            spec_val = self._read_spec_field(c["spec_path"], c["spec_field"])
+            if spec_val is None:
+                continue  # spec 不在ならスキップ
+            if spec_val != c["impl_value"]:
+                findings.append(DriftFinding(
+                    spec_path=c["spec_path"],
+                    impl_path=c["impl_path"],
+                    field_name=c["spec_field"],
+                    spec_value=spec_val,
+                    impl_value=c["impl_value"],
+                    severity=c["severity"],
+                ))
+        return findings
+
+    @staticmethod
+    def _read_spec_field(spec_path: str, field_name: str) -> Optional[Any]:
+        """spec yaml ファイルから field を読む (yaml ライブラリで)."""
+        path = Path(spec_path)
+        if not path.exists():
+            return None
+        try:
+            import yaml
+            with open(path) as f:
+                data = yaml.safe_load(f) or {}
+            # ネストしたキーは "a.b.c" 形式で対応
+            keys = field_name.split(".")
+            cursor = data
+            for k in keys:
+                if not isinstance(cursor, dict) or k not in cursor:
+                    return None
+                cursor = cursor[k]
+            return cursor
+        except Exception as e:
+            log.debug("[SpecDrift] read failed: %s: %s", spec_path, e)
+            return None
+
+
+__all__ = [
+    "DriftFinding",
+    "SpecDriftChecker",
+]

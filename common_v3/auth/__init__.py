@@ -1,58 +1,103 @@
-"""common_v3.auth — 認証情報集約管理 (β-2 配線 skeleton)
+"""common_v3.auth — 認証情報集約管理 (本実装)
 
-Responsibility
---------------
-現状散在している API key / 認証情報を 1 箇所に集約:
+Public API:
+- get_credential(name, default=None): 統一窓口で API key 取得
+- Credentials: 全 API key を保持する frozen dataclass
+- get_credentials(): singleton accessor
 
-- moomoo_app_id / moomoo_app_secret (現状 .env / credentials.md)
-- yfinance: 不要 (anonymous)
-- Tradovate: APP_ID / SECRET / 2FA TOTP (現状 credentials.md)
-- Pushover: PUSHOVER_TOKEN / USER_KEY (現状 .env)
-- Anthropic / OpenAI / Gemini API key (現状 .env)
-- moomoo OpenD config (host / port)
-
-## Why
-
-現状の問題:
-1. credentials.md と .env の両方に key が存在し更新時の同期忘れ
-2. 各 module が `os.environ.get(...)` を直接呼ぶため漏洩確認が困難
-3. paper / live で異なる token を切替える機構が個別実装
-4. auth_budget (common/auth_budget.py) との連携が暗黙
-
-これは 2017 Equifax incident (秘匿情報の管理分散による漏洩) と同型の
-「秘密が散らばっていて全容把握不能」事故を防ぐ構造的対策。
-
-## Public API (β-2 後段で実装予定)
-
-- ``Credentials`` dataclass (frozen)
-  - 全 API key を properties として提供
-  - 起動時に 1 回だけ load・以降 immutable
-- ``get_credentials() -> Credentials`` (singleton)
-- ``rotate_token(name) -> None``  # token rotation 起動
-- ``audit_log_access(name, caller) -> None``  # 誰がいつ何を読んだか記録
-
-## How to apply
-
-β-2 後段で:
-1. ``os.environ.get("MOOMOO_APP_ID")`` 直接呼出を全面廃止
-2. ``get_credentials().moomoo_app_id`` 経由に置換
-3. credentials.md と .env の二重管理を .env 単一源化
-4. paper/live token は ``Credentials.for_mode(mode)`` で切替
-
-現状は skeleton。auth_budget との連携部分のみ re-export 提供。
+統一管理対象:
+- moomoo_app_id / moomoo_app_secret
+- pushover_token / pushover_user_key / pushover_alert_token / pushover_ops_token / pushover_report_token
+- finnhub_api_key
+- gemini_api_key / openai_api_key / anthropic_api_key
+- x_api_key / x_api_secret / x_access_token / x_access_token_secret
 """
+from __future__ import annotations
 
-# Lazy import で循環 import 回避
-__all__ = []
+import os
+from dataclasses import dataclass, field
+from typing import Optional
 
 
-def __getattr__(name):
-    if name == "AuthBudget":
-        try:
-            from common.auth_budget import AuthBudget
-            return AuthBudget
-        except ImportError:
-            raise AttributeError(
-                f"AuthBudget は common/auth_budget.py が必要 (β-2 後段で common_v3 移植)"
-            )
-    raise AttributeError(f"module 'common_v3.auth' has no attribute {name!r}")
+@dataclass(frozen=True)
+class Credentials:
+    """全 API key を保持する frozen dataclass (起動時 1 回 load).
+
+    全 field は str (環境変数経由・未設定は空文字)。
+    """
+    # moomoo
+    moomoo_app_id: str = ""
+    moomoo_app_secret: str = ""
+
+    # Pushover
+    pushover_token: str = ""
+    pushover_user_key: str = ""
+    pushover_alert_token: str = ""
+    pushover_ops_token: str = ""
+    pushover_report_token: str = ""
+
+    # Market data
+    finnhub_api_key: str = ""
+
+    # LLM
+    gemini_api_key: str = ""
+    openai_api_key: str = ""
+    anthropic_api_key: str = ""
+
+    # X (Twitter)
+    x_api_key: str = ""
+    x_api_secret: str = ""
+    x_access_token: str = ""
+    x_access_token_secret: str = ""
+
+
+_cached: Optional[Credentials] = None
+
+
+def _load_from_env() -> Credentials:
+    """環境変数から Credentials を構築."""
+    return Credentials(
+        moomoo_app_id=os.environ.get("MOOMOO_APP_ID", ""),
+        moomoo_app_secret=os.environ.get("MOOMOO_APP_SECRET", ""),
+        pushover_token=os.environ.get("PUSHOVER_TOKEN", ""),
+        pushover_user_key=os.environ.get("PUSHOVER_USER_KEY", ""),
+        pushover_alert_token=os.environ.get("PUSHOVER_ALERT_TOKEN", ""),
+        pushover_ops_token=os.environ.get("PUSHOVER_OPS_TOKEN", ""),
+        pushover_report_token=os.environ.get("PUSHOVER_REPORT_TOKEN", ""),
+        finnhub_api_key=os.environ.get("FINNHUB_API_KEY", ""),
+        gemini_api_key=os.environ.get("GEMINI_API_KEY", ""),
+        openai_api_key=os.environ.get("OPENAI_API_KEY", ""),
+        anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
+        x_api_key=os.environ.get("X_API_KEY", ""),
+        x_api_secret=os.environ.get("X_API_SECRET", ""),
+        x_access_token=os.environ.get("X_ACCESS_TOKEN", ""),
+        x_access_token_secret=os.environ.get("X_ACCESS_TOKEN_SECRET", ""),
+    )
+
+
+def get_credentials() -> Credentials:
+    """singleton accessor (テストでは reset_credentials_cache() でリセット可)."""
+    global _cached
+    if _cached is None:
+        _cached = _load_from_env()
+    return _cached
+
+
+def reset_credentials_cache() -> None:
+    """テスト用: cache をリセットして次回 get_credentials() で再 load させる."""
+    global _cached
+    _cached = None
+
+
+def get_credential(name: str, default: str = "") -> str:
+    """名前で credential を取得 (例: "moomoo_app_id")."""
+    creds = get_credentials()
+    return getattr(creds, name, default)
+
+
+__all__ = [
+    "Credentials",
+    "get_credentials",
+    "reset_credentials_cache",
+    "get_credential",
+]
