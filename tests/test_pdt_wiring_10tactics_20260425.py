@@ -127,6 +127,9 @@ class TestBrokenWingButterflyPDTWiring:
         engine, decision = self._engine_and_decision(paper_mode=True)
         tracker = _make_tracker(3, tmp_path)
         with patch(
+            "common_v3.risk.pre_trade_check.check_order_critical_only",
+            lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+        ), patch(
             "atlas_v3.bots.engines.broken_wing_butterfly.PDTGuard",
             lambda **kw: PDTGuard(tracker=tracker, **kw),
         ):
@@ -139,6 +142,9 @@ class TestBrokenWingButterflyPDTWiring:
         engine, decision = self._engine_and_decision(paper_mode=False)
         tracker = _make_tracker(3, tmp_path)
         with patch(
+            "common_v3.risk.pre_trade_check.check_order_critical_only",
+            lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+        ), patch(
             "atlas_v3.bots.engines.broken_wing_butterfly.PDTGuard",
             lambda **kw: PDTGuard(tracker=tracker, **kw),
         ):
@@ -150,6 +156,9 @@ class TestBrokenWingButterflyPDTWiring:
         engine, decision = self._engine_and_decision(paper_mode=False)
         tracker = _make_tracker(3, tmp_path)
         with patch(
+            "common_v3.risk.pre_trade_check.check_order_critical_only",
+            lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+        ), patch(
             "atlas_v3.bots.engines.broken_wing_butterfly.PDTGuard",
             lambda **kw: PDTGuard(tracker=tracker, **kw),
         ):
@@ -190,6 +199,9 @@ class TestIronFlyPDTWiring:
         engine, decision = self._engine_and_decision()
         tracker = _make_tracker(3, tmp_path)
         with patch(
+            "common_v3.risk.pre_trade_check.check_order_critical_only",
+            lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+        ), patch(
             "atlas_v3.bots.engines.iron_fly.PDTGuard",
             lambda **kw: PDTGuard(tracker=tracker, **kw),
         ):
@@ -201,6 +213,9 @@ class TestIronFlyPDTWiring:
         engine, decision = self._engine_and_decision()
         tracker = _make_tracker(3, tmp_path)
         with patch(
+            "common_v3.risk.pre_trade_check.check_order_critical_only",
+            lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+        ), patch(
             "atlas_v3.bots.engines.iron_fly.PDTGuard",
             lambda **kw: PDTGuard(tracker=tracker, **kw),
         ):
@@ -212,6 +227,9 @@ class TestIronFlyPDTWiring:
         engine, decision = self._engine_and_decision()
         tracker = _make_tracker(3, tmp_path)
         with patch(
+            "common_v3.risk.pre_trade_check.check_order_critical_only",
+            lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+        ), patch(
             "atlas_v3.bots.engines.iron_fly.PDTGuard",
             lambda **kw: PDTGuard(tracker=tracker, **kw),
         ):
@@ -254,6 +272,9 @@ class TestRatioSpreadPDTWiring:
         engine, decision = self._engine_and_decision(paper_mode=True)
         tracker = _make_tracker(3, tmp_path)
         with patch(
+            "common_v3.risk.pre_trade_check.check_order_critical_only",
+            lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+        ), patch(
             "atlas_v3.bots.engines.ratio_spread.PDTGuard",
             lambda **kw: PDTGuard(tracker=tracker, **kw),
         ):
@@ -265,6 +286,9 @@ class TestRatioSpreadPDTWiring:
         engine, decision = self._engine_and_decision(paper_mode=False)
         tracker = _make_tracker(3, tmp_path)
         with patch(
+            "common_v3.risk.pre_trade_check.check_order_critical_only",
+            lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+        ), patch(
             "atlas_v3.bots.engines.ratio_spread.PDTGuard",
             lambda **kw: PDTGuard(tracker=tracker, **kw),
         ):
@@ -276,6 +300,9 @@ class TestRatioSpreadPDTWiring:
         engine, decision = self._engine_and_decision(paper_mode=False)
         tracker = _make_tracker(3, tmp_path)
         with patch(
+            "common_v3.risk.pre_trade_check.check_order_critical_only",
+            lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+        ), patch(
             "atlas_v3.bots.engines.ratio_spread.PDTGuard",
             lambda **kw: PDTGuard(tracker=tracker, **kw),
         ):
@@ -319,6 +346,9 @@ class TestShortStrangle0DTEPDTWiring:
         engine, decision = self._engine_and_decision()
         tracker = _make_tracker(3, tmp_path)
         with patch(
+            "common_v3.risk.pre_trade_check.check_order_critical_only",
+            lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+        ), patch(
             "atlas_v3.bots.engines.short_strangle_0dte.PDTGuard",
             lambda **kw: PDTGuard(tracker=tracker, **kw),
         ):
@@ -330,6 +360,9 @@ class TestShortStrangle0DTEPDTWiring:
         engine, decision = self._engine_and_decision()
         tracker = _make_tracker(3, tmp_path)
         with patch(
+            "common_v3.risk.pre_trade_check.check_order_critical_only",
+            lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+        ), patch(
             "atlas_v3.bots.engines.short_strangle_0dte.PDTGuard",
             lambda **kw: PDTGuard(tracker=tracker, **kw),
         ):
@@ -341,6 +374,9 @@ class TestShortStrangle0DTEPDTWiring:
         engine, decision = self._engine_and_decision()
         tracker = _make_tracker(3, tmp_path)
         with patch(
+            "common_v3.risk.pre_trade_check.check_order_critical_only",
+            lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+        ), patch(
             "atlas_v3.bots.engines.short_strangle_0dte.PDTGuard",
             lambda **kw: PDTGuard(tracker=tracker, **kw),
         ):
@@ -376,6 +412,9 @@ class TestEarningsStraddleBuyPDTWiring:
         engine, decision = self._engine_and_decision()
         tracker = _make_tracker(3, tmp_path)
         with patch(
+            "common_v3.risk.pre_trade_check.check_order_critical_only",
+            lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+        ), patch(
             "atlas_v3.bots.engines.earnings_straddle_buy.PDTGuard",
             lambda **kw: PDTGuard(tracker=tracker, **kw),
         ):
@@ -387,6 +426,9 @@ class TestEarningsStraddleBuyPDTWiring:
         engine, decision = self._engine_and_decision()
         tracker = _make_tracker(3, tmp_path)
         with patch(
+            "common_v3.risk.pre_trade_check.check_order_critical_only",
+            lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+        ), patch(
             "atlas_v3.bots.engines.earnings_straddle_buy.PDTGuard",
             lambda **kw: PDTGuard(tracker=tracker, **kw),
         ):
@@ -398,6 +440,9 @@ class TestEarningsStraddleBuyPDTWiring:
         engine, decision = self._engine_and_decision()
         tracker = _make_tracker(3, tmp_path)
         with patch(
+            "common_v3.risk.pre_trade_check.check_order_critical_only",
+            lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+        ), patch(
             "atlas_v3.bots.engines.earnings_straddle_buy.PDTGuard",
             lambda **kw: PDTGuard(tracker=tracker, **kw),
         ):
@@ -439,6 +484,9 @@ class TestPMCCPDTWiring:
         engine, decision = self._engine_and_decision(paper_mode=True)
         tracker = _make_tracker(3, tmp_path)
         with patch(
+            "common_v3.risk.pre_trade_check.check_order_critical_only",
+            lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+        ), patch(
             "atlas_v3.bots.engines.pmcc.PDTGuard",
             lambda **kw: PDTGuard(tracker=tracker, **kw),
         ):
@@ -450,6 +498,9 @@ class TestPMCCPDTWiring:
         engine, decision = self._engine_and_decision(paper_mode=False)
         tracker = _make_tracker(3, tmp_path)
         with patch(
+            "common_v3.risk.pre_trade_check.check_order_critical_only",
+            lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+        ), patch(
             "atlas_v3.bots.engines.pmcc.PDTGuard",
             lambda **kw: PDTGuard(tracker=tracker, **kw),
         ):
@@ -461,6 +512,9 @@ class TestPMCCPDTWiring:
         engine, decision = self._engine_and_decision(paper_mode=False)
         tracker = _make_tracker(3, tmp_path)
         with patch(
+            "common_v3.risk.pre_trade_check.check_order_critical_only",
+            lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+        ), patch(
             "atlas_v3.bots.engines.pmcc.PDTGuard",
             lambda **kw: PDTGuard(tracker=tracker, **kw),
         ):
@@ -502,6 +556,9 @@ class TestJadeLizardPDTWiring:
         engine, decision = self._engine_and_decision(paper_mode=True)
         tracker = _make_tracker(3, tmp_path)
         with patch(
+            "common_v3.risk.pre_trade_check.check_order_critical_only",
+            lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+        ), patch(
             "atlas_v3.bots.engines.jade_lizard.PDTGuard",
             lambda **kw: PDTGuard(tracker=tracker, **kw),
         ):
@@ -513,6 +570,9 @@ class TestJadeLizardPDTWiring:
         engine, decision = self._engine_and_decision(paper_mode=False)
         tracker = _make_tracker(3, tmp_path)
         with patch(
+            "common_v3.risk.pre_trade_check.check_order_critical_only",
+            lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+        ), patch(
             "atlas_v3.bots.engines.jade_lizard.PDTGuard",
             lambda **kw: PDTGuard(tracker=tracker, **kw),
         ):
@@ -524,6 +584,9 @@ class TestJadeLizardPDTWiring:
         engine, decision = self._engine_and_decision(paper_mode=False)
         tracker = _make_tracker(3, tmp_path)
         with patch(
+            "common_v3.risk.pre_trade_check.check_order_critical_only",
+            lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+        ), patch(
             "atlas_v3.bots.engines.jade_lizard.PDTGuard",
             lambda **kw: PDTGuard(tracker=tracker, **kw),
         ):
@@ -569,6 +632,9 @@ class TestWeeklyGammaScalpPDTWiring:
         engine, entry = self._engine_and_entry(paper_mode=True)
         tracker = _make_tracker(3, tmp_path)
         with patch(
+            "common_v3.risk.pre_trade_check.check_order_critical_only",
+            lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+        ), patch(
             "atlas_v3.bots.engines.weekly_gamma_scalp.PDTGuard",
             lambda **kw: PDTGuard(tracker=tracker, **kw),
         ):
@@ -580,6 +646,9 @@ class TestWeeklyGammaScalpPDTWiring:
         engine, entry = self._engine_and_entry(paper_mode=False)
         tracker = _make_tracker(3, tmp_path)
         with patch(
+            "common_v3.risk.pre_trade_check.check_order_critical_only",
+            lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+        ), patch(
             "atlas_v3.bots.engines.weekly_gamma_scalp.PDTGuard",
             lambda **kw: PDTGuard(tracker=tracker, **kw),
         ):
@@ -591,6 +660,9 @@ class TestWeeklyGammaScalpPDTWiring:
         engine, entry = self._engine_and_entry(paper_mode=False)
         tracker = _make_tracker(3, tmp_path)
         with patch(
+            "common_v3.risk.pre_trade_check.check_order_critical_only",
+            lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+        ), patch(
             "atlas_v3.bots.engines.weekly_gamma_scalp.PDTGuard",
             lambda **kw: PDTGuard(tracker=tracker, **kw),
         ):
@@ -624,6 +696,9 @@ class TestDiagonalSpreadPDTWiring:
         engine, decision = self._engine_and_decision()
         tracker = _make_tracker(3, tmp_path)
         with patch(
+            "common_v3.risk.pre_trade_check.check_order_critical_only",
+            lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+        ), patch(
             "atlas_v3.bots.engines.diagonal_spread.PDTGuard",
             lambda **kw: PDTGuard(tracker=tracker, **kw),
         ):
@@ -635,6 +710,9 @@ class TestDiagonalSpreadPDTWiring:
         engine, decision = self._engine_and_decision()
         tracker = _make_tracker(3, tmp_path)
         with patch(
+            "common_v3.risk.pre_trade_check.check_order_critical_only",
+            lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+        ), patch(
             "atlas_v3.bots.engines.diagonal_spread.PDTGuard",
             lambda **kw: PDTGuard(tracker=tracker, **kw),
         ):
@@ -646,6 +724,9 @@ class TestDiagonalSpreadPDTWiring:
         engine, decision = self._engine_and_decision()
         tracker = _make_tracker(3, tmp_path)
         with patch(
+            "common_v3.risk.pre_trade_check.check_order_critical_only",
+            lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+        ), patch(
             "atlas_v3.bots.engines.diagonal_spread.PDTGuard",
             lambda **kw: PDTGuard(tracker=tracker, **kw),
         ):
@@ -681,6 +762,9 @@ class TestVixTailHedgePDTWiring:
         engine, decision = self._engine_and_decision()
         tracker = _make_tracker(3, tmp_path)
         with patch(
+            "common_v3.risk.pre_trade_check.check_order_critical_only",
+            lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+        ), patch(
             "atlas_v3.bots.engines.vix_tail_hedge.PDTGuard",
             lambda **kw: PDTGuard(tracker=tracker, **kw),
         ):
@@ -692,6 +776,9 @@ class TestVixTailHedgePDTWiring:
         engine, decision = self._engine_and_decision()
         tracker = _make_tracker(3, tmp_path)
         with patch(
+            "common_v3.risk.pre_trade_check.check_order_critical_only",
+            lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+        ), patch(
             "atlas_v3.bots.engines.vix_tail_hedge.PDTGuard",
             lambda **kw: PDTGuard(tracker=tracker, **kw),
         ):
@@ -703,6 +790,9 @@ class TestVixTailHedgePDTWiring:
         engine, decision = self._engine_and_decision()
         tracker = _make_tracker(3, tmp_path)
         with patch(
+            "common_v3.risk.pre_trade_check.check_order_critical_only",
+            lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+        ), patch(
             "atlas_v3.bots.engines.vix_tail_hedge.PDTGuard",
             lambda **kw: PDTGuard(tracker=tracker, **kw),
         ):
@@ -747,6 +837,9 @@ class TestPDTBlockedErrorCommon:
         )
         tracker = _make_tracker(3, tmp_path)
         with patch(
+            "common_v3.risk.pre_trade_check.check_order_critical_only",
+            lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+        ), patch(
             "atlas_v3.bots.engines.broken_wing_butterfly.PDTGuard",
             lambda **kw: PDTGuard(tracker=tracker, **kw),
         ):
@@ -778,6 +871,9 @@ class TestPDTBlockedErrorCommon:
         # rolling=2 → remaining=1 → allowed=True
         tracker = _make_tracker(2, tmp_path)
         with patch(
+            "common_v3.risk.pre_trade_check.check_order_critical_only",
+            lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+        ), patch(
             "atlas_v3.bots.engines.broken_wing_butterfly.PDTGuard",
             lambda **kw: PDTGuard(tracker=tracker, **kw),
         ):
@@ -816,6 +912,9 @@ class TestPDTBlockedErrorCommon:
                 return self._guard.check_can_trade(symbol, trade_date)
 
         with patch(
+            "common_v3.risk.pre_trade_check.check_order_critical_only",
+            lambda *a, **k: type("_GR", (), {"allowed": True, "reason": ""})(),
+        ), patch(
             "atlas_v3.bots.engines.broken_wing_butterfly.PDTGuard",
             CapturingGuardFactory,
         ):
