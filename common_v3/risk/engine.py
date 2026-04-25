@@ -744,9 +744,12 @@ class RiskEngine:
             # Thread が終了済み or None — 新しい Thread を起動する
 
         # キューからメッセージを取り出して Thread に渡す
+        # C-020 Sprint 2 carryover (Navigator 追加指摘): silent except 明示化
+        # 意図: queue 空は escalation 処理対象なしを意味し正常系の no-op。
         try:
             msg = _ESCALATION_QUEUE.get_nowait()
         except queue.Empty:
+            log.debug("[RiskEngine] escalation queue empty, skip")
             return
 
         # send を calling thread（= with patch(...) コンテキスト内）でキャプチャする。
@@ -874,6 +877,10 @@ class RiskEngine:
             active = _ks_is_active()
             return {"healthy": True, "error": "", "is_active": active}
         except Exception as exc:
+            # C-020 Sprint 2 carryover (Navigator 追加指摘): silent return 廃止
+            # 意図: 戻り値 dict にエラー情報は載せるが、health 監視層で気付かれない
+            # ことを防ぐためランタイム log も残す（observability 強化）。
+            log.warning("[RiskEngine] kill_switch health check failed: %s", exc)
             return {"healthy": False, "error": str(exc), "is_active": None}
 
     def _historical_var_99(self, returns: Sequence[float]) -> float:

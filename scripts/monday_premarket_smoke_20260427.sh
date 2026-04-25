@@ -54,7 +54,7 @@ PYTHON="${PYTHON:-/usr/bin/python3}"
 export PYTHONPATH="${ROOT}:${PYTHONPATH:-}"
 export PUSHOVER_DRY_RUN=1            # cycle 中は SILENT (halt 時のみ解除)
 
-# 移行フラグ (canary と同じ値を引き継ぐ)
+# 移行フラグ (canary と同じ値を引き継ぐ・契約上 default=0 維持)
 ATLAS_TRADER_ACTIVE="${ATLAS_TRADER_ACTIVE:-0}"
 
 mkdir -p "${LOGDIR}"

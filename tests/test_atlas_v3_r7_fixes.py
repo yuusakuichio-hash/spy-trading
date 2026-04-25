@@ -1232,19 +1232,52 @@ class TestCR7_3_DeactivateRawUnderFlag:
             "C-R7-3: probe_auto_deactivate=True なのに _deactivate_raw が呼ばれなかった。"
         )
 
-    def test_deactivate_raw_after_flag_check_in_source(self):
-        """C-R7-3 構造検証: _probe_recovery のソースで probe_auto_deactivate チェックが
-        _deactivate_raw 呼出しより先に現れる。"""
-        import inspect
-        from atlas_v3.ops.monitor import MonitorDaemon
-        source = inspect.getsource(MonitorDaemon._probe_recovery)
-        idx_flag = source.find("probe_auto_deactivate")
-        idx_raw = source.find("_deactivate_raw")
-        assert idx_flag != -1, "C-R7-3: _probe_recovery に probe_auto_deactivate が存在しない。"
-        assert idx_raw != -1, "C-R7-3: _probe_recovery に _deactivate_raw が存在しない。"
-        assert idx_flag < idx_raw, (
-            "C-R7-3: _deactivate_raw が probe_auto_deactivate チェックより前に配置されている。"
-            "probe_auto_deactivate=False でも global deactivate が実行されてしまう（fail-open）。"
+    def test_deactivate_raw_gated_by_flag_runtime(self, tmp_path, monkeypatch):
+        """C-R7-3 (C-019 実動作化): _deactivate_raw は probe_auto_deactivate フラグの内側でのみ呼ばれる。
+
+        旧版は inspect.getsource で文字列順序を検査していたが、
+        AST inspection 禁止規律に従い実呼出し挙動で検証する。
+
+        Builder r7 の fail-open バグは「_deactivate_raw を flag check より先に呼ぶ」だった。
+        本 test は spy で「flag=False かつ probe success の組合せ」で _deactivate_raw が
+        絶対に呼ばれないことを保証する（call ordering の最終防御）。
+        """
+        from common_v3.risk import kill_switch as ks_module
+        from atlas_v3.ops.monitor import MonitorConfig, MonitorDaemon
+
+        monkeypatch.setattr(ks_module, "_STATE_DIR", tmp_path)
+        monkeypatch.setattr(ks_module, "FLAG_FILE", tmp_path / "kill_switch.flag")
+        monkeypatch.setattr(ks_module, "AUDIT_FILE", tmp_path / "kill_switch_audit.jsonl")
+        (tmp_path / "kill_switch.flag").write_text('{"reason":"test","activated_at":"2026-04-25"}')
+
+        deactivate_calls: list[dict] = []
+
+        def fake_deactivate_raw(**kwargs):
+            deactivate_calls.append(kwargs)
+
+        monkeypatch.setattr(
+            "common_v3.risk.kill_switch._deactivate_raw",
+            fake_deactivate_raw,
+            raising=False,
+        )
+
+        real_provider = lambda: {"pnl_day_usd": -10.0, "drawdown_pct": 0.05, "latency_ms": 50.0}
+        # フラグ False でも probe 成功するシナリオ（旧 fail-open バグの再現条件）
+        config_off = MonitorConfig(
+            daily_loss_usd=-400.0,
+            pushover_enabled=False,
+            kill_switch_on_emergency=False,
+            kill_switch_on_drawdown_breach=False,
+            metric_provider=real_provider,
+            probe_auto_deactivate=False,
+        )
+        daemon_off = MonitorDaemon(config_off)
+        result_off = daemon_off._probe_recovery()
+        assert result_off is True, "C-R7-3: probe 自体は成功するべき (回復確認)"
+        assert len(deactivate_calls) == 0, (
+            f"C-R7-3 fail-open regression: probe_auto_deactivate=False なのに "
+            f"_deactivate_raw が呼ばれた: {deactivate_calls}。"
+            "Therac-25 / LTCM 型自動復旧暴走リスク再発。"
         )
 
 
@@ -1266,14 +1299,50 @@ class TestCR7_4_ZeroDetectionDefault:
             "3 に変更されていない（fail-closed 化が未完了）。"
         )
 
-    def test_probe_recovery_calls_is_dummy_with_explicit_3(self):
-        """_probe_recovery のソースに _is_dummy_provider(zero_detection_n=3) の記述がある。"""
-        import inspect
-        from atlas_v3.ops.monitor import MonitorDaemon
-        source = inspect.getsource(MonitorDaemon._probe_recovery)
-        assert "zero_detection_n=3" in source, (
-            "C-R7-4: _probe_recovery が _is_dummy_provider を zero_detection_n=3 で呼んでいない。"
-            "C-R7-4 fix の明示渡しが実装されていない。"
+    def test_probe_recovery_calls_is_dummy_with_explicit_3(self, tmp_path, monkeypatch):
+        """C-R7-4 (C-019 実動作化): _probe_recovery は _is_dummy_provider を zero_detection_n=3 で呼ぶ。
+
+        旧版は inspect.getsource で 'zero_detection_n=3' 文字列を grep していたが、
+        AST inspection 禁止規律に従い spy で実引数を捕捉して検証する。
+        """
+        from common_v3.risk import kill_switch as ks_module
+        from atlas_v3.ops.monitor import MonitorConfig, MonitorDaemon
+
+        monkeypatch.setattr(ks_module, "_STATE_DIR", tmp_path)
+        monkeypatch.setattr(ks_module, "FLAG_FILE", tmp_path / "kill_switch.flag")
+        monkeypatch.setattr(ks_module, "AUDIT_FILE", tmp_path / "kill_switch_audit.jsonl")
+        (tmp_path / "kill_switch.flag").write_text('{"reason":"test"}')
+
+        real_provider = lambda: {"pnl_day_usd": -10.0, "drawdown_pct": 0.05, "latency_ms": 50.0}
+        config = MonitorConfig(
+            daily_loss_usd=-400.0,
+            pushover_enabled=False,
+            kill_switch_on_emergency=False,
+            kill_switch_on_drawdown_breach=False,
+            metric_provider=real_provider,
+        )
+        daemon = MonitorDaemon(config)
+
+        captured: list[tuple] = []
+        original_is_dummy = daemon._is_dummy_provider
+
+        def spy_is_dummy(*args, **kwargs):
+            captured.append((args, kwargs))
+            return original_is_dummy(*args, **kwargs)
+
+        # bound method を spy 関数で差替え
+        daemon._is_dummy_provider = spy_is_dummy  # type: ignore[method-assign]
+
+        daemon._probe_recovery()
+
+        # zero_detection_n が 3 で呼ばれたか（kwargs / 第 1 positional 両対応）
+        called_with_3 = any(
+            kw.get("zero_detection_n") == 3 or (a and a[0] == 3)
+            for a, kw in captured
+        )
+        assert called_with_3, (
+            f"C-R7-4: _probe_recovery が _is_dummy_provider を zero_detection_n=3 で呼んでいない。"
+            f"captured calls: {captured}"
         )
 
     def test_zero_detection_n_3_detects_zero_lambda(self):

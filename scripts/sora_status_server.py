@@ -430,44 +430,67 @@ def _render_live_health() -> str:
             )
 
     # 4. spy-bot-paper daemon 状態 (2026-04-24 23:52 追加・場中 paper 戦略層)
-    pid_spy = None
-    spy_etime = "?"
-    try:
-        result = subprocess.run(
-            ["pgrep", "-f", "spy_bot.py.*--paper"],
-            capture_output=True, text=True, timeout=2,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            pid_spy = result.stdout.strip().splitlines()[0]
-            etime_result = subprocess.run(
-                ["ps", "-p", pid_spy, "-o", "etime="],
-                capture_output=True, text=True, timeout=2,
-            )
-            spy_etime = etime_result.stdout.strip() if etime_result.returncode == 0 else "?"
-    except Exception:
-        pass
-
-    if pid_spy is not None:
-        sections.append(
-            f'<div class="health-row ok">🤖 spy-bot-paper alive: PID {html.escape(pid_spy)} (elapsed {html.escape(spy_etime)})</div>'
-        )
-    else:
-        # launchd 登録有無で emergency / warn を分岐
+    # 2026-04-26: atlas_v3 native ランチャー (com.soralab.atlas-trader) が paper 発注層を担当する
+    # 移行を進めた。判定は実態ベース（OR）:
+    #   - ATLAS_TRADER_ACTIVE=1 が明示設定されている、または
+    #   - launchctl list で com.soralab.atlas-trader が稼働 PID 持ち
+    # のいずれかなら旧 spy-bot-paper 検査を skip し warn ノイズを抑制する。
+    # （script 契約上 ATLAS_TRADER_ACTIVE のデフォルトは 0 で固定・安全側）
+    atlas_trader_active = os.environ.get("ATLAS_TRADER_ACTIVE", "0") == "1"
+    if not atlas_trader_active:
         try:
-            lc_result = subprocess.run(
-                ["launchctl", "list", "com.soralab.spy-bot-paper"],
+            _at = subprocess.run(
+                ["launchctl", "list", "com.soralab.atlas-trader"],
                 capture_output=True, text=True, timeout=2,
             )
-            if lc_result.returncode == 0:
-                sections.append(
-                    '<div class="health-row warn">⚠ spy-bot-paper daemon 未稼働 (launchd 登録済・起動失敗の可能性)</div>'
-                )
-            else:
-                sections.append(
-                    '<div class="health-row warn">💤 spy-bot-paper daemon 未登録 (paper 発注層停止中)</div>'
-                )
+            if _at.returncode == 0 and '"PID"' in _at.stdout and '"PID" = 0' not in _at.stdout:
+                atlas_trader_active = True
         except Exception:
-            sections.append('<div class="health-row warn">? spy-bot-paper status 判定不能</div>')
+            pass
+
+    if atlas_trader_active:
+        # 新層 (atlas-trader) が稼働している前提・spy-bot-paper 監視 skip
+        pass
+    else:
+        pid_spy = None
+        spy_etime = "?"
+        try:
+            result = subprocess.run(
+                ["pgrep", "-f", "spy_bot.py.*--paper"],
+                capture_output=True, text=True, timeout=2,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                pid_spy = result.stdout.strip().splitlines()[0]
+                etime_result = subprocess.run(
+                    ["ps", "-p", pid_spy, "-o", "etime="],
+                    capture_output=True, text=True, timeout=2,
+                )
+                spy_etime = etime_result.stdout.strip() if etime_result.returncode == 0 else "?"
+        except Exception:
+            # spy-bot-paper pgrep 失敗は非致命的・status server で log 不要
+            pass
+
+        if pid_spy is not None:
+            sections.append(
+                f'<div class="health-row ok">🤖 spy-bot-paper alive: PID {html.escape(pid_spy)} (elapsed {html.escape(spy_etime)})</div>'
+            )
+        else:
+            try:
+                lc_result = subprocess.run(
+                    ["launchctl", "list", "com.soralab.spy-bot-paper"],
+                    capture_output=True, text=True, timeout=2,
+                )
+                if lc_result.returncode == 0:
+                    sections.append(
+                        '<div class="health-row warn">⚠ spy-bot-paper daemon 未稼働 (launchd 登録済・起動失敗の可能性)</div>'
+                    )
+                else:
+                    sections.append(
+                        '<div class="health-row warn">💤 spy-bot-paper daemon 未登録 (paper 発注層停止中)</div>'
+                    )
+            except Exception:
+                # spy-bot-paper launchctl 失敗は status server には致命的でないので warn 表示のみ
+                sections.append('<div class="health-row warn">? spy-bot-paper status 判定不能</div>')
 
     # 5. moomoo OpenD preemptive relogin heartbeat (案 F・12h 周期)
     relogin_hb_file = PROJECT_ROOT / "data" / "state_v3" / "opend_relogin_heartbeat.jsonl"

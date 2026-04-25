@@ -155,6 +155,9 @@ class AtlasEngine:
         self._idempotency_store = idempotency_store or IdempotencyStore()
         # C-r1-01: tick 開始時刻を保持するインスタンス変数（tick() 冒頭で設定）
         self._tick_started_at: datetime | None = None
+        # 2026-04-26: multi-symbol tactic skip ログの初回 INFO・以降 DEBUG 降格用
+        # （β-2 最小配線で symbol="" 渡しの skip が毎 tick INFO 出る冗長を解消）
+        self._multi_symbol_skip_seen: set[str] = set()
 
         if tactics:
             for tactic in tactics:
@@ -312,11 +315,21 @@ class AtlasEngine:
             return []
         except ValueError as e:
             # multi-symbol tactic (weekly_gamma_scalp 等) は symbol="" で ValueError raise。
-            # β-2 最小配線では symbol ループ未実装のため info ログで skip (silent skip 禁止規律準拠)。
-            log.info(
-                "[AtlasEngine] tactic=%s: should_enter skipped (multi-symbol or invalid symbol): %s",
-                tactic.tactic_name, e,
-            )
+            # β-2 最小配線では symbol ループ未実装のため log で skip (silent skip 禁止規律準拠)。
+            # 2026-04-26: 毎 tick INFO 連発防止で初回 INFO・以降 DEBUG 降格 (rate limit)。
+            tactic_name = getattr(tactic, "tactic_name", "unknown")
+            if tactic_name not in self._multi_symbol_skip_seen:
+                self._multi_symbol_skip_seen.add(tactic_name)
+                log.info(
+                    "[AtlasEngine] tactic=%s: should_enter skipped (multi-symbol or invalid symbol): %s "
+                    "(以降同 tactic は debug ログに降格)",
+                    tactic_name, e,
+                )
+            else:
+                log.debug(
+                    "[AtlasEngine] tactic=%s: should_enter skipped (multi-symbol or invalid symbol): %s",
+                    tactic_name, e,
+                )
             return []
 
         if decision is None or not getattr(decision, "should_enter", False):

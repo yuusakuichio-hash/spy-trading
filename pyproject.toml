@@ -1,0 +1,36 @@
+[tool.mypy]
+strict = true
+ignore_missing_imports = true
+warn_return_any = true
+warn_redundant_casts = true
+warn_unused_configs = true
+show_error_codes = true
+no_implicit_optional = true
+exclude = ['tests/', 'scripts/', 'backtest_.*\.py']
+
+[[tool.mypy.overrides]]
+module = "futu.*"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "yaml"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "requests"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "opentelemetry.*"
+ignore_errors = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "atlas_v3/tests", "chronos_v3/tests", "common_v3/tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+xfail_strict = true
+filterwarnings = [
+    "ignore::DeprecationWarning:futu",
+    "ignore::DeprecationWarning:moomoo",
+]

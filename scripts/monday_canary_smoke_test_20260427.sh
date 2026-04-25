@@ -45,7 +45,8 @@ VIX_MOCK_SPIKE=40.0        # portfolio_risk_gate 発火閾値確認用
 
 # ── 移行期間フラグ (Step 1 daemon 検出切替) ──────────────────────────────────
 # ATLAS_TRADER_ACTIVE=1 → com.soralab.atlas-trader を優先 (月曜移行後)
-# ATLAS_TRADER_ACTIVE=0 → com.soralab.spy-bot-paper を監視 (移行前・デフォルト)
+# ATLAS_TRADER_ACTIVE=0 → com.soralab.spy-bot-paper を監視 (移行前・デフォルト・安全側)
+# 契約: tests/test_canary_smoke_20260425.py が default=0 を強制 (安全側設計判断)
 ATLAS_TRADER_ACTIVE="${ATLAS_TRADER_ACTIVE:-0}"
 
 PYTHON="${PYTHON:-/usr/bin/python3}"

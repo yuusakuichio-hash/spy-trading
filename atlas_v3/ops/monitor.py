@@ -1219,8 +1219,14 @@ class MonitorDaemon:
                 from atlas_v3.main import DummyMetricProvider
                 if isinstance(instance, DummyMetricProvider):
                     return True
-            except ImportError:
-                # import 失敗時は文字列判定にフォールバック
+            except ImportError as _imp_err:
+                # C-020 Sprint 2 carryover (Navigator 追加指摘): silent skip 廃止
+                # 意図: atlas_v3.main 読み込み失敗時は文字列判定 fallback を取るが、
+                # import 失敗自体は infra 異常の signal なので log.debug で残す。
+                log.debug(
+                    "[Monitor] atlas_v3.main import failed (fallback to name check): %s",
+                    _imp_err,
+                )
                 cls_name = type(instance).__name__
                 if "Dummy" in cls_name or cls_name == "DummyMetricProvider":
                     return True
