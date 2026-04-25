@@ -345,10 +345,10 @@ class TestApproverWhitelistAndNFKC:
         self.cb = CircuitBreaker(name="approver_test")
 
     def test_yuusaku_passes_validation_raises_not_implemented(self):
-        """'yuusaku' は whitelist に含まれるため検証通過 → NotImplementedError"""
-        with pytest.raises(NotImplementedError) as exc_info:
-            self.cb.reset(approver="yuusaku")
-        assert "yuusaku" in str(exc_info.value)
+        """'yuusaku' は whitelist 通過し reset 完遂 (Sprint 1 で実装完成・旧 NotImplementedError 期待は廃止)"""
+        # 例外 raise しないこと (whitelist 通過 = reset 成功)
+        self.cb.reset(approver="yuusaku")
+        assert self.cb.state == "CLOSED"
 
     def test_unknown_approver_raises(self):
         """whitelist 外の approver は拒否"""
@@ -357,12 +357,13 @@ class TestApproverWhitelistAndNFKC:
         assert "whitelist" in str(exc_info.value).lower() or "許可" in str(exc_info.value)
 
     def test_nfkc_normalized_yuusaku_passes(self):
-        """全角 'ｙｕｕｓａｋｕ' は NFKC 正規化で 'yuusaku' に変換 → 通過"""
+        """全角 'ｙｕｕｓａｋｕ' は NFKC 正規化で 'yuusaku' に変換 → 通過 (例外なし)"""
         fullwidth = "ｙｕｕｓａｋｕ"
         import unicodedata
         assert unicodedata.normalize("NFKC", fullwidth) == "yuusaku"
-        with pytest.raises(NotImplementedError):
-            self.cb.reset(approver=fullwidth)
+        # 例外 raise しないこと
+        self.cb.reset(approver=fullwidth)
+        assert self.cb.state == "CLOSED"
 
     def test_str_subclass_approver_raises(self):
         """str subclass の approver は拒否"""
