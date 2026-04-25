@@ -120,3 +120,91 @@ def estimate_hv_from_moomoo(
     except Exception as e:
         log.warning("[HV] 計算失敗: %s", e)
         return None
+
+
+def estimate_ivr_proxy_from_hv_history(
+    quote_ctx,
+    underlying_code: str = "US.SPY",
+    rank_lookback_days: int = 252,
+    hv_window_days: int = 30,
+    end_date: Optional[datetime.date] = None,
+) -> Optional[float]:
+    """過去 252 日の rolling HV から現在 HV の percentile rank を IVR proxy として返す。
+
+    本来の IVR (Implied Volatility Rank) は ATM IV の 252 日 percentile だが、
+    moomoo で過去 252 日の毎日 ATM IV を取得するのは bulk API なし・heavy。
+    HV と IV は相関高い (Bollerslev・Tauchen・Zhou 2009) ため HV proxy で代替。
+
+    Args:
+        quote_ctx: futu.OpenQuoteContext
+        underlying_code: "US.SPY"
+        rank_lookback_days: percentile rank の lookback 日数 (default 252 = 1 年)
+        hv_window_days: 各時点 rolling HV の window (default 30 日)
+        end_date: 終了日 (None なら今日)
+
+    Returns:
+        IVR proxy (0-100・% 表示) または None
+    """
+    if quote_ctx is None:
+        return None
+
+    try:
+        import futu as ft
+    except ImportError:
+        return None
+
+    if end_date is None:
+        end_date = datetime.date.today()
+    # rank_lookback + hv_window + 余裕日
+    start_date = end_date - datetime.timedelta(
+        days=int((rank_lookback_days + hv_window_days) * 1.5) + 10,
+    )
+
+    try:
+        ret, kline_df, _ = quote_ctx.request_history_kline(
+            underlying_code,
+            start=start_date.strftime("%Y-%m-%d"),
+            end=end_date.strftime("%Y-%m-%d"),
+            ktype=ft.KLType.K_DAY,
+        )
+        if ret != ft.RET_OK or kline_df is None or len(kline_df) == 0:
+            log.debug("[IVR-proxy] kline 取得失敗: ret=%s", ret)
+            return None
+
+        closes = kline_df["close"].astype(float).tolist()
+        if len(closes) < hv_window_days + 10:
+            log.debug("[IVR-proxy] data 不足: %d 日", len(closes))
+            return None
+
+        # rolling HV history (各日について過去 hv_window_days の HV)
+        rolling_hvs: list[float] = []
+        for i in range(hv_window_days, len(closes)):
+            window = closes[i - hv_window_days:i]
+            hv_i = calc_hv_from_closes(window)
+            if hv_i is not None:
+                rolling_hvs.append(hv_i)
+
+        if len(rolling_hvs) < 30:  # 最低 30 日 history
+            return None
+
+        # 現在 HV (直近 hv_window_days)
+        current_hv = calc_hv_from_closes(closes[-hv_window_days:])
+        if current_hv is None:
+            return None
+
+        # rank_lookback_days 範囲に絞る
+        if len(rolling_hvs) > rank_lookback_days:
+            rolling_hvs = rolling_hvs[-rank_lookback_days:]
+
+        # percentile rank (0-100)
+        below_count = sum(1 for h in rolling_hvs if h < current_hv)
+        ivr_proxy = (below_count / len(rolling_hvs)) * 100.0
+        log.info(
+            "[IVR-proxy] %s 現在 HV=%.2f%% / rolling %d 日中 percentile=%.1f",
+            underlying_code, current_hv, len(rolling_hvs), ivr_proxy,
+        )
+        return ivr_proxy
+
+    except Exception as e:
+        log.warning("[IVR-proxy] 計算失敗: %s", e)
+        return None

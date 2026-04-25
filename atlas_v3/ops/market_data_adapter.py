@@ -34,7 +34,7 @@ from typing import Optional
 
 from atlas_v3.core.env_observer import MarketEnvironment
 from atlas_v3.ops.vix_estimator import estimate_vix_from_spy_atm
-from atlas_v3.ops.realized_volatility import estimate_hv_from_moomoo
+from atlas_v3.ops.realized_volatility import estimate_hv_from_moomoo, estimate_ivr_proxy_from_hv_history
 
 log = logging.getLogger(__name__)
 
@@ -114,14 +114,18 @@ class MoomooMarketDataAdapter:
         # 3. bias: VIX 帯から推定 (簡易版)
         bias = self._estimate_bias(vix)
 
-        # 4. GEX / term_ratio / ivr_by_symbol: β-2 後段
+        # 4. ivr_by_symbol: 252 日 HV percentile rank で IVR proxy
+        ivr = estimate_ivr_proxy_from_hv_history(self._quote_ctx, self._underlying_code)
+        ivr_dict = {"SPY": ivr if ivr is not None else _DEFAULT_IVR_SPY}
+
+        # 5. GEX / term_ratio: β-2 最終段 (option chain gamma weight / 異 DTE IV slope)
         env = MarketEnvironment(
             vix=vix,
             vrp=vrp,
             gex=_DEFAULT_GEX,
             term_ratio=_DEFAULT_TERM_RATIO,
             bias=bias,
-            ivr_by_symbol={"SPY": _DEFAULT_IVR_SPY},
+            ivr_by_symbol=ivr_dict,
         )
 
         # Cache update
