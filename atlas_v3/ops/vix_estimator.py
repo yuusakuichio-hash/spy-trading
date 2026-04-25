@@ -169,7 +169,7 @@ def estimate_vix_from_spy_atm(
                     iv_pct = iv_direct
                 iv_values.append(iv_pct)
                 log.debug(
-                    "[VIX-ATM-IV] %s K=%.1f IV(direct)=%.1f%% (raw=%.4f)",
+                    "[VIX-ATM-IV] %s K=%.2f IV(direct)=%.2f%% (raw=%.4f)",
                     opt_label, atm_strike, iv_pct, iv_direct,
                 )
                 continue
@@ -202,7 +202,7 @@ def estimate_vix_from_spy_atm(
                     iv_pct = iv_bs * 100.0
                     iv_values.append(iv_pct)
                     log.debug(
-                        "[VIX-ATM-IV] %s K=%.1f mid=%.3f IV(BS)=%.1f%%",
+                        "[VIX-ATM-IV] %s K=%.2f mid=%.3f IV(BS)=%.2f%%",
                         opt_label, atm_strike, mid, iv_pct,
                     )
             except Exception as e:
@@ -212,8 +212,9 @@ def estimate_vix_from_spy_atm(
             return None
 
         # iv_values は既に % 単位 (上記 direct / BS 経路で統一済) なので avg のみ
+        # 精度: 公式 VIX (CBOE 配信) と同じ第 2 位まで・第 3 位は SPY straddle IV の誤差レンジ未満
         vix_approx = sum(iv_values) / len(iv_values)
-        log.info("[VIX-ATM-IV] ATMストラドルIVからVIX算出: %.1f", vix_approx)
+        log.info("[VIX-ATM-IV] ATMストラドルIVからVIX算出: %.2f", vix_approx)
         return vix_approx
 
     except Exception as e:
