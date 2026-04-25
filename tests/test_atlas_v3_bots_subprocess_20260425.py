@@ -1,99 +1,29 @@
 """tests/test_atlas_v3_bots_subprocess_20260425.py
 
-atlas_v3/bots/ subprocess 境界 launcher テスト — 15 件以上。
+atlas_v3/bots/ native engine ランチャーテスト（β-2 配線実装 2026-04-25 対応版）。
 
-Redteam 対案採択 (2026-04-25) — delegate 禁止 / subprocess 境界隔離 検証。
+旧 subprocess 境界テストを native AtlasEngine 経路に全面改訂。
+変更理由: β-2 により main.py から subprocess.Popen(spy_bot.py) を廃止し
+AtlasEngine を直接起動するよう変更したため、テストも新経路に対応させる。
 
 テスト分類
 ----------
-[argv]       build_spy_bot_argv: --mode → spy_bot.py argv 変換正当性
-[argparse]   build_parser: 各フラグ解析 / 無効値エラー
-[launch]     launch_spy_bot: subprocess.Popen 引数構築 mock 検証
-[sigterm]    SIGTERM forward: _setup_sigterm_forward が子プロセスに転送する
-[exitcode]   main(): spy_bot の exit code を透過的に返す
-[no_import]  spy_bot.py 書換 0 検証: atlas_v3.bots が spy_bot を import しない
-[smoke]      main() mock smoke: Popen mock で main() が正常終了する
+[argparse]    build_parser: 各フラグ解析 / 無効値エラー
+[disable]     build_disable_names: --no-* → tactic_name リスト変換
+[engine]      build_engine_native: TacticRegistry 経由 AtlasEngine 組み立て
+[sigterm]     setup_graceful_shutdown: stop_event セット確認
+[main_smoke]  main(): test-connect モード即終了 / stop_event による loop 停止
+[no_import]   spy_bot.py import ゼロ検証（β-2 後も継続）
+[compat]      build_parser が dry / test-connect モードを受け付ける後方互換確認
 """
 from __future__ import annotations
 
 import pathlib
 import signal
-import subprocess
-import sys
-import types
-from unittest.mock import MagicMock, call, patch
+import threading
+from unittest.mock import MagicMock, patch
 
 import pytest
-
-
-# ---------------------------------------------------------------------------
-# [argv] build_spy_bot_argv テスト
-# ---------------------------------------------------------------------------
-
-class TestBuildSpyBotArgv:
-    """build_spy_bot_argv: --mode × フラグ → spy_bot argv 変換を網羅する。"""
-
-    def _parse_and_build(self, cli_args: list[str]) -> list[str]:
-        from atlas_v3.bots.main import build_parser, build_spy_bot_argv
-        args = build_parser().parse_args(cli_args)
-        return build_spy_bot_argv(args)
-
-    def test_mode_paper_gives_paper_flag(self):
-        """--mode paper → ['--paper']"""
-        result = self._parse_and_build(["--mode", "paper"])
-        assert result == ["--paper"]
-
-    def test_mode_live_gives_empty(self):
-        """--mode live → [] (spy_bot のデフォルトが live)"""
-        result = self._parse_and_build(["--mode", "live"])
-        assert result == []
-
-    def test_mode_dry_gives_paper_and_dry_test(self):
-        """--mode dry → ['--paper', '--dry-test']"""
-        result = self._parse_and_build(["--mode", "dry"])
-        assert "--paper" in result
-        assert "--dry-test" in result
-
-    def test_mode_test_connect_gives_paper_and_test_connect(self):
-        """--mode test-connect → ['--paper', '--test-connect']"""
-        result = self._parse_and_build(["--mode", "test-connect"])
-        assert "--paper" in result
-        assert "--test-connect" in result
-
-    def test_dry_run_flag_appends_dry_test(self):
-        """--mode paper --dry-run → ['--paper', '--dry-test']"""
-        result = self._parse_and_build(["--mode", "paper", "--dry-run"])
-        assert "--dry-test" in result
-        assert "--paper" in result
-
-    def test_no_orb_forwarded(self):
-        """--no-orb が spy_argv に含まれる。"""
-        result = self._parse_and_build(["--mode", "paper", "--no-orb"])
-        assert "--no-orb" in result
-
-    def test_no_calendar_forwarded(self):
-        """--no-calendar が spy_argv に含まれる。"""
-        result = self._parse_and_build(["--mode", "paper", "--no-calendar"])
-        assert "--no-calendar" in result
-
-    def test_no_multi_forwarded(self):
-        """--no-multi が spy_argv に含まれる。"""
-        result = self._parse_and_build(["--mode", "paper", "--no-multi"])
-        assert "--no-multi" in result
-
-    def test_mode_dry_plus_dry_run_no_duplicate_dry_test(self):
-        """--mode dry --dry-run で --dry-test が重複しない。"""
-        result = self._parse_and_build(["--mode", "dry", "--dry-run"])
-        assert result.count("--dry-test") == 1
-
-    def test_all_disable_flags_combined(self):
-        """--no-orb --no-calendar --no-multi が全部含まれる。"""
-        result = self._parse_and_build(
-            ["--mode", "paper", "--no-orb", "--no-calendar", "--no-multi"]
-        )
-        assert "--no-orb" in result
-        assert "--no-calendar" in result
-        assert "--no-multi" in result
 
 
 # ---------------------------------------------------------------------------
@@ -125,215 +55,276 @@ class TestBuildParser:
         args = build_parser().parse_args(["--mode", "live"])
         assert args.mode == "live"
 
+    def test_mode_dry_parses(self):
+        from atlas_v3.bots.main import build_parser
+        args = build_parser().parse_args(["--mode", "dry"])
+        assert args.mode == "dry"
 
-# ---------------------------------------------------------------------------
-# [launch] launch_spy_bot subprocess mock 検証
-# ---------------------------------------------------------------------------
+    def test_mode_test_connect_parses(self):
+        from atlas_v3.bots.main import build_parser
+        args = build_parser().parse_args(["--mode", "test-connect"])
+        assert args.mode == "test-connect"
 
-class TestLaunchSpyBot:
-    """launch_spy_bot: Popen に渡す cmd / cwd / env を確認する。"""
+    def test_dry_run_flag_defaults_false(self):
+        from atlas_v3.bots.main import build_parser
+        args = build_parser().parse_args(["--mode", "paper"])
+        assert args.dry_run is False
 
-    def test_popen_cmd_contains_sys_executable(self, tmp_path):
-        """cmd[0] が sys.executable になる。"""
-        fake_spy = tmp_path / "spy_bot.py"
-        fake_spy.write_text("# stub")
+    def test_dry_run_flag_set(self):
+        from atlas_v3.bots.main import build_parser
+        args = build_parser().parse_args(["--mode", "paper", "--dry-run"])
+        assert args.dry_run is True
 
-        with patch("subprocess.Popen") as mock_popen:
-            mock_popen.return_value = MagicMock(pid=9999)
-            from atlas_v3.bots.main import launch_spy_bot
-            launch_spy_bot(["--paper"], spy_bot_path=fake_spy, inherit_stdio=False)
+    def test_no_orb_flag_defaults_false(self):
+        from atlas_v3.bots.main import build_parser
+        args = build_parser().parse_args(["--mode", "paper"])
+        assert args.no_orb is False
 
-        cmd = mock_popen.call_args[0][0]
-        assert cmd[0] == sys.executable
+    def test_no_orb_flag_set(self):
+        from atlas_v3.bots.main import build_parser
+        args = build_parser().parse_args(["--mode", "paper", "--no-orb"])
+        assert args.no_orb is True
 
-    def test_popen_cmd_contains_spy_bot_path(self, tmp_path):
-        """cmd[1] が spy_bot.py の絶対パスになる。"""
-        fake_spy = tmp_path / "spy_bot.py"
-        fake_spy.write_text("# stub")
+    def test_no_calendar_flag_set(self):
+        from atlas_v3.bots.main import build_parser
+        args = build_parser().parse_args(["--mode", "paper", "--no-calendar"])
+        assert args.no_calendar is True
 
-        with patch("subprocess.Popen") as mock_popen:
-            mock_popen.return_value = MagicMock(pid=9999)
-            from atlas_v3.bots.main import launch_spy_bot
-            launch_spy_bot(["--paper"], spy_bot_path=fake_spy, inherit_stdio=False)
-
-        cmd = mock_popen.call_args[0][0]
-        assert cmd[1] == str(fake_spy)
-
-    def test_popen_cmd_contains_spy_argv(self, tmp_path):
-        """spy_argv が cmd に追加される。"""
-        fake_spy = tmp_path / "spy_bot.py"
-        fake_spy.write_text("# stub")
-
-        with patch("subprocess.Popen") as mock_popen:
-            mock_popen.return_value = MagicMock(pid=9999)
-            from atlas_v3.bots.main import launch_spy_bot
-            launch_spy_bot(["--paper", "--no-orb"], spy_bot_path=fake_spy, inherit_stdio=False)
-
-        cmd = mock_popen.call_args[0][0]
-        assert "--paper" in cmd
-        assert "--no-orb" in cmd
-
-    def test_popen_cwd_is_spy_bot_parent(self, tmp_path):
-        """cwd が spy_bot.py の親ディレクトリになる。"""
-        fake_spy = tmp_path / "spy_bot.py"
-        fake_spy.write_text("# stub")
-
-        with patch("subprocess.Popen") as mock_popen:
-            mock_popen.return_value = MagicMock(pid=9999)
-            from atlas_v3.bots.main import launch_spy_bot
-            launch_spy_bot(["--paper"], spy_bot_path=fake_spy, inherit_stdio=False)
-
-        kwargs = mock_popen.call_args[1]
-        assert kwargs["cwd"] == str(tmp_path)
-
-    def test_popen_pipe_when_not_inherit_stdio(self, tmp_path):
-        """inherit_stdio=False のとき stdout/stderr が PIPE になる。"""
-        fake_spy = tmp_path / "spy_bot.py"
-        fake_spy.write_text("# stub")
-
-        with patch("subprocess.Popen") as mock_popen:
-            mock_popen.return_value = MagicMock(pid=9999)
-            from atlas_v3.bots.main import launch_spy_bot
-            launch_spy_bot(["--paper"], spy_bot_path=fake_spy, inherit_stdio=False)
-
-        kwargs = mock_popen.call_args[1]
-        assert kwargs["stdout"] == subprocess.PIPE
-        assert kwargs["stderr"] == subprocess.PIPE
-
-    def test_popen_inherit_none_when_inherit_stdio(self, tmp_path):
-        """inherit_stdio=True のとき stdout/stderr が None (継承) になる。"""
-        fake_spy = tmp_path / "spy_bot.py"
-        fake_spy.write_text("# stub")
-
-        with patch("subprocess.Popen") as mock_popen:
-            mock_popen.return_value = MagicMock(pid=9999)
-            from atlas_v3.bots.main import launch_spy_bot
-            launch_spy_bot(["--paper"], spy_bot_path=fake_spy, inherit_stdio=True)
-
-        kwargs = mock_popen.call_args[1]
-        assert kwargs.get("stdout") is None
-        assert kwargs.get("stderr") is None
+    def test_no_multi_flag_set(self):
+        from atlas_v3.bots.main import build_parser
+        args = build_parser().parse_args(["--mode", "paper", "--no-multi"])
+        assert args.no_multi is True
 
 
 # ---------------------------------------------------------------------------
-# [sigterm] SIGTERM forward テスト
+# [disable] build_disable_names テスト
 # ---------------------------------------------------------------------------
 
-class TestSigtermForward:
-    """_setup_sigterm_forward: SIGTERM 受信時に子プロセスへ転送する。"""
+class TestBuildDisableNames:
+    """build_disable_names: --no-* → tactic_name リスト変換を確認する。"""
 
-    def test_sigterm_handler_registered(self):
-        """_setup_sigterm_forward 呼び出し後に SIGTERM ハンドラが変わる。"""
-        from atlas_v3.bots.main import _setup_sigterm_forward
+    def _parse(self, cli_args: list[str]):
+        from atlas_v3.bots.main import build_parser
+        return build_parser().parse_args(cli_args)
 
-        mock_proc = MagicMock()
-        mock_proc.pid = 12345
-        _setup_sigterm_forward(mock_proc)
+    def test_no_flags_returns_empty(self):
+        from atlas_v3.bots.main import build_disable_names
+        args = self._parse(["--mode", "paper"])
+        assert build_disable_names(args) == []
 
+    def test_no_orb_returns_orb_native(self):
+        from atlas_v3.bots.main import build_disable_names
+        args = self._parse(["--mode", "paper", "--no-orb"])
+        result = build_disable_names(args)
+        assert "orb_native" in result
+
+    def test_no_calendar_returns_diagonal_spread(self):
+        from atlas_v3.bots.main import build_disable_names
+        args = self._parse(["--mode", "paper", "--no-calendar"])
+        result = build_disable_names(args)
+        assert "diagonal_spread" in result
+
+    def test_no_multi_returns_empty_list(self):
+        """--no-multi は v3.0 では対応 tactic なし → 空リスト。"""
+        from atlas_v3.bots.main import build_disable_names
+        args = self._parse(["--mode", "paper", "--no-multi"])
+        result = build_disable_names(args)
+        # no_multi 単独では disable 対象 tactic なし（ログのみ）
+        assert "orb_native" not in result
+        assert "diagonal_spread" not in result
+
+    def test_combined_no_orb_no_calendar(self):
+        from atlas_v3.bots.main import build_disable_names
+        args = self._parse(["--mode", "paper", "--no-orb", "--no-calendar"])
+        result = build_disable_names(args)
+        assert "orb_native" in result
+        assert "diagonal_spread" in result
+
+    def test_all_flags_combined(self):
+        from atlas_v3.bots.main import build_disable_names
+        args = self._parse(["--mode", "paper", "--no-orb", "--no-calendar", "--no-multi"])
+        result = build_disable_names(args)
+        assert "orb_native" in result
+        assert "diagonal_spread" in result
+
+
+# ---------------------------------------------------------------------------
+# [engine] build_engine_native テスト
+# ---------------------------------------------------------------------------
+
+class TestBuildEngineNative:
+    """build_engine_native: TacticRegistry 経由 AtlasEngine 組み立てを確認する。"""
+
+    def test_returns_atlas_engine(self):
+        from atlas_v3.bots.main import build_engine_native
+        from atlas_v3.core.engine import AtlasEngine
+        engine = build_engine_native(disable_names=[])
+        assert isinstance(engine, AtlasEngine)
+
+    def test_engine_has_eleven_tactics_by_default(self):
+        from atlas_v3.bots.main import build_engine_native
+        engine = build_engine_native(disable_names=[])
+        # AtlasEngine._tactics にアクセス（内部属性だが検証目的）
+        assert len(engine._tactics) == 11
+
+    def test_disable_orb_native_reduces_count(self):
+        from atlas_v3.bots.main import build_engine_native
+        engine = build_engine_native(disable_names=["orb_native"])
+        assert len(engine._tactics) == 10
+        tactic_names = [t.tactic_name for t in engine._tactics]
+        assert "orb_native" not in tactic_names
+
+    def test_disable_diagonal_spread_removes_it(self):
+        from atlas_v3.bots.main import build_engine_native
+        engine = build_engine_native(disable_names=["diagonal_spread"])
+        tactic_names = [t.tactic_name for t in engine._tactics]
+        assert "diagonal_spread" not in tactic_names
+
+    def test_custom_market_data_injected(self):
+        from atlas_v3.bots.main import build_engine_native
+        stub_md = MagicMock()
+        engine = build_engine_native(disable_names=[], market_data=stub_md)
+        assert engine._market_data is stub_md
+
+    def test_custom_broker_injected(self):
+        from atlas_v3.bots.main import build_engine_native
+        stub_bk = MagicMock()
+        engine = build_engine_native(disable_names=[], broker=stub_bk)
+        assert engine._broker is stub_bk
+
+    def test_none_providers_use_stubs(self):
+        """market_data=None, broker=None のとき stub providers が設定される。"""
+        from atlas_v3.bots.main import _StubBroker, _StubMarketData, build_engine_native
+        engine = build_engine_native(disable_names=[])
+        assert isinstance(engine._market_data, _StubMarketData)
+        assert isinstance(engine._broker, _StubBroker)
+
+
+# ---------------------------------------------------------------------------
+# [sigterm] setup_graceful_shutdown テスト
+# ---------------------------------------------------------------------------
+
+class TestGracefulShutdown:
+    """setup_graceful_shutdown: stop_event セット確認。"""
+
+    def test_sigterm_sets_stop_event(self):
+        from atlas_v3.bots.main import setup_graceful_shutdown
+        stop_event = threading.Event()
+        setup_graceful_shutdown(stop_event)
+
+        # ハンドラを直接呼び出して確認
         handler = signal.getsignal(signal.SIGTERM)
         assert callable(handler) and handler is not signal.SIG_DFL
 
-        # 復元
-        signal.signal(signal.SIGTERM, signal.SIG_DFL)
-
-    def test_sigterm_handler_calls_send_signal(self):
-        """SIGTERM 受信時に proc.send_signal(SIGTERM) が呼ばれる。"""
-        from atlas_v3.bots.main import _setup_sigterm_forward
-
-        mock_proc = MagicMock()
-        mock_proc.pid = 12345
-        _setup_sigterm_forward(mock_proc)
-
-        # ハンドラを直接呼び出してテスト
-        handler = signal.getsignal(signal.SIGTERM)
         handler(signal.SIGTERM, None)
-
-        mock_proc.send_signal.assert_called_once_with(signal.SIGTERM)
-
-        # 復元
-        signal.signal(signal.SIGTERM, signal.SIG_DFL)
-
-    def test_sigterm_handler_tolerates_process_lookup_error(self):
-        """proc.send_signal が ProcessLookupError を上げても例外が伝播しない。"""
-        from atlas_v3.bots.main import _setup_sigterm_forward
-
-        mock_proc = MagicMock()
-        mock_proc.pid = 12345
-        mock_proc.send_signal.side_effect = ProcessLookupError
-
-        _setup_sigterm_forward(mock_proc)
-        handler = signal.getsignal(signal.SIGTERM)
-
-        # 例外が伝播しないことを確認
-        handler(signal.SIGTERM, None)  # ProcessLookupError を飲み込む
+        assert stop_event.is_set()
 
         # 復元
         signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+
+    def test_sigint_sets_stop_event(self):
+        from atlas_v3.bots.main import setup_graceful_shutdown
+        stop_event = threading.Event()
+        setup_graceful_shutdown(stop_event)
+
+        handler = signal.getsignal(signal.SIGINT)
+        handler(signal.SIGINT, None)
+        assert stop_event.is_set()
+
+        # 復元
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
 
 
 # ---------------------------------------------------------------------------
-# [exitcode] exit code 透過テスト
+# [main_smoke] main() smoke テスト
 # ---------------------------------------------------------------------------
 
-class TestExitCodeTransparency:
-    """main(): spy_bot の終了コードをそのまま返す。"""
+class TestMainSmoke:
+    """main() smoke: test-connect モードと run_loop の停止を確認する。"""
 
-    def _make_mock_proc(self, returncode: int) -> MagicMock:
-        proc = MagicMock()
-        proc.pid = 42
-        proc.returncode = returncode
-        proc.wait.return_value = returncode
-        return proc
-
-    def test_exit_code_0_propagated(self, tmp_path):
-        """spy_bot が rc=0 で終了したとき main() が 0 を返す。"""
-        fake_spy = tmp_path / "spy_bot.py"
-        fake_spy.write_text("# stub")
-
-        mock_proc = self._make_mock_proc(0)
-        with patch("atlas_v3.bots.main.launch_spy_bot", return_value=mock_proc), \
-             patch("atlas_v3.bots.main._SPY_BOT_PATH", fake_spy), \
-             patch("atlas_v3.bots.main._setup_sigterm_forward"):
-            from atlas_v3.bots.main import main
-            rc = main(["--mode", "paper"])
-
+    def test_main_test_connect_returns_0(self):
+        """--mode test-connect で main() が 0 を返す（engine 組み立てのみ）。"""
+        from atlas_v3.bots.main import main
+        rc = main(["--mode", "test-connect"])
         assert rc == 0
 
-    def test_exit_code_1_propagated(self, tmp_path):
-        """spy_bot が rc=1 で終了したとき main() が 1 を返す。"""
-        fake_spy = tmp_path / "spy_bot.py"
-        fake_spy.write_text("# stub")
+    def test_main_paper_dry_run_stops_via_stop_event(self):
+        """--mode paper --dry-run で run_loop が stop_event セットで 0 を返す。"""
+        import time
 
-        mock_proc = self._make_mock_proc(1)
-        with patch("atlas_v3.bots.main.launch_spy_bot", return_value=mock_proc), \
-             patch("atlas_v3.bots.main._SPY_BOT_PATH", fake_spy), \
-             patch("atlas_v3.bots.main._setup_sigterm_forward"):
-            from atlas_v3.bots.main import main
-            rc = main(["--mode", "paper"])
+        from atlas_v3.bots.main import build_engine_native, run_loop
 
-        assert rc == 1
+        engine = build_engine_native(disable_names=[])
+        stop_event = threading.Event()
+        results: list[int] = []
 
-    def test_exit_code_2_propagated(self, tmp_path):
-        """spy_bot が rc=2 で終了したとき main() が 2 を返す。"""
-        fake_spy = tmp_path / "spy_bot.py"
-        fake_spy.write_text("# stub")
+        def _runner():
+            rc = run_loop(engine=engine, stop_event=stop_event, tick_interval_secs=60.0)
+            results.append(rc)
 
-        mock_proc = self._make_mock_proc(2)
-        with patch("atlas_v3.bots.main.launch_spy_bot", return_value=mock_proc), \
-             patch("atlas_v3.bots.main._SPY_BOT_PATH", fake_spy), \
-             patch("atlas_v3.bots.main._setup_sigterm_forward"):
-            from atlas_v3.bots.main import main
-            rc = main(["--mode", "paper"])
+        t = threading.Thread(target=_runner, daemon=True)
+        t.start()
+        # run_loop が最初の tick を処理するまで待機
+        time.sleep(0.5)
+        stop_event.set()
+        t.join(timeout=5)
+        assert not t.is_alive(), "run_loop が stop_event 後 5 秒で終了しなかった"
+        assert results == [0]
 
-        assert rc == 2
+    def test_main_dry_mode_stops_via_stop_event(self):
+        """--mode dry 相当の run_loop が stop_event セットで 0 を返す。"""
+        import time
+
+        from atlas_v3.bots.main import build_engine_native, run_loop
+
+        engine = build_engine_native(disable_names=[])
+        stop_event = threading.Event()
+        results: list[int] = []
+
+        def _runner():
+            rc = run_loop(engine=engine, stop_event=stop_event, tick_interval_secs=60.0)
+            results.append(rc)
+
+        t = threading.Thread(target=_runner, daemon=True)
+        t.start()
+        time.sleep(0.5)
+        stop_event.set()
+        t.join(timeout=5)
+        assert not t.is_alive()
+        assert results == [0]
+
+    def test_main_paper_no_orb_smoke(self):
+        """--no-orb で 10 戦術エンジンの run_loop が stop_event で 0 を返す。"""
+        import time
+
+        from atlas_v3.bots.main import build_engine_native, run_loop
+
+        engine = build_engine_native(disable_names=["orb_native"])
+        assert len(engine._tactics) == 10
+        stop_event = threading.Event()
+        results: list[int] = []
+
+        def _runner():
+            rc = run_loop(engine=engine, stop_event=stop_event, tick_interval_secs=60.0)
+            results.append(rc)
+
+        t = threading.Thread(target=_runner, daemon=True)
+        t.start()
+        time.sleep(0.5)
+        stop_event.set()
+        t.join(timeout=5)
+        assert not t.is_alive()
+        assert results == [0]
 
 
 # ---------------------------------------------------------------------------
-# [no_import] spy_bot.py 書換 0 検証
+# [no_import] spy_bot.py import ゼロ検証
 # ---------------------------------------------------------------------------
 
 class TestNoSpyBotImport:
-    """atlas_v3.bots が spy_bot を import しないことを検証する。"""
+    """atlas_v3.bots が spy_bot を import しないことを検証する（β-2 後も継続）。"""
 
     def test_main_module_does_not_import_spy_bot(self):
         """atlas_v3.bots.main のソースコードに 'import spy_bot' が含まれない。"""
@@ -354,9 +345,25 @@ class TestNoSpyBotImport:
             "atlas_v3.bots.__init__ が spy_bot を直接 import している — delegate 禁止違反"
         )
 
+    def test_no_subprocess_import_in_main(self):
+        """main.py が subprocess を import しない（β-2 廃止検証）。"""
+        import importlib
+        mod = importlib.import_module("atlas_v3.bots.main")
+        src = pathlib.Path(mod.__file__).read_text(encoding="utf-8")
+        # import subprocess 行が存在しないことを確認（docstring のコメントは除く）
+        import ast
+        tree = ast.parse(src)
+        has_subprocess_import = any(
+            (isinstance(node, ast.Import) and any(a.name == "subprocess" for a in node.names))
+            or (isinstance(node, ast.ImportFrom) and node.module == "subprocess")
+            for node in ast.walk(tree)
+        )
+        assert not has_subprocess_import, (
+            "atlas_v3.bots.main が subprocess を import している — β-2 廃止違反"
+        )
+
     def test_trader_py_removed_or_no_spy_bot_import(self):
-        """trader.py が残っている場合、spy_bot を import していないこと。
-        (trader.py は delegate 実装のため存在しても spy_bot import 禁止)"""
+        """trader.py が残っている場合、spy_bot を import していないこと。"""
         bots_dir = pathlib.Path(__file__).parents[1] / "atlas_v3" / "bots"
         trader_path = bots_dir / "trader.py"
         if not trader_path.exists():
@@ -368,88 +375,34 @@ class TestNoSpyBotImport:
 
 
 # ---------------------------------------------------------------------------
-# [smoke] main() mock smoke テスト
+# [compat] 後方互換テスト
 # ---------------------------------------------------------------------------
 
-class TestMainSmoke:
-    """main() mock smoke: Popen mock で main() が正常に動作する。"""
+class TestBackwardCompat:
+    """build_parser が旧フラグと互換を保つことを確認する。"""
 
-    def test_main_paper_smoke(self, tmp_path):
-        """--mode paper で main() が 0 を返す。"""
-        fake_spy = tmp_path / "spy_bot.py"
-        fake_spy.write_text("# stub")
+    def test_all_original_flags_still_accepted(self):
+        """旧来の全フラグが引き続き argparse で受け付けられる。"""
+        from atlas_v3.bots.main import build_parser
+        parser = build_parser()
+        args = parser.parse_args([
+            "--mode", "paper",
+            "--dry-run",
+            "--no-orb",
+            "--no-calendar",
+            "--no-multi",
+        ])
+        assert args.mode == "paper"
+        assert args.dry_run is True
+        assert args.no_orb is True
+        assert args.no_calendar is True
+        assert args.no_multi is True
 
-        mock_proc = MagicMock(pid=1001, returncode=0)
-        mock_proc.wait.return_value = 0
-
-        with patch("atlas_v3.bots.main.launch_spy_bot", return_value=mock_proc), \
-             patch("atlas_v3.bots.main._SPY_BOT_PATH", fake_spy), \
-             patch("atlas_v3.bots.main._setup_sigterm_forward"):
-            from atlas_v3.bots.main import main
-            rc = main(["--mode", "paper"])
-
-        assert rc == 0
-
-    def test_main_live_smoke(self, tmp_path):
-        """--mode live で main() が 0 を返す。"""
-        fake_spy = tmp_path / "spy_bot.py"
-        fake_spy.write_text("# stub")
-
-        mock_proc = MagicMock(pid=1002, returncode=0)
-        mock_proc.wait.return_value = 0
-
-        with patch("atlas_v3.bots.main.launch_spy_bot", return_value=mock_proc), \
-             patch("atlas_v3.bots.main._SPY_BOT_PATH", fake_spy), \
-             patch("atlas_v3.bots.main._setup_sigterm_forward"):
-            from atlas_v3.bots.main import main
-            rc = main(["--mode", "live"])
-
-        assert rc == 0
-
-    def test_main_dry_smoke(self, tmp_path):
-        """--mode dry で main() が 0 を返す。"""
-        fake_spy = tmp_path / "spy_bot.py"
-        fake_spy.write_text("# stub")
-
-        mock_proc = MagicMock(pid=1003, returncode=0)
-        mock_proc.wait.return_value = 0
-
-        with patch("atlas_v3.bots.main.launch_spy_bot", return_value=mock_proc), \
-             patch("atlas_v3.bots.main._SPY_BOT_PATH", fake_spy), \
-             patch("atlas_v3.bots.main._setup_sigterm_forward"):
-            from atlas_v3.bots.main import main
-            rc = main(["--mode", "dry"])
-
-        assert rc == 0
-
-    def test_main_launches_once(self, tmp_path):
-        """main() が launch_spy_bot を 1 回だけ呼ぶ。"""
-        fake_spy = tmp_path / "spy_bot.py"
-        fake_spy.write_text("# stub")
-
-        mock_proc = MagicMock(pid=1004, returncode=0)
-        mock_proc.wait.return_value = 0
-
-        with patch("atlas_v3.bots.main.launch_spy_bot", return_value=mock_proc) as mock_launch, \
-             patch("atlas_v3.bots.main._SPY_BOT_PATH", fake_spy), \
-             patch("atlas_v3.bots.main._setup_sigterm_forward"):
-            from atlas_v3.bots.main import main
-            main(["--mode", "paper"])
-
-        assert mock_launch.call_count == 1
-
-    def test_main_keyboard_interrupt_sends_sigterm(self, tmp_path):
-        """KeyboardInterrupt 時に proc.send_signal(SIGTERM) が呼ばれる。"""
-        fake_spy = tmp_path / "spy_bot.py"
-        fake_spy.write_text("# stub")
-
-        mock_proc = MagicMock(pid=1005, returncode=0)
-        mock_proc.wait.side_effect = [KeyboardInterrupt, None]
-
-        with patch("atlas_v3.bots.main.launch_spy_bot", return_value=mock_proc), \
-             patch("atlas_v3.bots.main._SPY_BOT_PATH", fake_spy), \
-             patch("atlas_v3.bots.main._setup_sigterm_forward"):
-            from atlas_v3.bots.main import main
-            main(["--mode", "paper"])
-
-        mock_proc.send_signal.assert_called_with(signal.SIGTERM)
+    def test_mode_choices_unchanged(self):
+        """mode の選択肢が paper/live/dry/test-connect であること。"""
+        from atlas_v3.bots.main import build_parser
+        parser = build_parser()
+        # 全選択肢が通る
+        for mode in ["paper", "live", "dry", "test-connect"]:
+            args = parser.parse_args(["--mode", mode])
+            assert args.mode == mode

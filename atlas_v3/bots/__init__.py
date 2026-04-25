@@ -1,37 +1,46 @@
-"""atlas_v3.bots — subprocess 境界 spy_bot.py launcher パッケージ。
+"""atlas_v3.bots — AtlasEngine native ランチャーパッケージ。
 
 公開シンボル
 -----------
 main
-    argparse + subprocess.Popen で spy_bot.py を起動する CLI エントリポイント関数。
+    argparse + AtlasEngine で native run loop を起動する CLI エントリポイント関数。
     python3 -m atlas_v3.bots --mode paper で呼び出される。
 
 build_parser
     ArgumentParser 構築関数（テスト・外部ツールから直接利用可能）。
 
-build_spy_bot_argv
-    parser 解析済み Namespace → spy_bot.py argv 変換関数。
+build_disable_names
+    parser 解析済み Namespace → 除外 tactic_name リスト変換関数。
 
-launch_spy_bot
-    spy_bot.py を subprocess.Popen で起動する低レベル関数。
+build_engine_native
+    TacticRegistry 経由で AtlasEngine を組み立てるファクトリ関数。
 
-設計制約（Redteam 対案 2026-04-25 採択）
-----------------------------------------
-- delegate 禁止: spy_bot.py を import して SPYCreditSpreadBot を呼ぶ実装は却下済。
-- subprocess 境界: spy_bot.py は独立プロセスとして起動する。
-  logger / env / PID はすべて spy_bot 側で完結する。
-- AtlasTrader クラスはこのパッケージから削除。delegate 復活禁止。
+run_loop
+    AtlasEngine の tick loop（stop_event まで継続）。
+
+setup_graceful_shutdown
+    SIGTERM / SIGINT ハンドラ登録関数。
+
+設計制約（β-2 配線実装 2026-04-25）
+--------------------------------------
+- subprocess.Popen(spy_bot.py) 経路を廃止。
+- AtlasEngine を直接インスタンス化し TacticRegistry 経由で 11 戦術を登録。
+- spy_bot.py / common/* / chronos* / atlas_v3/core/engine.py / registry.py は変更禁止。
 """
 from atlas_v3.bots.main import (
+    build_disable_names,
+    build_engine_native,
     build_parser,
-    build_spy_bot_argv,
-    launch_spy_bot,
     main,
+    run_loop,
+    setup_graceful_shutdown,
 )
 
 __all__ = [
+    "build_disable_names",
+    "build_engine_native",
     "build_parser",
-    "build_spy_bot_argv",
-    "launch_spy_bot",
     "main",
+    "run_loop",
+    "setup_graceful_shutdown",
 ]
