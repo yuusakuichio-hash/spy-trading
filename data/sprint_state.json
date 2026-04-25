@@ -1,5 +1,5 @@
 {
-  "last_updated": "2026-04-25 12:25 JST",
+  "last_updated": "2026-04-25 12:39 JST",
   "current_phase_id": "monday-preopen-prep",
   "current_phase_label": "月曜 (2026-04-27 ET) Paper 開始 pre-open 準備 + Medium gap 全消化済",
   "overall_note": "Phase 2 Engine 移植 9/9 完了 (commit d4929a7・505 tests PASS) / Knight Capital TOP5 fix (10戦術 wiring) / 案 F preemptive relogin 完遂 (b4bc64e Login successful) / 動的パラメータ + TraderProfile 4 preset 実装済 / Medium gap 5/5 全完了: GammaScalp(20PASS) + TracerBullet(25PASS) + MorningDigest(15PASS) + Hypothesis(43新規) + K8sReconcile(29PASS) / 残: 月曜 ET pre-open canary smoke + PDT live wiring",
@@ -165,6 +165,12 @@
       "name": "test_gmail_notify_improve collection error 復旧 (legacy drift で 38 test skip)",
       "status": "completed",
       "artifact": "commit 8e1ced2 / SPX_LOG_DIR tmp 化 + module-level skip / collection blocker 解消"
+    },
+    {
+      "id": "sentinel-threshold-align-20260425",
+      "name": "sentinel-watchdog 閾値 DMS 周期整合 (連鎖 KILL_SWITCH 事故根治)",
+      "status": "completed",
+      "artifact": "commit 159aa6ee + plist env 同期 / HEARTBEAT_STALE 180→1100s + MIN_BEATS 3→1 / 25/25 PASS"
     },
     {
       "id": "monday-preopen-prep",
