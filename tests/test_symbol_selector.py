@@ -257,10 +257,12 @@ def test_all_none_metrics_neutral_score():
     m = SymbolMetrics(symbol="NEUTRAL")
     result = score_symbols([m])
     assert len(result) == 1
-    # 全データNone時は各指標0.5→合計スコアも0.5付近になるはず
-    assert 0.3 <= result[0].score <= 0.7, (
-        f"Expected neutral score near 0.5, got {result[0].score:.4f}"
-    )
+    # H-6: ivr=None → 候補除外(末尾固定・score=0) に設計変更。
+    # 旧テスト: score ≈ 0.5 (fail-open)
+    # 新テスト: excluded=True, score=0.0, exclude_reason="ivr_unavailable"
+    assert result[0].excluded is True, "ivr=None 銘柄は excluded=True のはず"
+    assert result[0].exclude_reason == "ivr_unavailable"
+    assert result[0].score == 0.0
 
 
 # ── Test 16: _normalize_ivr がユニバース分布を正しく使う ────────────────────

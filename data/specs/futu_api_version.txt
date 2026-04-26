@@ -1,0 +1,125 @@
+Name: futu_api
+Version: 10.2.6218
+Summary: Futu Quantitative Trading API
+Home-page: https://github.com/FutunnOpen/py-futu-api
+Author: Futu, Inc.
+Author-email: ftdev@futunn.com
+License: Apache License 2.0
+Location: /opt/homebrew/lib/python3.14/site-packages
+Requires: pandas, protobuf, PyCryptodome, simplejson
+
+# spy_bot.pyが使うimport
+from futu import (
+    OpenQuoteContext, OpenSecTradeContext,
+    RET_OK, TrdEnv, TrdSide, OrderType, KLType, OptionType
+)
+import futu as ft
+
+# ── OpenQuoteContext ──────────────────────────────────────────────────────────
+OpenQuoteContext(host='127.0.0.1', port=11111, is_encrypt=None, is_async_connect=False)
+
+## get_market_snapshot(code_list)
+# code_list: list[str]  例: ["US.SPY"], ["US.VIX"], codes[:200]
+# 戻り値: (RET_OK, DataFrame) | (RET_ERROR, str)
+# spy_bot.pyが使うカラム:
+#   last_price, open_price, high_price, low_price, prev_close_price
+#   option_valid, option_type, option_strike_price, option_implied_volatility
+#   option_delta, option_gamma, option_vega, option_theta, option_rho
+#   option_open_interest, option_net_open_interest
+# 注意: options関連カラムはoption_valid==Trueの行のみ合法値
+
+## request_history_kline(code, start, end, ktype, autype, fields, max_count, ...)
+# spy_bot.pyの実際の呼び出し:
+#   quote_ctx.request_history_kline(
+#       "US.VIX" | UNDERLYING_CODE,
+#       start=start_date.strftime("%Y-%m-%d"),
+#       end=end_date.strftime("%Y-%m-%d"),
+#       ktype=ft.KLType.K_DAY,
+#       max_count=300,
+#   )
+# 戻り値: (ret, kline_df, page_req_key)
+# spy_bot.pyが使うカラム: close (float)
+# KLType.K_DAY = 'K_DAY'
+
+## get_option_chain(code, index_option_type, start, end, option_type, option_cond_type, data_filter)
+# spy_bot.pyの実際の呼び出し:
+#   quote_ctx.get_option_chain(
+#       UNDERLYING_CODE,           # "US.SPY"
+#       start=expiry,              # "YYYY-MM-DD"
+#       end=expiry,
+#       option_type=ft.OptionType.PUT | ft.OptionType.CALL
+#   )
+# 戻り値: (ret, DataFrame)
+# DataFrame カラム: code, name, lot_size, stock_type, option_type,
+#                   stock_owner, strike_time, strike_price, suspension,
+#                   stock_id, index_option_type, expiration_cycle,
+#                   option_standard_type, option_settlement_mode
+# 注意: start/end は到期日。start==end で単一DTE指定可。時間範囲最大30日。
+
+# ── OpenSecTradeContext ───────────────────────────────────────────────────────
+OpenSecTradeContext(
+    filter_trdmarket='US',   # spy_bot.pyはUS市場
+    host='127.0.0.1',
+    port=11111,
+    is_encrypt=None,
+    security_firm='FUTUSECURITIES'
+)
+
+## get_acc_list()
+# 戻り値: (ret, DataFrame)
+# spy_bot.pyが使うカラム: acc_id, trd_env
+# trd_env: 'REAL' | 'SIMULATE'
+
+## accinfo_query(trd_env, acc_id, acc_index, refresh_cache, currency, asset_category)
+# spy_bot.pyの実際の呼び出し:
+#   trade_ctx.accinfo_query(trd_env=self.trade_env, acc_id=int(self.account_id or 0))
+# 戻り値: (ret, DataFrame)
+# spy_bot.pyが使うカラム: net_assets, cash
+
+## place_order(price, qty, code, trd_side, order_type, trd_env, acc_id, ...)
+# spy_bot.pyの実際の呼び出し（マーケット注文）:
+#   trade_ctx.place_order(
+#       price=0,
+#       qty=qty,                      # int
+#       code=code,                    # futuオプションコード "US.SPY260413P668000"
+#       trd_side=TrdSide.SELL | TrdSide.BUY,
+#       order_type=OrderType.MARKET,
+#       trd_env=TrdEnv.REAL | TrdEnv.SIMULATE,
+#       acc_id=int(account_id),
+#   )
+# 戻り値: (ret, DataFrame)
+# spy_bot.pyが使うカラム: order_id
+# OrderType.MARKET = 'MARKET'  ← 成行注文
+# TrdSide.SELL = 'SELL', TrdSide.BUY = 'BUY'
+
+## order_list_query(order_id, status_filter_list, code, start, end, trd_env, acc_id, ...)
+# spy_bot.pyの実際の呼び出し:
+#   trade_ctx.order_list_query(
+#       order_id=str(order_id),
+#       trd_env=env, acc_id=acc,
+#   )
+# 戻り値: (ret, DataFrame)
+# spy_bot.pyが使うカラム: order_status
+# order_status == "FILLED_ALL" で約定完了確認
+
+## position_list_query(code, trd_env, acc_id, ...)
+# spy_bot.pyの実際の呼び出し:
+#   trade_ctx.position_list_query(trd_env=self.trade_env, acc_id=int(self.account_id or 0))
+# 戻り値: (ret, DataFrame)
+# spy_bot.pyが使うカラム: code, qty, cost_price, pl_val (unrealized P&L)
+
+# ── Enum値（spy_bot.pyが使うもの） ────────────────────────────────────────────
+TrdEnv.REAL     = 'REAL'
+TrdEnv.SIMULATE = 'SIMULATE'
+TrdSide.BUY     = 'BUY'
+TrdSide.SELL    = 'SELL'
+OrderType.MARKET = 'MARKET'
+KLType.K_DAY    = 'K_DAY'
+OptionType.PUT  = 'PUT'
+OptionType.CALL = 'CALL'
+TrdMarket.US    = 'US'
+
+# ── futuオプションコード形式 ──────────────────────────────────────────────────
+# US.{TICKER}{YY}{MM}{DD}{C|P}{STRIKE*1000 (8桁)}
+# 例: US.SPY260413P668000
+#     → SPY, 2026-04-13, PUT, Strike $668.000

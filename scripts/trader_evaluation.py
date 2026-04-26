@@ -100,6 +100,16 @@ def send_pushover(title: str, message: str, priority: int = 0) -> bool:
 # データロード
 # ---------------------------------------------------------------------------
 
+# Fix 1: ファイル名 → tactic のデフォルトマッピング（古いログに tactic が欠落している場合の後方互換）
+_SOURCE_TACTIC_MAP: dict[str, str] = {
+    "condor_pnl":    "ic_sell",
+    "momentum_pnl":  "orb_buy",
+    "straddle_pnl":  "straddle_buy",
+    "butterfly_pnl": "butterfly",
+    "calendar_pnl":  "calendar_sell",
+}
+
+
 def load_all_trades() -> list[dict]:
     """condor_pnl.json などを結合して全トレードリストを返す"""
     pnl_files = [
@@ -116,9 +126,13 @@ def load_all_trades() -> list[dict]:
         try:
             raw = json.loads(f.read_text(encoding="utf-8"))
             trades = raw.get("trades", []) if isinstance(raw, dict) else raw
+            default_tactic = _SOURCE_TACTIC_MAP.get(f.stem, "unknown")
             for t in trades:
                 if isinstance(t, dict):
                     t.setdefault("_source", f.stem)
+                    # Fix 1: tactic が欠落している場合はファイル名から推定して補完
+                    if not t.get("tactic"):
+                        t["tactic"] = default_tactic
             all_trades.extend(trades)
         except Exception as e:
             print(f"[load] {f.name}: {e}", file=sys.stderr)
@@ -283,7 +297,12 @@ def _daily_pnl_series(paired: list[dict]) -> list[float]:
 
 
 def calc_m6_sortino(paired: list[dict], rf_daily: float = 0.0) -> Optional[float]:
-    """M6: Sortino Ratio = (avg_return - rf) / 下方偏差"""
+    """M6: Sortino Ratio = (avg_return - rf) / 下方偏差
+
+    2026-04-25 修正: downside_dev=0 (損失日なし) は計算不能として None 返却。
+    旧実装は float('inf') を返していたが test_16 期待値 None と乖離。
+    inf は consumer 側で比較演算/JSON serialize でバグ源になるため None が安全。
+    """
     series = _daily_pnl_series(paired)
     if len(series) < 3:
         return None
@@ -292,6 +311,7 @@ def calc_m6_sortino(paired: list[dict], rf_daily: float = 0.0) -> Optional[float
     downside_sq = [(min(r - rf_daily, 0)) ** 2 for r in series]
     downside_dev = math.sqrt(sum(downside_sq) / n)
     if downside_dev == 0:
+        # 損失日ゼロ = 下方リスクなし = Sortino 計算不能 (None)
         return None
     return round((avg - rf_daily) / downside_dev, 3)
 
@@ -315,7 +335,9 @@ def calc_m7_calmar(paired: list[dict]) -> Optional[float]:
         if dd > max_dd:
             max_dd = dd
     if max_dd == 0:
-        return None
+        # Fix 2: DD=0 = ドローダウンなし = Calmar は理論上 +∞
+        annual_return = cumulative[-1] * (252 / len(series))
+        return float("inf") if annual_return > 0 else None
     annual_return = cumulative[-1] * (252 / len(series))
     return round(annual_return / max_dd, 3)
 
@@ -345,7 +367,9 @@ def calc_m8_mar(paired: list[dict]) -> Optional[float]:
         if dd > max_dd:
             max_dd = dd
     if max_dd == 0:
-        return None
+        # Fix 2: DD=0 = ドローダウンなし = MAR は理論上 +∞
+        annual_return = cumulative[-1] * (12 / len(monthly))
+        return float("inf") if annual_return > 0 else None
     annual_return = cumulative[-1] * (12 / len(monthly))
     return round(annual_return / max_dd, 3)
 
@@ -585,6 +609,48 @@ def calc_m15_revenge_trade_rate(all_trades: list[dict]) -> float:
 
 
 # ---------------------------------------------------------------------------
+# M16: PDT使用率（FINRA PDT遵守確認）
+# ---------------------------------------------------------------------------
+
+def calc_m16_pdt_usage_rate(capital_usd: float = 0.0) -> Optional[dict]:
+    """M16: PDT使用率 = 消費件数 / 上限件数（$25K未満のみ有意）。
+
+    Returns:
+        {
+            "constrained": bool,       # $25K未満かどうか
+            "rolling5_count": int,     # 直近5営業日消費数
+            "pdt_limit": int | None,   # 上限（$25K以上はNone）
+            "usage_rate": float | None,  # 消費/上限（$25K以上はNone）
+            "pdt_remaining": int | str,  # 残数
+            "violation_detected": bool,  # 上限到達（=次回エントリーでFINRA違反）
+        }
+    """
+    try:
+        import sys
+        from pathlib import Path
+        _base = Path(__file__).resolve().parents[1]
+        sys.path.insert(0, str(_base))
+        from common.pdt_tracker import get_global_tracker as _get_pdt_tracker, PDT_LIMIT as _PDT_LIM
+        _pdt = _get_pdt_tracker()
+        _status = _pdt.get_status(capital_usd)
+        constrained = _status["pdt_constrained"]
+        rolling5    = _status["rolling5_count"]
+        remaining   = _status["pdt_remaining"]
+        usage_rate  = round(rolling5 / _PDT_LIM, 4) if constrained else None
+        violation   = constrained and isinstance(remaining, int) and remaining == 0
+        return {
+            "constrained":         constrained,
+            "rolling5_count":      rolling5,
+            "pdt_limit":           _PDT_LIM if constrained else None,
+            "usage_rate":          usage_rate,
+            "pdt_remaining":       remaining,
+            "violation_detected":  violation,
+        }
+    except Exception as _e:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # EV-1: 仮説-結果マッチング
 # ---------------------------------------------------------------------------
 
@@ -782,21 +848,29 @@ def run_evaluation(
     trades_in_period = filter_by_date_range(all_trades, start, end)
     paired = pair_trades(trades_in_period)
 
+    # Fix 2: M6-M9はドローダウン時系列が必要。日次評価(1日分)では系列長<3で
+    # 必ずNullになるため、全期間のpairedを使って算出する。
+    # 直近90日分を上限として使用（十分な時系列長を確保）
+    _dd_start = today - timedelta(days=89)  # 90日間の時系列
+    _dd_trades = filter_by_date_range(all_trades, _dd_start, today)
+    _dd_paired = pair_trades(_dd_trades)
+
     m1 = calc_m1_profit_factor(paired)
     m2 = calc_m2_win_rate(paired)
     m3 = calc_m3_expected_value(paired)
     m4 = calc_m4_rom(paired, margin_usd)
     m5 = calc_m5_monthly_consistency(all_trades)
-    m6 = calc_m6_sortino(paired)
-    m7 = calc_m7_calmar(paired)
-    m8 = calc_m8_mar(paired)
-    m9 = calc_m9_ulcer_index(paired)
+    m6 = calc_m6_sortino(_dd_paired)   # Fix 2: 全期間で計算
+    m7 = calc_m7_calmar(_dd_paired)    # Fix 2: 全期間で計算
+    m8 = calc_m8_mar(_dd_paired)       # Fix 2: 全期間で計算
+    m9 = calc_m9_ulcer_index(_dd_paired)  # Fix 2: 全期間で計算
     m10 = calc_m10_e_ratio(paired)
     m11 = calc_m11_slippage_rate(paired)
     m12 = calc_m12_naked_leg_rate(trades_in_period)
     m13 = calc_m13_discipline_score(paired, trades_in_period)
     m14 = calc_m14_consistency_score(paired)
     m15 = calc_m15_revenge_trade_rate(trades_in_period)
+    m16 = calc_m16_pdt_usage_rate(capital_usd=margin_usd)
 
     ev1 = calc_ev1_hypothesis_match(trades_in_period)
     tactic_bd = calc_ev4_tactic_breakdown(paired)
@@ -830,6 +904,7 @@ def run_evaluation(
             "M13_discipline_score": m13,
             "M14_consistency_score": m14,
             "M15_revenge_trade_rate": m15,
+            "M16_pdt_usage": m16,
         },
         "ev_gaps": {
             "EV1_hypothesis_match": ev1,
@@ -931,6 +1006,34 @@ def build_markdown_report(result: dict, target_date: date) -> str:
         f"| M14 Consistency Score | {_fmt(m.get('M14_consistency_score'), '%', 1, pct_scale=True)} | {_rating(m.get('M14_consistency_score'), 0.30, 0.50, higher_is_better=False)} | <30% |",
         f"| M15 リベンジトレード率 | {_fmt(m.get('M15_revenge_trade_rate'), '%', 1, pct_scale=True)} | {'GOOD' if (m.get('M15_revenge_trade_rate') or 0) == 0 else 'WARN'} | 0件 |",
         "",
+        "## 規制遵守指標 (M16)",
+        "",
+        "| 指標 | 値 | 判定 |",
+        "|------|-----|------|",
+    ]
+
+    _m16 = m.get("M16_pdt_usage")
+    if _m16:
+        _m16_constrained = _m16.get("constrained", True)
+        _m16_rolling5    = _m16.get("rolling5_count", 0)
+        _m16_limit       = _m16.get("pdt_limit", 3)
+        _m16_usage       = _m16.get("usage_rate")
+        _m16_remaining   = _m16.get("pdt_remaining", "N/A")
+        _m16_violation   = _m16.get("violation_detected", False)
+        _m16_usage_str   = f"{_m16_rolling5}/{_m16_limit}件 ({_fmt(_m16_usage, '%', 0, pct_scale=True)})" if _m16_constrained else "無制限"
+        _m16_rating      = "CRITICAL" if _m16_violation else ("WARN" if _m16_constrained and isinstance(_m16_remaining, int) and _m16_remaining <= 1 else "GOOD")
+        lines += [
+            f"| M16 PDT使用率 | {_m16_usage_str} | {_m16_rating} |",
+            f"| PDT残本数 | {_m16_remaining} | {'FINRA違反リスクあり' if _m16_violation else 'OK'} |",
+            "",
+        ]
+    else:
+        lines += [
+            f"| M16 PDT使用率 | N/A | N/A |",
+            "",
+        ]
+
+    lines += [
         "## EV-1 仮説-結果マッチング",
         "",
     ]

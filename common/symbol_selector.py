@@ -39,37 +39,73 @@ log = logging.getLogger(__name__)
 # ── デフォルト候補銘柄 ────────────────────────────────────────────────────────
 # atlas_rules.yaml に symbol_universe キーがあればそちらを使う
 # なければこのリストをフォールバックとして使う
+# C-19 (2026-04-22): root/symbol_selector.py SYMBOLS と整合的に SPX/MSFT 追加
+# root/ は "US.SPY" futu options コード、common/ は "SPY" プレーン・ティッカー。
+# format は異なるが symbol universe は一致させる (CIで drift 検知する契約テスト有り)
 _DEFAULT_UNIVERSE: list[str] = [
-    "SPY", "QQQ", "IWM",
-    "META", "AMZN", "GOOGL", "NVDA", "TSLA", "AAPL",
+    "SPY", "QQQ", "IWM", "SPX",
+    "META", "AMZN", "GOOGL", "NVDA", "TSLA", "AAPL", "MSFT",
 ]
 
 # ── 戦術別の重みプロファイル ─────────────────────────────────────────────────
-# キー: 指標名、値: ウェイト (合計が1.0になるように正規化される)
+# 2026-04-25: 実運用 7 戦術 (PAPER_MASS_VERIFY_TACTICS) を正準キー化
+# 旧 4 戦術 (credit_spread / iron_condor / straddle / butterfly) は _TACTIC_ALIAS
+# で redirect・後方互換維持。根拠: agent a31045 設計 / project_implementation_gap_audit_20260425
 _TACTIC_WEIGHTS: dict[str, dict[str, float]] = {
-    "credit_spread": {
-        "ivr":        0.40,
-        "volume":     0.20,
-        "gap":       -0.15,   # 負=gap大→スコアDOWN
-        "liquidity":  0.15,
-        "vix_corr":   0.10,
-    },
-    "iron_condor": {
+    # ── 売り戦術 (IVR 高環境を好む・プレミアム回収型) ──────────────────
+    "cs_sell": {
         "ivr":        0.35,
         "volume":     0.15,
+        "gap":       -0.15,
+        "liquidity":  0.25,
+        "vix_corr":   0.10,
+    },
+    "ic_sell": {
+        "ivr":        0.40,
+        "volume":     0.10,
+        "gap":       -0.25,
+        "liquidity":  0.30,
+        "vix_corr":   0.10,
+    },
+    "strangle_sell": {
+        "ivr":        0.40,
+        "volume":     0.10,
         "gap":       -0.20,
         "liquidity":  0.20,
         "vix_corr":   0.10,
     },
-    "straddle": {
+    "calendar_sell": {
         "ivr":        0.25,
-        "volume":     0.30,
-        "gap":        0.25,   # 正=gap大→スコアUP
-        "liquidity":  0.10,
+        "volume":     0.10,
+        "gap":       -0.25,
+        "liquidity":  0.20,
+        "vix_corr":   0.20,
+    },
+    # ── 買い戦術 (gap / volume spike でボラ or 方向性狙い) ──────────
+    "orb_buy": {
+        "ivr":        0.10,
+        "volume":     0.35,
+        "gap":        0.30,
+        "liquidity":  0.15,
         "vix_corr":   0.10,
     },
+    "orb_1dte": {
+        "ivr":        0.20,
+        "volume":     0.25,
+        "gap":        0.20,
+        "liquidity":  0.25,
+        "vix_corr":   0.10,
+    },
+    "straddle_buy": {
+        "ivr":       -0.10,
+        "volume":     0.35,
+        "gap":        0.30,
+        "liquidity":  0.15,
+        "vix_corr":   0.10,
+    },
+    # Butterfly: low IVR 有利 (IC_sell と逆・pinning pattern 狙い)
     "butterfly": {
-        "ivr":       -0.20,   # 負=IVR低い方が好ましい
+        "ivr":       -0.20,
         "volume":     0.10,
         "gap":       -0.35,
         "liquidity":  0.25,
@@ -77,7 +113,31 @@ _TACTIC_WEIGHTS: dict[str, dict[str, float]] = {
     },
 }
 
-# フォールバック: 未知の戦術名
+# ── 旧戦術名 → 実運用戦術名 alias (後方互換) ─────────────────────────────
+_TACTIC_ALIAS: dict[str, str] = {
+    "credit_spread": "cs_sell",
+    "iron_condor":   "ic_sell",
+    "straddle":      "straddle_buy",
+    "CS":            "cs_sell",
+    "IC":            "ic_sell",
+    "StraddleBuy":   "straddle_buy",
+    "StrangleSell":  "strangle_sell",
+    "Calendar":      "calendar_sell",
+    "ORB":           "orb_buy",
+}
+
+# 既存テスト後方互換: 旧名でも _TACTIC_WEIGHTS から直接引ける
+for _old, _new in _TACTIC_ALIAS.items():
+    if _new in _TACTIC_WEIGHTS:
+        _TACTIC_WEIGHTS.setdefault(_old, _TACTIC_WEIGHTS[_new])
+
+
+def _resolve_tactic(tactic: str) -> str:
+    """alias 解決: 旧戦術名を実運用戦術名へ正規化する。"""
+    return _TACTIC_ALIAS.get(tactic, tactic)
+
+
+# フォールバック: 未知の戦術名 (alias 解決後もヒットしない場合のみ使用)
 _DEFAULT_WEIGHTS: dict[str, float] = {
     "ivr":       0.30,
     "volume":    0.20,
@@ -119,16 +179,23 @@ class SymbolScore:
         )
 
 
+# H-6: IVR 取得不能銘柄に与えるスコア（0.0 = 末尾固定、fail-open 防止）
+# score_symbols() は ivr=None 銘柄に exclude_reason="ivr_unavailable" を付与する
+_IVR_NONE_SCORE: float = 0.0
+
 # ── ノーマライズ関数 ──────────────────────────────────────────────────────────
 
 def _normalize_ivr(ivr: Optional[float], universe_ivrs: list[float]) -> float:
     """IVRをユニバース内での相対位置 (0.0〜1.0) にノーマライズ。
 
     固定閾値ゼロ。ユニバース全体のIVR分布からsoftmax様に算出する。
-    データなし→0.5 (ニュートラル)
+
+    H-6: ivr=None は 0.5 (ニュートラル) ではなく _IVR_NONE_SCORE (0.0) を返す。
+    これにより IVR 取得失敗銘柄が「中程度の環境」と誤認されてエントリーされる
+    fail-open を防ぐ。score_symbols() 内でこの銘柄は末尾固定扱いになる。
     """
     if ivr is None:
-        return 0.5
+        return _IVR_NONE_SCORE  # H-6: 0.5 (fail-open) → 0.0 (末尾固定)
     valid = [v for v in universe_ivrs if v is not None]
     if len(valid) < 2:
         # ユニバースデータ不足→生のIVRを0〜100基準で正規化
@@ -291,7 +358,7 @@ def score_symbols(
     if not metrics_list:
         return []
 
-    weights = _TACTIC_WEIGHTS.get(tactic, _DEFAULT_WEIGHTS)
+    weights = _TACTIC_WEIGHTS.get(_resolve_tactic(tactic), _DEFAULT_WEIGHTS)
     results: list[SymbolScore] = []
 
     # 除外後のユニバースのみでノーマライズ計算する
@@ -299,6 +366,10 @@ def score_symbols(
               if not (earnings_exclude and m.near_earnings)]
     excluded_metrics = [m for m in metrics_list
                         if earnings_exclude and m.near_earnings]
+
+    # H-6: IVR=None 銘柄をアクティブリストから除外して末尾固定扱いにする
+    ivr_none_metrics = [m for m in active if m.ivr is None]
+    active = [m for m in active if m.ivr is not None]
 
     for m in active:
         raw = _compute_raw_scores(m, active)
@@ -312,6 +383,20 @@ def score_symbols(
 
     # スコア降順
     results.sort(key=lambda x: x.score, reverse=True)
+
+    # H-6: IVR=None 銘柄を末尾に追加（スコア=0、除外扱い）
+    for m in ivr_none_metrics:
+        log.warning(
+            f"[SymbolSelector] {m.symbol}: ivr=None → 候補から除外(末尾固定) [H-6 fail-open防止]"
+        )
+        results.append(SymbolScore(
+            symbol=m.symbol,
+            score=0.0,
+            raw_scores={},
+            metrics=m,
+            excluded=True,
+            exclude_reason="ivr_unavailable",
+        ))
 
     # 除外銘柄を末尾に追加（スコア=0）
     for m in excluded_metrics:

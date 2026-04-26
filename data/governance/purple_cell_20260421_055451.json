@@ -1,0 +1,10 @@
+{
+  "timestamp": "2026-04-21T05:54:51.989478+09:00",
+  "trigger": "manual",
+  "api_key_set": false,
+  "report_content_length": 6937,
+  "audit_result": null,
+  "error": null,
+  "status": "skipped_no_key",
+  "message": "Gemini API key not configured. Set GEMINI_API_KEY env var to enable Purple Cell audits."
+}

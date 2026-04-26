@@ -106,6 +106,51 @@ def test_hedge_code_qqq():
     assert "480000" in code
 
 
+# ── M-4: ATM strike 銘柄別grid ────────────────────────────────────────────────
+
+def test_m4_atm_strike_spy_interval():
+    """M-4: SPY strike_interval=$1.0 で正しく丸める。"""
+    from common.symbol_meta import get_meta
+    meta = get_meta("US.SPY")
+    interval = meta.get("strike_interval", 1.0)
+    price = 553.7
+    atm = round(price / interval) * interval
+    assert atm == 554.0
+    assert atm % interval == 0.0
+
+
+def test_m4_atm_strike_iwm_interval():
+    """M-4: IWM strike_interval=$0.5 で正しく丸める（$1刻みなら非存在strike）。"""
+    from common.symbol_meta import get_meta
+    meta = get_meta("US.IWM")
+    interval = meta.get("strike_interval", 1.0)
+    assert interval == 0.5
+    price = 199.3
+    atm = round(price / interval) * interval
+    assert atm == 199.5  # $0.5刻み
+    assert atm % interval == pytest.approx(0.0)
+
+
+def test_m4_atm_strike_spx_interval():
+    """M-4: SPX strike_interval=$5.0 で正しく丸める。"""
+    from common.symbol_meta import get_meta
+    meta = get_meta("US..SPX")
+    interval = meta.get("strike_interval", 1.0)
+    assert interval == 5.0
+    price = 5412.3
+    atm = round(price / interval) * interval
+    assert atm == 5410.0  # $5刻み
+
+
+def test_m4_atm_strike_old_round_would_fail():
+    """M-4: 旧実装 round(price) はIWMで$0.5刻みの隣に非存在strikeを生成する。"""
+    price = 199.3
+    old_atm = round(price)   # = 199 (存在しないstrike if IWM)
+    interval = 0.5            # IWM実際の刻み
+    new_atm = round(price / interval) * interval  # = 199.5 (正しい)
+    assert old_atm != new_atm  # 旧実装と新実装が違う値を返すことを確認
+
+
 def test_hedge_code_tsla():
     """TSLA のヘッジコードが正しい形式（高株価銘柄も対応）。"""
     code = _build_hedge_code("TSLA", "CALL", 250.0)

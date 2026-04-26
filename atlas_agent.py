@@ -46,9 +46,44 @@ try:
     _DEV_SCANNER_OK = True
 except Exception:
     _DEV_SCANNER_OK = False
+
+# Bot動作乖離検知 (観点A-D リアルタイム監視)
+try:
+    from common.bot_deviation_detector import DeviationDetector as _DeviationDetector
+    _atlas_deviation_detector = _DeviationDetector()
+    _DEVIATION_DETECTOR_OK = True
+except Exception:
+    _atlas_deviation_detector = None
+    _DEVIATION_DETECTOR_OK = False
+
+# PDT Tracker 連携（全戦術合算FINRA PDTカウンタ）
+try:
+    from common.pdt_tracker import get_global_tracker as _pdt_get_tracker, PDT_LIMIT as _PDT_LIMIT
+    _pdt_tracker_agent = _pdt_get_tracker()
+    _PDT_TRACKER_AGENT_OK = True
+except Exception:
+    _pdt_tracker_agent = None
+    _PDT_TRACKER_AGENT_OK = False
 from collections import deque
 from pathlib import Path
 from typing import Any
+
+# ── Heartbeat pulse（能動監視）───────────────────────────────────────────────
+try:
+    from common.heartbeat import write_pulse as _write_pulse
+    _HEARTBEAT_OK = True
+except ImportError:
+    _HEARTBEAT_OK = False
+    def _write_pulse(*a, **kw): pass  # type: ignore[misc]
+
+# ── 外部死活監視 ping（Pushover と独立した Tier 2 保険） ─────────────────────
+# Atlas: SPXオプションBot 系（Chronos と混同禁止）
+try:
+    from common.external_health_ping import ping_healthchecks as _ext_ping
+    _EXT_PING_OK = True
+except ImportError:
+    _EXT_PING_OK = False
+    def _ext_ping(*a, **kw) -> bool: return False  # type: ignore[misc]
 
 try:
     import yaml  # type: ignore
@@ -97,6 +132,19 @@ PUSHOVER_ALERT_TOKEN = os.environ.get("PUSHOVER_ALERT_TOKEN", "")
 PUSHOVER_OPS_TOKEN   = os.environ.get("PUSHOVER_OPS_TOKEN", PUSHOVER_ALERT_TOKEN)
 GITHUB_TOKEN         = os.environ.get("GITHUB_TOKEN", "")
 
+# ── 共通 Pushover クライアント（SPOF解消・backoff/queue一元管理・ゲートレイヤー） ──
+try:
+    from common import pushover_client as _pc
+    _PC_AVAILABLE = True
+    _LEVEL_CRITICAL = _pc.LEVEL_CRITICAL
+    _LEVEL_BATCHED  = _pc.LEVEL_BATCHED
+    _LEVEL_SILENT   = _pc.LEVEL_SILENT
+except ImportError:
+    _PC_AVAILABLE = False
+    _LEVEL_CRITICAL = "critical"
+    _LEVEL_BATCHED  = "batched"
+    _LEVEL_SILENT   = "silent"
+
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 def log(msg: str):
@@ -122,10 +170,53 @@ def log_action(entry: dict):
 
 
 # ── Pushover ─────────────────────────────────────────────────────────────────
-def pushover(title: str, msg: str, priority: int = 0, token: str | None = None):
+# 通知ゲートルール (2026-04-20):
+#   CRITICAL: 資金毀損/アカウント停止/本番異常/市場機会喪失の4系統のみ即時送信
+#   BATCHED : 場中に知っておくと良いが即断不要な情報（30分バッチ）
+#   SILENT  : ログのみ・定型報告・完了通知・起動通知
+def pushover(title: str, msg: str, priority: int = 0, token: str | None = None,
+             level: str | None = None):
+    """Pushover通知を送信する（ゲートレイヤー付き）。
+
+    level 省略時はタイトルとpriorityから自動判定:
+      priority >= 2                  → CRITICAL
+      /HALT|ALERT|APPROVAL_REQUIRED/ → CRITICAL
+      /BOOT|INFO|AUTOFIX/            → BATCHED
+      それ以外                        → BATCHED
+
+    common.pushover_client 経由で送信することで backoff/queue を全スクリプト間で
+    共有し、429 連鎖 ban を防止する（SPOF解消）。
+    """
     tok = token or PUSHOVER_OPS_TOKEN or PUSHOVER_ALERT_TOKEN
+
+    # レベル自動判定
+    if level is None:
+        if priority >= 2:
+            level = _LEVEL_CRITICAL
+        elif any(kw in title for kw in ("HALT", "ALERT", "APPROVAL_REQUIRED")):
+            level = _LEVEL_CRITICAL
+        elif any(kw in title for kw in ("DEVIATION/SURGE", "PDT") ) and priority >= 1:
+            level = _LEVEL_CRITICAL
+        elif "BOOT" in title or "AUTOFIX" in title or "INFO" in title:
+            level = _LEVEL_BATCHED
+        else:
+            level = _LEVEL_BATCHED
+
+    if _PC_AVAILABLE:
+        _pc.send(title, msg, priority=priority, token=tok or None, app_tag="Atlas", level=level)
+        return
+
+    # フォールバック: 共通クライアント import 失敗時
+    # SILENTはフォールバック時もログのみ
+    if level == _LEVEL_SILENT:
+        log(f"[SILENT] {title} | {msg[:100]}")
+        return
     if not tok or not PUSHOVER_USER:
         log(f"[NOTIFY_SKIP] missing token/user. title={title}")
+        return
+    if level == _LEVEL_BATCHED:
+        # フォールバック時はbatchedも送信しない（ログのみ）
+        log(f"[BATCHED/FALLBACK] {title} | {msg[:100]}")
         return
     try:
         data = {
@@ -579,7 +670,8 @@ def dispatch(fired: dict, cfg: dict) -> dict:
     result: dict[str, Any] = {"rule_id": rid, "level": level}
 
     if level == 1:
-        pushover(f"{header} INFO", "\n".join(body), priority=0)
+        # Level1 INFO は判断不要 → SILENT（ログのみ）
+        pushover(f"{header} INFO", "\n".join(body), priority=0, level=_LEVEL_SILENT)
         result["action"] = "notify_only"
 
     elif level == 2:
@@ -590,31 +682,82 @@ def dispatch(fired: dict, cfg: dict) -> dict:
             body.append("pre_checks: " + "; ".join(notes))
         if pre and not ok:
             body.append("→ 対応スキップ (pre_check失敗)")
-            pushover(f"{header} AUTOFIX SKIP", "\n".join(body), priority=1)
+            # Level2 AUTOFIX SKIP はBATCHED（pre_check失敗の事実は把握しておく程度）
+            pushover(f"{header} AUTOFIX SKIP", "\n".join(body), priority=1, level=_LEVEL_BATCHED)
             result["action"] = "skipped_precheck"
         else:
-            if atype == "restart_bot":
-                ar = action_restart_bot(cfg, rule, dry_run)
-            elif atype == "notify_only":
-                ar = {"type": "notify_only", "status": "OK"}
+            # C7修正: Level2 Two-Man Rule - ARMED + level2_approval_required の場合、
+            # Pushover承認待ちを挟む（緊急モードは除外）
+            tmr_cfg = cfg.get("autofix", {}).get("two_man_rule", {})
+            tmr_enabled = tmr_cfg.get("enabled", True) and not dry_run
+            l2_approval_required = tmr_cfg.get("level2_approval_required", False)
+            _emergency_bypass = any(
+                cond in matched for cond in tmr_cfg.get("emergency_bypass_conditions", [])
+            )
+            _tmr_min = tmr_cfg.get("min_level", 3)
+
+            # BUG-9: この分岐は min_level=3 (デフォルト) のため _tmr_min <= 2 が False となり
+            # 通常は到達不可（dead code）。
+            # level2_approval_required=False かつ min_level=3 が標準設定のため
+            # 運用ブロックを防ぐための意図的な無効化設計（C7-B1修正）。
+            # min_level を 2 に変更した場合のみ有効化される安全弁として残す。
+            if (tmr_enabled and l2_approval_required and
+                    _tmr_min <= 2 and not _emergency_bypass and
+                    atype not in ("notify_only",)):
+                # Level2 承認要求（min_level<=2 かつ level2_approval_required=True の場合のみ到達）
+                _l2_approval_body = (
+                    f"[Two-Man Rule] Level2 AUTOFIX 承認要求\n"
+                    f"rule: {rid}\n"
+                    f"desc: {desc}\n"
+                    f"action: {atype}\n"
+                    f"\n実行するには GitHub Issue にコメント 'APPROVE {rid}' または\n"
+                    f"ntfy.sh/spxbot-hub-yuusaku2026 に 'APPROVE {rid}' を送信してください。\n"
+                    f"5分応答なしで実行キャンセル（安全側）。"
+                )
+                pushover(f"[Atlas] Level2 確認要 {rid}", _l2_approval_body,
+                         priority=1)
+                log(f"[Two-Man Rule] Level2 アクションをブロック: {rid} — 承認待ち (5分タイムアウト)")
+                result["action"] = {"type": "two_man_rule_blocked_l2",
+                                    "rule_id": rid, "status": "PENDING_APPROVAL"}
             else:
-                ar = {"type": atype, "status": "UNKNOWN_ACTION"}
-            body.append(f"action: {ar}")
-            tag = "AUTOFIX_DRY" if dry_run else "AUTOFIX"
-            pri = 1 if ar.get("status") in ("ERR",) else 0
-            pushover(f"[Atlas/{tag}] {rid}", "\n".join(body), priority=pri)
-            result["action"] = ar
-            # builder 自動起動: Level2 は必ず atlas_builder.yml を dispatch
-            bw = trigger_builder_workflow(cfg, rid, hypo, matched)
-            result["builder_workflow"] = bw
-            log(f"[dispatch] builder_workflow: {bw}")
+                if atype == "restart_bot":
+                    ar = action_restart_bot(cfg, rule, dry_run)
+                elif atype == "notify_only":
+                    ar = {"type": "notify_only", "status": "OK"}
+                else:
+                    ar = {"type": atype, "status": "UNKNOWN_ACTION"}
+                body.append(f"action: {ar}")
+                tag = "AUTOFIX_DRY" if dry_run else "AUTOFIX"
+                pri = 1 if ar.get("status") in ("ERR",) else 0
+                # Level2 AUTOFIX はBATCHED（自動修正の事実把握・即断不要）
+                pushover(f"[Atlas/{tag}] {rid}", "\n".join(body), priority=pri,
+                         level=_LEVEL_BATCHED)
+                result["action"] = ar
+                # builder 自動起動: Level2 は必ず atlas_builder.yml を dispatch
+                bw = trigger_builder_workflow(cfg, rid, hypo, matched)
+                result["builder_workflow"] = bw
+                log(f"[dispatch] builder_workflow: {bw}")
 
     elif level == 3:
         # Two-Man Rule: Level3 は Pushover 承認待ちに変更。タイムアウトでキャンセル。
         tmr_cfg = cfg.get("autofix", {}).get("two_man_rule", {})
         tmr_enabled = tmr_cfg.get("enabled", True) and not dry_run
         tmr_min_level = tmr_cfg.get("min_level", 3)
-        if tmr_enabled and level >= tmr_min_level:
+        # BUG-3修正: Level3 でも emergency_bypass を確認する
+        # kill_switch_activated / market_crash_detected 等があれば承認をスキップして即実行
+        _l3_emergency_bypass_conditions = tmr_cfg.get(
+            "level3_emergency_bypass_conditions",
+            tmr_cfg.get("emergency_bypass_conditions", []),
+        )
+        _l3_emergency_bypass = any(
+            cond in matched for cond in _l3_emergency_bypass_conditions
+        )
+        if _l3_emergency_bypass:
+            log(
+                f"[Two-Man Rule] Level3 emergency_bypass発動: {rid} "
+                f"matched={matched} → 承認スキップで即実行"
+            )
+        if tmr_enabled and level >= tmr_min_level and not _l3_emergency_bypass:
             # 承認要求Pushoverを送って実行ブロック
             approval_body = (
                 f"[Two-Man Rule] Level{level} アクション承認要求\n"
@@ -730,6 +873,7 @@ def main():
     save_state(st)
 
     dry = bool(cfg.get("autofix", {}).get("dry_run_default", 1))
+    # BOOT通知はSILENT（定型起動報告は判断不要）
     pushover(
         "[Atlas/BOOT]",
         f"atlas_agent 起動\n"
@@ -737,6 +881,7 @@ def main():
         f"dry_run: {'ON (safe)' if dry else 'OFF (ARMED)'}\n"
         f"market: {cfg.get('market_window')}",
         priority=0,
+        level=_LEVEL_SILENT,
     )
     log(f"boot: rules={len(rules)} dry_run={dry} once={once_mode}")
 
@@ -751,6 +896,21 @@ def main():
     _dev_scan_interval = 300  # 5分
     _notified_surge_cats: set[str] = set()  # 既通知カテゴリ（重複抑制）
 
+    # DeviationDetector Greeks スナップショット（1分毎）
+    _last_greeks_snapshot = 0.0
+    _GREEKS_SNAPSHOT_INTERVAL = 60  # 1分
+
+    # Heartbeat pulse（1分毎）
+    _last_pulse = 0.0
+    _PULSE_INTERVAL = 60
+
+    # 外部死活監視 ping（2分毎・Atlas: SPXオプションBot系）
+    _last_ext_ping = 0.0
+    _EXT_PING_INTERVAL = 120  # 2分毎（atlas_agent）
+
+    # 起動時に外部ping "start" 送信（Atlas系・Chronos と混同禁止）
+    _ext_ping("atlas_agent", status="start")
+
     while True:
         try:
             now = time.time()
@@ -758,11 +918,54 @@ def main():
             st = load_state()
             manual_halt = st.get("manual_halt")
 
+            # ── DeviationDetector halt_flag チェック ─────────────────────────
+            # 本番で連続逸脱が ESCALATE_THRESHOLD 回を超えた場合 Bot を停止する
+            if _DEVIATION_DETECTOR_OK and _atlas_deviation_detector is not None:
+                try:
+                    if _atlas_deviation_detector.is_halt_flagged():
+                        pushover(
+                            "[Atlas/HALT] 乖離検知 Bot 停止フラグ",
+                            "DeviationDetector が連続逸脱を検知しました。\n"
+                            "手動確認後 DeviationDetector.clear_halt_flag() を実行してください。",
+                            priority=2,
+                        )
+                        log("[DEVIATION_HALT] halt_flag=True → Level4 halt")
+                        # halt_flag は手動解除まで維持 (ここでは clear しない)
+                except Exception as _dhe:
+                    log(f"[DEVIATION_HALT_ERR] {_dhe}")
+
             new_lines: list[str] = []
             for name, tl in tailers.items():
                 new_lines.extend(tl.read_new())
 
             fired_list = matcher.ingest(new_lines, now)
+
+            # ── DeviationDetector Greeks 1分毎スナップショット (観点C) ────────
+            if (
+                _DEVIATION_DETECTOR_OK
+                and _atlas_deviation_detector is not None
+                and in_market
+                and (now - _last_greeks_snapshot >= _GREEKS_SNAPSHOT_INTERVAL)
+            ):
+                try:
+                    # atlas_state.json から現在ポジションの Greeks を読む
+                    positions = st.get("positions", {})
+                    for pos_id, pos in positions.items() if isinstance(positions, dict) else []:
+                        greeks = pos.get("greeks")
+                        tactic = pos.get("tactic", "unknown")
+                        if greeks and isinstance(greeks, dict):
+                            dev = _atlas_deviation_detector.check_greeks_range(
+                                bot_name="atlas",
+                                tactic=tactic,
+                                position_id=pos_id,
+                                current_greeks=greeks,
+                            )
+                            if dev:
+                                _atlas_deviation_detector.alert(dev)
+                                log(f"[DEVIATION-C] {dev.title}")
+                    _last_greeks_snapshot = now
+                except Exception as _gse:
+                    log(f"[GREEKS_SNAP_ERR] {_gse}")
 
             # synthetic: bot_process_stale
             if in_market:
@@ -796,6 +999,67 @@ def main():
                 except Exception as _dse:
                     log(f"[DEV_SCAN_ERR] {_dse}")
 
+            # PDT残数をatlas_state.jsonに保存 + 毎分ログ出力 + 残1で通知
+            # ペーパーモード判定: acc_type==SIMULATE or bot_launchagent に "paper" が含まれる場合は
+            # PDT制約はFINRA本番(live $25K未満)のみ有効 → ペーパーはスキップ
+            _is_paper_mode = (
+                st.get("acc_type", "").upper() == "SIMULATE"
+                or cfg.get("paper", False)
+                or "paper" in cfg.get("bot_launchagent", "")
+            )
+            if _PDT_TRACKER_AGENT_OK and _pdt_tracker_agent is not None:
+                try:
+                    # 口座残高（state.jsonから取得、不明時は保守的に$0扱い）
+                    _pdt_capital = st.get("capital_usd", 0.0)
+                    _pdt_status = _pdt_tracker_agent.get_status(_pdt_capital)
+                    # atlas_state.json に pdt_remaining を更新（ペーパー含め常時記録）
+                    st["pdt_remaining"]   = _pdt_status["pdt_remaining"]
+                    st["pdt_rolling5"]    = _pdt_status["rolling5_count"]
+                    st["pdt_constrained"] = _pdt_status["pdt_constrained"]
+                    save_state(st)
+                    if _is_paper_mode:
+                        # ペーパー($420K)はPhase2相当・PDT制約はFINRA本番のみ → ログはINFOで黙認
+                        log(f"[PDT] paper_mode=True → PDT制約スキップ "
+                            f"rolling5={_pdt_status['rolling5_count']} "
+                            f"remaining={_pdt_status['pdt_remaining']}")
+                    else:
+                        log(f"[PDT] rolling5={_pdt_status['rolling5_count']} "
+                            f"remaining={_pdt_status['pdt_remaining']} "
+                            f"constrained={_pdt_status['pdt_constrained']}")
+                        # PDT残1 → priority=1 通知（重複抑制: 残数変化時のみ・liveのみ）
+                        _pdt_rem = _pdt_status["pdt_remaining"]
+                        if (
+                            _pdt_status["pdt_constrained"]
+                            and isinstance(_pdt_rem, int)
+                            and _pdt_rem == 1
+                            and st.get("_pdt_notified_remaining1_date") != datetime.datetime.now(ET).strftime("%Y-%m-%d")
+                        ):
+                            pushover(
+                                "[Atlas/PDT] PDT残1件警告",
+                                f"直近5営業日 {_pdt_status['rolling5_count']}/{_PDT_LIMIT}件消費\n"
+                                f"本日の新規day_tradeは残1件のみ。4件目で90日停止。",
+                                priority=1,
+                            )
+                            st["_pdt_notified_remaining1_date"] = datetime.datetime.now(ET).strftime("%Y-%m-%d")
+                            save_state(st)
+                        # PDT残0 → 通常通知（手動判断を促す・liveのみ）
+                        elif (
+                            _pdt_status["pdt_constrained"]
+                            and isinstance(_pdt_rem, int)
+                            and _pdt_rem == 0
+                            and st.get("_pdt_notified_remaining0_date") != datetime.datetime.now(ET).strftime("%Y-%m-%d")
+                        ):
+                            pushover(
+                                "[Atlas/PDT] PDT上限到達 — 新規エントリー停止",
+                                f"直近5営業日 {_pdt_status['rolling5_count']}/{_PDT_LIMIT}件消費済み\n"
+                                f"新規day_tradeはpre_trade_checkでブロックされます。",
+                                priority=1,
+                            )
+                            st["_pdt_notified_remaining0_date"] = datetime.datetime.now(ET).strftime("%Y-%m-%d")
+                            save_state(st)
+                except Exception as _pdt_agent_e:
+                    log(f"[PDT_AGENT_ERR] {_pdt_agent_e}")
+
             for f in fired_list:
                 if manual_halt:
                     log(f"[HALT_ACTIVE] skipping action for {f['rule']['id']}")
@@ -807,6 +1071,17 @@ def main():
                     continue
                 dispatch(f, cfg)
 
+            # 能動 heartbeat pulse（1分毎）
+            if now - _last_pulse >= _PULSE_INTERVAL:
+                _write_pulse("atlas_agent", state="healthy", details={"fired": len(fired_list), "in_market": in_market, "dry_run": dry})
+                _last_pulse = now
+
+            # 外部死活監視 ping（2分毎・Pushover と独立した経路）
+            # Atlas: SPXオプションBot エージェント（Chronos と混同禁止）
+            if now - _last_ext_ping >= _EXT_PING_INTERVAL:
+                _ext_ping("atlas_agent", status="success")
+                _last_ext_ping = now
+
             if once_mode:
                 log(f"--once complete: fired={len(fired_list)}")
                 break
@@ -817,6 +1092,8 @@ def main():
             break
         except Exception as e:
             log(f"[LOOP_ERR] {e}")
+            _write_pulse("atlas_agent", state="degraded", details={"error": str(e)})
+            _ext_ping("atlas_agent", status="fail", payload=str(e)[:500])
             time.sleep(10)
 
 

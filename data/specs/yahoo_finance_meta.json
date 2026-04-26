@@ -1,0 +1,9 @@
+{
+  "last_checked": "2026-04-14",
+  "version": "v8 (非公式・予告なく変更の可能性あり)",
+  "endpoints_cached": [
+    "GET /v8/finance/chart/%5EVIX",
+    "GET /v8/finance/chart/SPY"
+  ],
+  "notes": "非公式API。futuのVIX/SPYデータ取得失敗時のフォールバック。VIX現在値はmeta.regularMarketPrice、日足終値はindicators.quote[0].close。Noneフィルタ必須。User-Agent:Mozilla/5.0を付けること。"
+}

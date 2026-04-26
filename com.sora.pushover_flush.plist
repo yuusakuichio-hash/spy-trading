@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.sora.pushover_flush</string>
+
+    <!-- 10分毎に pushover queue を再送する。
+         ban 解除後にキューに溜まった通知を自動送信する用途。
+         有効化: launchctl load ~/Library/LaunchAgents/com.sora.pushover_flush.plist -->
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/python3</string>
+        <string>-m</string>
+        <string>common.pushover_client</string>
+        <string>--flush</string>
+    </array>
+
+    <!-- 10分毎 (600秒) に実行 -->
+    <key>StartInterval</key>
+    <integer>600</integer>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/yuusakuichio/trading</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/yuusakuichio/trading/data/logs/pushover_flush.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/yuusakuichio/trading/data/logs/pushover_flush.err</string>
+
+    <!-- 失敗時は次の10分まで待つ（自動再起動しない） -->
+    <key>KeepAlive</key>
+    <false/>
+
+    <!-- Disabled=true: 初期状態では無効。
+         有効化コマンド:
+         cp /Users/yuusakuichio/trading/com.sora.pushover_flush.plist ~/Library/LaunchAgents/
+         launchctl load ~/Library/LaunchAgents/com.sora.pushover_flush.plist -->
+    <key>Disabled</key>
+    <true/>
+</dict>
+</plist>

@@ -1,0 +1,14 @@
+[2026-04-22 15:53:30 JST] Proposal bottleneck violation #22
+Pattern matched in assistant response without research evidence.
+Response excerpt (first 500 chars):
+## Gemini 再検証結果（文脈込み）= CONDITIONAL-GO
+
+根拠: `/Users/yuusakuichio/trading/data/governance/gemini_verify/v3_verify_contexted_20260422_155233.md`
+
+### 前回判定の訂正（Gemini 自身が認めた）
+
+| 項目 | 前回（一般論） | **今回（文脈込み）** |
+|---|---|---|
+| 全書き直し | ✗ 中止・C 推奨 | ✓ **支持**（MI 0.00 のリファクタは「地雷原を盲目で歩く」・ゆうさくさん非エンジニア属性で不可能） |
+| agent
+...

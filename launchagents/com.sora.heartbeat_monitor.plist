@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.sora.heartbeat_monitor</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/yuusakuichio/trading/sora_heartbeat_monitor.py</string>
+    </array>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/yuusakuichio/trading</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/yuusakuichio/trading/data/logs/heartbeat_monitor.stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/yuusakuichio/trading/data/logs/heartbeat_monitor.stderr.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>SORA_TRADING_DIR</key>
+        <string>/Users/yuusakuichio/trading</string>
+        <key>PUSHOVER_USER</key>
+        <string>u2cevk8nktib3sr148rw2hs78ecvux</string>
+        <key>PUSHOVER_TOKEN</key>
+        <string>aj9f1fk3ae2o6azif17kjyn698remc</string>
+    </dict>
+</dict>
+</plist>

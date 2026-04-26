@@ -1,0 +1,376 @@
+"""tests/test_atlas_bots_trader_20260425.py
+
+atlas_v3/bots/ (AtlasTrader / main) テスト — 15 件以上。
+
+spy_bot.py は schg lock 下で変更不可のため sys.modules に stub を差し込んで
+import + delegate 動作を検証する。
+
+テスト分類
+----------
+[delegate]   AtlasTrader が inner の各メソッドに正しく委譲する
+[argparse]   build_parser が各フラグを正しく解析する
+[override]   set_engine_override / get_engine_override の動作
+[flags]      disable_orb / disable_calendar / disable_multi の global 反映
+[status]     status() 返値の構造検証
+[stop]       stop() が _running を False にする
+[smoke]      main() が argparse → AtlasTrader を通じて run_forever に到達する
+[behaviour]  spy_bot 等価性 smoke: paper=True 時は inner.paper == True
+"""
+from __future__ import annotations
+
+import sys
+import types
+from unittest.mock import MagicMock, call, patch
+
+import pytest
+
+
+# ---------------------------------------------------------------------------
+# spy_bot stub — schg lock ファイルを import させないため sys.modules に差し込む
+# ---------------------------------------------------------------------------
+
+def _make_spy_bot_stub() -> types.ModuleType:
+    """最小限の spy_bot スタブモジュールを返す。"""
+    stub = types.ModuleType("spy_bot")
+    stub.DRY_TEST = False
+    stub.ENABLE_ORB = True
+    stub.ENABLE_CALENDAR = True
+    stub.ENABLE_MULTI_SYMBOL = True
+
+    class FakeInner:
+        def __init__(self, **kwargs):
+            self.paper = kwargs.get("paper", False)
+            self.test_connect = kwargs.get("test_connect", False)
+            self.dry_test = kwargs.get("dry_test", False)
+            self.shadow = kwargs.get("shadow", False)
+            self.no_multi = kwargs.get("no_multi", False)
+            self.traded_today = False
+            self._daily_loss_halted = False
+            self.run_forever_called = False
+            self.run_forever_args: list = []
+
+        def run_forever(self):
+            self.run_forever_called = True
+
+    stub.SPYCreditSpreadBot = FakeInner
+    return stub
+
+
+@pytest.fixture(autouse=True)
+def inject_spy_bot_stub():
+    """各テスト前に spy_bot stub を sys.modules に注入し、テスト後に復元する。"""
+    original = sys.modules.get("spy_bot")
+    stub = _make_spy_bot_stub()
+    sys.modules["spy_bot"] = stub
+
+    # atlas_v3.bots.trader がすでにキャッシュされていたら削除して再 import させる
+    for key in list(sys.modules.keys()):
+        if key.startswith("atlas_v3.bots"):
+            del sys.modules[key]
+
+    yield stub
+
+    # テスト後に復元
+    if original is None:
+        sys.modules.pop("spy_bot", None)
+    else:
+        sys.modules["spy_bot"] = original
+    for key in list(sys.modules.keys()):
+        if key.startswith("atlas_v3.bots"):
+            del sys.modules[key]
+
+
+# ---------------------------------------------------------------------------
+# [delegate] 委譲テスト
+# ---------------------------------------------------------------------------
+
+class TestDelegate:
+    """AtlasTrader が inner の各メソッドに正しく委譲することを確認する。"""
+
+    def test_run_forever_delegates_to_inner(self, inject_spy_bot_stub):
+        """run_forever() が inner.run_forever() を 1 度だけ呼ぶ。"""
+        from atlas_v3.bots.trader import AtlasTrader
+
+        trader = AtlasTrader(paper=True, dry_test=True)
+        trader.run_forever()
+        assert trader._inner.run_forever_called is True
+
+    def test_stop_sets_running_false(self, inject_spy_bot_stub):
+        """stop() 後に _running が False になる。"""
+        from atlas_v3.bots.trader import AtlasTrader
+
+        trader = AtlasTrader(paper=True, dry_test=True)
+        trader._running = True  # 手動で True にしてから stop
+        trader.stop()
+        assert trader._running is False
+
+    def test_run_forever_sets_running_true_then_false(self, inject_spy_bot_stub):
+        """run_forever() 完了後に _running が False に戻る。"""
+        from atlas_v3.bots.trader import AtlasTrader
+
+        trader = AtlasTrader(paper=True, dry_test=True)
+        assert trader._running is False
+        trader.run_forever()
+        assert trader._running is False  # 正常終了後に False
+
+    def test_inner_paper_flag_propagates(self, inject_spy_bot_stub):
+        """paper=True を渡すと inner.paper == True になる。"""
+        from atlas_v3.bots.trader import AtlasTrader
+
+        trader = AtlasTrader(paper=True)
+        assert trader._inner.paper is True
+
+    def test_inner_paper_false_propagates(self, inject_spy_bot_stub):
+        """paper=False を渡すと inner.paper == False になる。"""
+        from atlas_v3.bots.trader import AtlasTrader
+
+        trader = AtlasTrader(paper=False)
+        assert trader._inner.paper is False
+
+    def test_inner_dry_test_propagates(self, inject_spy_bot_stub):
+        """dry_test=True が inner に伝わる。"""
+        from atlas_v3.bots.trader import AtlasTrader
+
+        trader = AtlasTrader(paper=True, dry_test=True)
+        assert trader._inner.dry_test is True
+
+    def test_inner_shadow_propagates(self, inject_spy_bot_stub):
+        """shadow=True が inner に伝わる。"""
+        from atlas_v3.bots.trader import AtlasTrader
+
+        trader = AtlasTrader(paper=True, shadow=True)
+        assert trader._inner.shadow is True
+
+    def test_inner_no_multi_propagates(self, inject_spy_bot_stub):
+        """disable_multi=True が inner の no_multi に伝わる。"""
+        from atlas_v3.bots.trader import AtlasTrader
+
+        trader = AtlasTrader(paper=True, disable_multi=True)
+        assert trader._inner.no_multi is True
+
+
+# ---------------------------------------------------------------------------
+# [argparse] build_parser テスト
+# ---------------------------------------------------------------------------
+
+class TestArgparse:
+    """build_parser が各フラグを正しく解析することを確認する。"""
+
+    def test_mode_paper(self):
+        from atlas_v3.bots.main import build_parser
+
+        args = build_parser().parse_args(["--mode", "paper"])
+        assert args.mode == "paper"
+        assert args.dry_test is False
+
+    def test_mode_live(self):
+        from atlas_v3.bots.main import build_parser
+
+        args = build_parser().parse_args(["--mode", "live"])
+        assert args.mode == "live"
+
+    def test_dry_test_flag(self):
+        from atlas_v3.bots.main import build_parser
+
+        args = build_parser().parse_args(["--mode", "paper", "--dry-test"])
+        assert args.dry_test is True
+
+    def test_test_connect_flag(self):
+        from atlas_v3.bots.main import build_parser
+
+        args = build_parser().parse_args(["--mode", "paper", "--test-connect"])
+        assert args.test_connect is True
+
+    def test_shadow_flag(self):
+        from atlas_v3.bots.main import build_parser
+
+        args = build_parser().parse_args(["--mode", "paper", "--shadow"])
+        assert args.shadow is True
+
+    def test_no_orb_flag(self):
+        from atlas_v3.bots.main import build_parser
+
+        args = build_parser().parse_args(["--mode", "paper", "--no-orb"])
+        assert args.no_orb is True
+
+    def test_no_calendar_flag(self):
+        from atlas_v3.bots.main import build_parser
+
+        args = build_parser().parse_args(["--mode", "paper", "--no-calendar"])
+        assert args.no_calendar is True
+
+    def test_no_multi_flag(self):
+        from atlas_v3.bots.main import build_parser
+
+        args = build_parser().parse_args(["--mode", "paper", "--no-multi"])
+        assert args.no_multi is True
+
+    def test_missing_mode_raises(self):
+        """--mode 未指定は SystemExit を発生させる。"""
+        from atlas_v3.bots.main import build_parser
+
+        with pytest.raises(SystemExit):
+            build_parser().parse_args([])
+
+    def test_invalid_mode_raises(self):
+        """--mode demo は invalid choice として SystemExit。"""
+        from atlas_v3.bots.main import build_parser
+
+        with pytest.raises(SystemExit):
+            build_parser().parse_args(["--mode", "demo"])
+
+
+# ---------------------------------------------------------------------------
+# [override] Engine override hook テスト
+# ---------------------------------------------------------------------------
+
+class TestEngineOverride:
+    """set_engine_override / get_engine_override の動作確認。"""
+
+    def test_set_and_get_override(self, inject_spy_bot_stub):
+        from atlas_v3.bots.trader import AtlasTrader
+
+        trader = AtlasTrader(paper=True)
+        fake_engine = MagicMock(name="fake_orb_engine")
+        trader.set_engine_override("orb_engine", fake_engine)
+        assert trader.get_engine_override("orb_engine") is fake_engine
+
+    def test_get_nonexistent_override_returns_none(self, inject_spy_bot_stub):
+        from atlas_v3.bots.trader import AtlasTrader
+
+        trader = AtlasTrader(paper=True)
+        assert trader.get_engine_override("does_not_exist") is None
+
+    def test_multiple_overrides_stored_independently(self, inject_spy_bot_stub):
+        from atlas_v3.bots.trader import AtlasTrader
+
+        trader = AtlasTrader(paper=True)
+        eng_a = MagicMock(name="eng_a")
+        eng_b = MagicMock(name="eng_b")
+        trader.set_engine_override("orb_engine", eng_a)
+        trader.set_engine_override("calendar_engine", eng_b)
+        assert trader.get_engine_override("orb_engine") is eng_a
+        assert trader.get_engine_override("calendar_engine") is eng_b
+
+    def test_override_reflected_in_status(self, inject_spy_bot_stub):
+        from atlas_v3.bots.trader import AtlasTrader
+
+        trader = AtlasTrader(paper=True)
+        trader.set_engine_override("gamma_engine", MagicMock())
+        snap = trader.status()
+        assert "gamma_engine" in snap["engine_overrides"]
+
+
+# ---------------------------------------------------------------------------
+# [flags] グローバルフラグ反映テスト
+# ---------------------------------------------------------------------------
+
+class TestGlobalFlags:
+    """disable_orb 等が spy_bot モジュールのグローバル変数に反映されるか確認する。"""
+
+    def test_disable_orb_sets_global(self, inject_spy_bot_stub):
+        from atlas_v3.bots.trader import AtlasTrader
+        import spy_bot as sb
+
+        AtlasTrader(paper=True, disable_orb=True)
+        assert sb.ENABLE_ORB is False
+
+    def test_disable_calendar_sets_global(self, inject_spy_bot_stub):
+        from atlas_v3.bots.trader import AtlasTrader
+        import spy_bot as sb
+
+        AtlasTrader(paper=True, disable_calendar=True)
+        assert sb.ENABLE_CALENDAR is False
+
+    def test_dry_test_sets_global(self, inject_spy_bot_stub):
+        from atlas_v3.bots.trader import AtlasTrader
+        import spy_bot as sb
+
+        AtlasTrader(paper=True, dry_test=True)
+        assert sb.DRY_TEST is True
+
+
+# ---------------------------------------------------------------------------
+# [status] status() 返値の構造検証
+# ---------------------------------------------------------------------------
+
+class TestStatus:
+    def test_status_contains_expected_keys(self, inject_spy_bot_stub):
+        from atlas_v3.bots.trader import AtlasTrader
+
+        trader = AtlasTrader(paper=True)
+        snap = trader.status()
+        for key in ("running", "paper", "dry_test", "shadow",
+                    "disable_orb", "disable_calendar", "disable_multi",
+                    "engine_overrides"):
+            assert key in snap, f"status() に '{key}' キーがない"
+
+    def test_status_paper_true(self, inject_spy_bot_stub):
+        from atlas_v3.bots.trader import AtlasTrader
+
+        trader = AtlasTrader(paper=True)
+        assert trader.status()["paper"] is True
+
+    def test_status_running_false_before_run(self, inject_spy_bot_stub):
+        from atlas_v3.bots.trader import AtlasTrader
+
+        trader = AtlasTrader(paper=True)
+        assert trader.status()["running"] is False
+
+
+# ---------------------------------------------------------------------------
+# [smoke] main() が argparse → AtlasTrader → run_forever に到達するか
+# ---------------------------------------------------------------------------
+
+class TestMainSmoke:
+    def test_main_paper_dry_test_no_error(self, inject_spy_bot_stub):
+        """main(['--mode','paper','--dry-test']) が 0 を返す。"""
+        from atlas_v3.bots.main import main
+
+        ret = main(["--mode", "paper", "--dry-test"])
+        assert ret == 0
+
+    def test_main_calls_run_forever(self, inject_spy_bot_stub):
+        """main() 経由で inner.run_forever_called が True になる。"""
+        from atlas_v3.bots.main import main
+        from atlas_v3.bots import trader as trader_mod
+
+        created_traders: list = []
+        _original_cls = trader_mod.AtlasTrader
+
+        class SpyTrader(_original_cls):
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+                created_traders.append(self)
+
+        with patch.object(trader_mod, "AtlasTrader", SpyTrader):
+            main(["--mode", "paper", "--dry-test"])
+
+        assert len(created_traders) == 1
+        assert created_traders[0]._inner.run_forever_called is True
+
+
+# ---------------------------------------------------------------------------
+# [behaviour] spy_bot 等価性 smoke
+# ---------------------------------------------------------------------------
+
+class TestBehaviourEquivalence:
+    """AtlasTrader が spy_bot.SPYCreditSpreadBot と同等の paper flag を持つ。"""
+
+    def test_paper_mode_inner_paper_true(self, inject_spy_bot_stub):
+        from atlas_v3.bots.trader import AtlasTrader
+
+        trader = AtlasTrader(paper=True)
+        assert trader._inner.paper is True
+
+    def test_live_mode_inner_paper_false(self, inject_spy_bot_stub):
+        from atlas_v3.bots.trader import AtlasTrader
+
+        trader = AtlasTrader(paper=False)
+        assert trader._inner.paper is False
+
+    def test_test_connect_propagated_to_inner(self, inject_spy_bot_stub):
+        from atlas_v3.bots.trader import AtlasTrader
+
+        trader = AtlasTrader(paper=True, test_connect=True)
+        assert trader._inner.test_connect is True

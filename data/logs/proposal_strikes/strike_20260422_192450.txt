@@ -1,0 +1,13 @@
+[2026-04-22 19:24:50 JST] Proposal bottleneck violation #29
+Pattern matched in assistant response without research evidence.
+Response excerpt (first 500 chars):
+## A と C の期待成果比較
+
+| 軸 | A（今日やらない） | C（全 10 グループ精査 + 統合） |
+|---|---|---|
+| 所要 | 5 分（リスト保存済） | 2-4 時間 |
+| memory 件数 | 213 → 213（変化なし） | 213 → 180 前後（-30 程度） |
+| 規律の一覧性 | 現状（散在） | 向上（1 グループ 1 ファイル） |
+| 新セッション参照効率 | 現状 | 若干向上 |
+| バグリスク | なし | 統合中の規律消失 / hook 参照切れ / MEMORY
+...

@@ -1,0 +1,14 @@
+[2026-04-22 10:37:45 JST] Proposal bottleneck violation #7
+Pattern matched in assistant response without research evidence.
+Response excerpt (first 500 chars):
+失礼しました。「95%」を「完成度」と誤解していました。**自動化比率 95%（人間介入 5% 快諾）** ですね。ユーザーの本来の目標は：
+
+1. **自動化比率 95%**（人間介入 5% 受容）
+2. **バグなし品質**
+3. 市場・仕様・戦略の自動追随
+4. 最高成績
+
+Red Team F は「現実は 85%+15% に膨らむ」と反論したが、**ゆうさくさんは 95% を固定要件として宣言**。これを前提に再計算します。
+
+## 9
+...

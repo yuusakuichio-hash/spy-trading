@@ -1,0 +1,1543 @@
+diff --git a/spy_bot.py b/spy_bot.py
+index f6d7ce3..3f97229 100644
+--- a/spy_bot.py
++++ b/spy_bot.py
+@@ -66,7 +66,11 @@ def _load_env_file():
+                     continue
+                 key, _, val = line.partition("=")
+                 k, v = key.strip(), val.strip()
+-                if k in os.environ and os.environ[k] != v:
++                # CRITICAL 5 fix (2026-04-22): SECRET/TOKEN/PASSWORD/KEY 等を含む
++                # キーはキー名も値も stderr に一切出力しない。
++                _SENSITIVE_PATTERNS = ("SECRET", "TOKEN", "PASSWORD", "KEY", "PASS", "CRED")
++                _is_sensitive = any(pat in k.upper() for pat in _SENSITIVE_PATTERNS)
++                if k in os.environ and os.environ[k] != v and not _is_sensitive:
+                     import sys as _sys
+                     print(
+                         f"[.env] {k} overriding existing value "
+@@ -272,7 +276,10 @@ VEGA_REDUCE_FACTOR   = 0.70   # Vegaリスク縮小時の枚数係数（30%縮
+ VIX_SPIKE_THRESHOLD = 3.0  # previous day VIX rose >= 3 → recovery day → +0.05 delta
+ 
+ # ── Profit target & stop loss ─────────────────────────────────────────────────
+-PROFIT_TARGET  = 0.80  # fallback: 80% of net credit (used when VIX unavailable)
++PROFIT_TARGET  = 0.50  # A02 (2026-04-22): tastytrade "TP=50% of credit" 4500 sample / WR82% / Sharpe+31%
++                       # 旧 0.80 は dynamic PT が NaN 時の fallback だが 80% は殆ど未達 (WR<20%)。
++                       # calc_dynamic_profit_target() VIX/hours で 0.40-0.70 動的。この値は
++                       # 常に fallback であり動的関数成功時は上書きされる。
+ STOP_LOSS_MULT = 1.00  # 100% of net credit (= spread width cap)
+ 
+ 
+@@ -846,11 +853,16 @@ def _futu_to_yahoo_ticker(symbol: str) -> str:
+ 
+     US.SPY  → "SPY"
+     US.QQQ  → "QQQ"
+-    US..SPX → "^SPX"   ← ドット2つはCBOEインデックス（先頭 ^ が必要）
++    US..SPX → "^GSPC"  ← S&P500 の正式 Yahoo ticker (^SPX は廃止統一)
++    US..NDX → "^NDX"
++    US..DJI → "^DJI"
+     US.TSLA → "TSLA"
+     """
++    # インデックスシンボルは正式 Yahoo ticker にマッピング
++    _INDEX_MAP: dict[str, str] = {"SPX": "^GSPC", "NDX": "^NDX", "DJI": "^DJI"}
+     if symbol.startswith("US.."):
+-        return "^" + symbol[4:]
++        index_sym = symbol[4:]
++        return _INDEX_MAP.get(index_sym, "^" + index_sym)
+     return symbol.replace("US.", "", 1)
+ 
+ 
+@@ -1109,6 +1121,20 @@ def _pdt_record(
+         log.warning(f"[PDT] record_round_trip 例外（無視して続行）: {_e}")
+ 
+ 
++# ── Trade Reason Logger (Entry/Exit 構造化ログ) ────────────────────────────────
++_TRADE_REASON_LOGGER_AVAILABLE = False
++try:
++    from common.trade_reason_logger import log_entry as _trl_log_entry, log_exit as _trl_log_exit
++    _TRADE_REASON_LOGGER_AVAILABLE = True
++    log.info("[Module] common.trade_reason_logger ロード成功 (Entry/Exit構造化ログ有効)")
++except ImportError as _e:
++    log.warning(f"[Module] common.trade_reason_logger ロード失敗: {_e}")
++    def _trl_log_entry(**kwargs) -> str:
++        import uuid as _uuid; return str(_uuid.uuid4())
++    def _trl_log_exit(**kwargs) -> str:
++        import uuid as _uuid; return str(_uuid.uuid4())
++
++
+ # ── API Recorder (Record-Replay / Shadow Mode) ────────────────────────────────
+ _API_RECORDER_AVAILABLE = False
+ try:
+@@ -1337,8 +1363,21 @@ class VirtualPositionManager:
+ # Utility functions
+ # ══════════════════════════════════════════════════════════════════════════════
+ 
++_pushover_blocked_until: Optional[datetime.datetime] = None  # 429/月上限時のバックオフ終了時刻
++_PUSHOVER_BACKOFF_SEC = 3600  # 1時間バックオフ (IP ban / 月上限)
++
++
+ def pushover(title: str, message: str, priority: int = 0) -> bool:
+     """Pushover通知を送信する。成功時True、失敗時Falseを返す（V2-M3対応）。"""
++    global _pushover_blocked_until
++    # 429 / 月上限バックオフ中はスキップ (無限送信防止)
++    if _pushover_blocked_until is not None:
++        _now = datetime.datetime.now(ET)
++        if _now < _pushover_blocked_until:
++            log.debug(f"pushover: backoff中 スキップ (解除: {_pushover_blocked_until.strftime('%H:%M')} ET)")
++            return False
++        else:
++            _pushover_blocked_until = None  # バックオフ解除
+     # dry-testモードではタイトルに [DRY-TEST] プレフィックスを付加
+     if DRY_TEST and not title.startswith("[DRY-TEST]"):
+         title = f"[DRY-TEST] {title}"
+@@ -1353,6 +1392,15 @@ def pushover(title: str, message: str, priority: int = 0) -> bool:
+         )
+         if not resp.ok:
+             log.warning(f"pushover HTTP {resp.status_code}: {resp.text[:200]}")
++            # 429 (rate limit) または月上限超過 → バックオフ
++            if resp.status_code == 429 or "monthly limit" in resp.text or "banned" in resp.text:
++                _pushover_blocked_until = datetime.datetime.now(ET) + datetime.timedelta(
++                    seconds=_PUSHOVER_BACKOFF_SEC
++                )
++                log.warning(
++                    f"pushover: 送信ブロック検出 → {_PUSHOVER_BACKOFF_SEC//60}分バックオフ設定 "
++                    f"(解除: {_pushover_blocked_until.strftime('%H:%M')} ET)"
++                )
+             return False
+         return True
+     except Exception as e:
+@@ -1360,22 +1408,43 @@ def pushover(title: str, message: str, priority: int = 0) -> bool:
+         return False
+ 
+ 
++_pushover_alert_blocked_until: Optional[datetime.datetime] = None
++
++
+ def pushover_alert(title: str, message: str, priority: int = 1) -> bool:
+     """SPX Alertトークンで緊急通知を送信。成功時True、失敗時Falseを返す（V2-M3対応）。"""
++    global _pushover_alert_blocked_until
++    if _pushover_alert_blocked_until is not None:
++        _now = datetime.datetime.now(ET)
++        if _now < _pushover_alert_blocked_until:
++            log.debug(f"pushover_alert: backoff中 スキップ")
++            return False
++        else:
++            _pushover_alert_blocked_until = None
+     # dry-testモードではタイトルに [DRY-TEST] プレフィックスを付加
+     if DRY_TEST and not title.startswith("[DRY-TEST]"):
+         title = f"[DRY-TEST] {title}"
+     if not title.startswith("["):
+         title = f"[Atlas/ALERT] {title}"
+     try:
++        _data = {"token": PUSHOVER_ALERT_TOKEN, "user": PUSHOVER_USER,
++                 "title": title, "message": message, "priority": priority}
++        # Pushover API 仕様: priority=2 は retry/expire 必須
++        if priority >= 2:
++            _data["retry"]  = 60    # 最小値 (60秒間隔で再通知)
++            _data["expire"] = 3600  # 1時間で停止
+         resp = requests.post(
+             "https://api.pushover.net/1/messages.json",
+-            data={"token": PUSHOVER_ALERT_TOKEN, "user": PUSHOVER_USER,
+-                  "title": title, "message": message, "priority": priority},
++            data=_data,
+             timeout=10,
+         )
+         if not resp.ok:
+             log.warning(f"pushover_alert HTTP {resp.status_code}: {resp.text[:200]}")
++            if resp.status_code == 429 or "monthly limit" in resp.text or "banned" in resp.text:
++                _pushover_alert_blocked_until = datetime.datetime.now(ET) + datetime.timedelta(
++                    seconds=_PUSHOVER_BACKOFF_SEC
++                )
++                log.warning(f"pushover_alert: ブロック → {_PUSHOVER_BACKOFF_SEC//60}分backoff")
+             return False
+         return True
+     except Exception as e:
+@@ -2963,6 +3032,7 @@ class MarketData:
+         # MassVerify ループで underlying_code を切り替えても、前の銘柄の chain を
+         # 上書きしない。key = "{symbol}_{expiry}_{opt_type}"
+         self._chain_cache_by_symbol: dict = {}  # symbol-keyed chain cache
++        self._last_chain_api_call_ts: float = 0.0  # get_option_chain APIコール最終時刻（レート制限throttle用）
+         # Record-Replay / Shadow Mode
+         # shadow_mode=True: 実APIコールを記録しながら実行（RECORDモード自動有効）
+         # replay_session=str: 指定記録ファイルを再生（実APIコールなし）
+@@ -4093,7 +4163,7 @@ class MarketData:
+ 
+         Returns: ATR (ドル) または None
+         """
+-        ticker = _futu_to_yahoo_ticker(symbol)  # "US..SPX" → "^SPX"
++        ticker = _futu_to_yahoo_ticker(symbol)  # "US..SPX" → "^GSPC"
+         closes, highs, lows = [], [], []
+ 
+         # futu
+@@ -4164,7 +4234,7 @@ class MarketData:
+ 
+         Returns: HV (年率、小数。例: 0.22 = 22%) または None
+         """
+-        ticker = _futu_to_yahoo_ticker(symbol)  # "US..SPX" → "^SPX"
++        ticker = _futu_to_yahoo_ticker(symbol)  # "US..SPX" → "^GSPC"
+         try:
+             end_ts   = int(time.time()) - 86400
+             start_ts = end_ts - 90 * 86400
+@@ -4204,7 +4274,7 @@ class MarketData:
+             return None
+ 
+         # 直近価格を取得して割り算
+-        ticker = _futu_to_yahoo_ticker(symbol)  # "US..SPX" → "^SPX"
++        ticker = _futu_to_yahoo_ticker(symbol)  # "US..SPX" → "^GSPC"
+         try:
+             resp = requests.get(
+                 f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}",
+@@ -4257,11 +4327,49 @@ class MarketData:
+         _underlying_at_call = self.underlying_code
+         _cache_key = f"{_underlying_at_call}_{expiry}_{opt_type}"
+ 
++        # [マルチ銘柄修正 2026-04-21] _chain_cache_by_symbolを有効化
++        # MassVerify77コールでget_option_chain30秒10回制限に引っかかるバグを修正
++        # 同一(symbol, expiry, opt_type)は5分間キャッシュから返す
++        _CHAIN_CACHE_TTL = 300  # 5分
++        import time as _time_mod2
++        _now_ts = _time_mod2.time()
++        _cached_chain = self._chain_cache_by_symbol.get(_cache_key)
++        if _cached_chain is not None:
++            _cache_age = _now_ts - _cached_chain.get("ts", 0)
++            if _cache_age < _CHAIN_CACHE_TTL:
++                log.debug(f"[Chain] cache hit {_cache_key} age={_cache_age:.0f}s")
++                return _cached_chain["data"]
++
++        # [マルチ銘柄修正 2026-04-21] get_option_chain APIコールをthrottle（30秒10回=3秒1回）
++        # MassVerify77コール並列で制限超過するため、コール間隔を最低3秒確保する
++        import time as _time_th
++        _min_interval = 3.0  # 30秒10回制限の安全マージン
++        _elapsed_since_last = _time_th.time() - self._last_chain_api_call_ts
++        if _elapsed_since_last < _min_interval:
++            _time_th.sleep(_min_interval - _elapsed_since_last)
++        self._last_chain_api_call_ts = _time_th.time()
++
+         futu_opt_type = ft.OptionType.PUT if opt_type == "PUT" else ft.OptionType.CALL
+         ret, chain_df = self.quote_ctx.get_option_chain(
+             _underlying_at_call, start=expiry, end=expiry, option_type=futu_opt_type)
+-        if ret != RET_OK or chain_df.empty:
+-            log.warning(f"get_option_chain failed {_underlying_at_call} {expiry} {opt_type}")
++        # [マルチ銘柄修正 2026-04-21] レート制限(30秒10回)エラー時は5秒待ってリトライ
++        if ret != RET_OK:
++            _err_msg = chain_df if isinstance(chain_df, str) else str(chain_df)[:100]
++            if "too frequent" in _err_msg.lower() or "rate" in _err_msg.lower():
++                log.warning(f"get_option_chain rate limited {_underlying_at_call} → 5s待ってリトライ")
++                import time as _time_rl
++                _time_rl.sleep(5.0)
++                ret, chain_df = self.quote_ctx.get_option_chain(
++                    _underlying_at_call, start=expiry, end=expiry, option_type=futu_opt_type)
++                if ret != RET_OK:
++                    _err_msg2 = chain_df if isinstance(chain_df, str) else str(chain_df)[:100]
++                    log.warning(f"get_option_chain failed {_underlying_at_call} {expiry} {opt_type} ret={ret} err={_err_msg2[:80]}")
++                    return []
++            else:
++                log.warning(f"get_option_chain failed {_underlying_at_call} {expiry} {opt_type} ret={ret} err={_err_msg[:80]}")
++                return []
++        if chain_df.empty:
++            log.warning(f"get_option_chain empty {_underlying_at_call} {expiry} {opt_type}")
+             return []
+         codes = chain_df["code"].tolist()
+         if not codes:
+@@ -4328,7 +4436,10 @@ class MarketData:
+                 "option_type":  opt_type,
+             })
+         # [4/17事故対応] symbol-keyed cache に保存（上書きしない）
+-        self._chain_cache_by_symbol[_cache_key] = result
++        # [マルチ銘柄修正 2026-04-21] TTL対応のためtsも保存。空リストはキャッシュしない（レート制限エラー時の誤キャッシュ防止）
++        import time as _time_mod3
++        if result:
++            self._chain_cache_by_symbol[_cache_key] = {"data": result, "ts": _time_mod3.time()}
+         return result
+ 
+     def find_by_delta(self, chain: list, target_delta: float) -> Optional[dict]:
+@@ -5286,7 +5397,16 @@ class TradeEngine:
+             )
+             return False
+ 
+-        # 全発注後の残留確認
++        # FIX-Task9: 全発注後のbroker残留確認 (fill_poll統合)
++        # _wait_fills_with_timeout で確認済みのfill数 vs 総送信数を比較してpartial_closedを記録する
++        _total_sent = len(short_order_ids) + len(long_order_ids) if short_positions or long_positions else 0
++        _total_confirmed = len(close_order_ids)
++        if _total_sent > 0 and _total_confirmed < _total_sent:
++            log.warning(
++                f"[FillReconcile] 部分決済: {_total_confirmed}/{_total_sent} fill確認済み "
++                f"({reason})"
++            )
++
+         import time
+         time.sleep(2)
+         remaining_raw = self.get_open_positions()
+@@ -5302,19 +5422,29 @@ class TradeEngine:
+             _expired    = [c for c in remaining_codes if today_str not in c]
+             if _expired and not _truly_open:
+                 log.info(f"Expired 0DTE positions after close ({reason}): {_expired} — auto-cleanup will handle")
+-                return True
+             elif _truly_open:
+-                log.error(f"POSITIONS STILL OPEN after close ({reason}): {_truly_open}")
++                # FIX-Task9: broker残留を検知した場合 priority=1 (Atlas Alert token) で通知
++                # internal stateをクリアせず_pending_closeに記録して次回起動時に再試行
++                _partial_n = len(_truly_open)
++                log.error(
++                    f"[FillReconcile] POSITIONS STILL OPEN after close ({reason}): "
++                    f"{_truly_open} — 部分決済: {_total_confirmed}/{_total_sent} filled"
++                )
+                 self._pending_close = _truly_open
+                 pushover_alert(
+-                    "[Atlas/ALERT] close_all_positions leg failed - naked risk",
+-                    f"{reason} 後もポジション残留: {_truly_open}",
+-                    priority=2,
++                    "[Atlas/ALERT] 部分決済残留: broker照合で不一致",
++                    f"reason={reason}\n"
++                    f"fill確認済み: {_total_confirmed}/{_total_sent}\n"
++                    f"broker残留: {_partial_n}件 {_truly_open}\n"
++                    f"→ _pending_closeに記録。再起動時に再試行します",
++                    priority=1,
+                 )
+                 return False
+             else:
+                 log.warning(f"Unknown position codes after close ({reason}): {remaining_codes}")
+-                return False
++                # unknownは残留とは扱わず処理継続
++        else:
++            log.info(f"[FillReconcile] broker照合OK: 残留ポジションなし ({reason})")
+ 
+         # exit 実約定価格を収集して _last_exit_fills に格納
+         if close_order_ids:
+@@ -5648,7 +5778,44 @@ class EntryBuilder:
+                      f"BUY {buy_opt['strike_price']:.0f} credit=${_virtual_credit:.2f}")
+         else:
+             # [P0 BUG修正] center_strike=現在価格 でチェーンを周辺に絞る
+-            _center = self.mkt.get_spy_current() if self.mkt else None
++            # [マルチ銘柄修正 2026-04-21] underlying_codeに対応した銘柄別価格を使う
++            # get_spy_current()はFinnhubフォールバック時にSPY固定価格を返すため
++            # AAPL×cs_sellで center=708(SPY価格)になりAAPLストライク全除外になるバグを修正
++            _underlying_sym = self.mkt.underlying_code if self.mkt else "US.SPY"
++            _ticker_for_center = _underlying_sym.replace("US.", "").replace(".", "")
++            _center = None
++            if self.mkt:
++                # まずPriceCacheから取得（Futu subscribeデータ）
++                _cached_price = self.mkt._price_cache.get(_underlying_sym, max_age_sec=10.0)
++                if _cached_price and _cached_price > 0:
++                    _center = _cached_price
++                else:
++                    # FutuスナップショットAPI試行
++                    try:
++                        if FUTU_AVAILABLE and self.mkt.quote_ctx:
++                            _ret_c, _snap_c = self.mkt.quote_ctx.get_market_snapshot([_underlying_sym])
++                            if _ret_c == RET_OK and not _snap_c.empty:
++                                _p_c = float(_snap_c.iloc[0].get("last_price", 0) or 0)
++                                if _p_c > 0:
++                                    _center = _p_c
++                    except Exception:
++                        log.exception("[spy_bot] futu snapshot error in CS center fetch")
++                    if _center is None:
++                        # Finnhubから銘柄別に取得（SPY固定ではなく銘柄別）
++                        try:
++                            _r = requests.get(
++                                "https://finnhub.io/api/v1/quote",
++                                params={"symbol": _ticker_for_center, "token": FINNHUB_API_KEY},
++                                timeout=5,
++                            )
++                            _p_fh = float(_r.json().get("c") or 0)
++                            if _p_fh > 0:
++                                _center = _p_fh
++                        except Exception:
++                            log.exception("[spy_bot] finnhub center fetch error")
++                    if _center is None:
++                        # 最終フォールバック: get_spy_current()（SPY価格）
++                        _center = self.mkt.get_spy_current()
+             chain = self.mkt.get_option_chain_with_greeks(
+                 expiry, direction, center_strike=float(_center) if _center else None)
+             if not chain:
+@@ -5820,6 +5987,44 @@ class EntryBuilder:
+                 "qty": qty, "net_credit": net_credit,
+                 "result": "entered", "tactic": tactic,
+             })
++            # ── Entry/Exit Reason 構造化ログ (Task1) ─────────────────────────
++            try:
++                _ivr_at_entry = None
++                if bot is not None and hasattr(bot, "mkt"):
++                    try:
++                        _ivr_at_entry = bot.mkt.calc_ivr(vix)
++                    except Exception as _ivr_e:
++                        log.debug(f"[TradeReasonLogger] IVR取得失敗（無視）: {_ivr_e}")
++                _assessment = getattr(bot, "_window_assessment", None) or {}
++                _trl_log_entry(
++                    bot="atlas",
++                    engine=f"CreditSpread_{tactic}",
++                    symbol=self.underlying_code or "US.SPY",
++                    strike=sell_strike,
++                    action="SELL",
++                    qty=qty,
++                    price=net_credit,
++                    trade_id=trade_id,
++                    entry_reason={
++                        "selector_score": _assessment.get("score"),
++                        "vix": round(vix, 2),
++                        "ivr": _ivr_at_entry,
++                        "regime": _assessment.get("regime"),
++                        "bias": _assessment.get("bias"),
++                        "reason_text": (
++                            f"{tactic}経路/direction={direction}/"
++                            f"sell={sell_strike}/buy={buy_opt['strike_price']}/"
++                            f"credit={net_credit:.2f}"
++                        ),
++                    },
++                    constraints_checked={
++                        "dll_ok": True,
++                        "max_positions_ok": True,
++                        "paper_mode": getattr(bot, "paper", False) if bot else False,
++                    },
++                )
++            except Exception as _trl_e:
++                log.debug(f"[TradeReasonLogger] CS entry log失敗（無視）: {_trl_e}")
+         else:
+             pushover("SPY CS", f"エントリー失敗 {direction} {expiry} {time_key}ET ({tactic})")
+ 
+@@ -6850,6 +7055,24 @@ class IntradayMonitor:
+                         if _is_pdt_emergency:
+                             self._pdt_weekly_hedge_count += 1
+                         _new_remaining = max(0, DELTA_HEDGE_WEEKLY_BUDGET - self._pdt_weekly_hedge_count)
++                        # ── Trade Reason Logger ──────────────────────────────
++                        try:
++                            _trl_log_entry(
++                                bot="atlas", engine="DeltaHedge",
++                                symbol=_hedge_underlying, strike=atm_strike,
++                                action=f"BUY_{hedge_direction}_HEDGE", qty=hedge_qty,
++                                price=underlying_price * 0.01,
++                                entry_reason={
++                                    "total_delta": round(total_delta, 4),
++                                    "trigger": trigger, "excess_delta": round(excess_delta, 4),
++                                    "hedge_direction": hedge_direction,
++                                    "is_pdt_emergency": _is_pdt_emergency,
++                                    "reason_text": f"DeltaHedge triggered total_delta={total_delta:+.4f} (thresh=±{trigger:.2f}) {hedge_direction} x{hedge_qty}",
++                                },
++                                constraints_checked={"signal_id": _dh_signal_id, "cash_usd": round(_cash_usd, 0)},
++                            )
++                        except Exception as _trl_e:
++                            log.debug(f"[TradeReasonLogger] DeltaHedge entry log失敗（無視）: {_trl_e}")
+                         _pushover_body = (
+                             f"[Atlas] total_delta={total_delta:+.4f} (閾値±{trigger:.2f})\n"
+                             f"銘柄: {_hedge_ticker}\n"
+@@ -7890,7 +8113,13 @@ class ORBEngine:
+         _underlying = self.mkt.underlying_code if self.mkt else "US.SPY"
+         _ticker = _underlying.replace("US.", "").replace(".", "")
+         # Yahoo Finance用ティッカー（インデックスは^プレフィックス）
+-        _yahoo_ticker = _ticker if not _underlying.startswith("US..") else "^" + _underlying[4:]
++        # US..SPX → ^GSPC (S&P500の正式Yahoo ticker; ^SPXは場外でデータ空)
++        _FUTU_YAHOO_INDEX_MAP = {"SPX": "^GSPC", "DJI": "^DJI", "NDX": "^NDX"}
++        if _underlying.startswith("US.."):
++            _index_sym = _underlying[4:]  # e.g. "SPX"
++            _yahoo_ticker = _FUTU_YAHOO_INDEX_MAP.get(_index_sym, "^" + _index_sym)
++        else:
++            _yahoo_ticker = _ticker
+ 
+         if FUTU_AVAILABLE and self.mkt.quote_ctx and not self.dry_test:
+             try:
+@@ -8365,6 +8594,24 @@ class ORBEngine:
+             f" @ ${option_price:.2f}\nORB H={self.orb_high:.2f} L={self.orb_low:.2f}"
+             f" TP=${pos.tp_price:.2f} SL=${pos.sl_price:.2f}",
+         )
++        # ── Trade Reason Logger ──────────────────────────────────────────────
++        try:
++            pos._trade_id = _trl_log_entry(
++                bot="atlas", engine="ORBEngine",
++                symbol=self.mkt.underlying_code if self.mkt else "US.SPY",
++                strike=option_strike, action=f"BUY_{direction}", qty=qty, price=option_price,
++                entry_reason={
++                    "vix": round(self.today_vix or 0.0, 2),
++                    "orb_high": self.orb_high, "orb_low": self.orb_low,
++                    "time_zone_factor": self._time_zone_factor,
++                    "gap_size_factor": self._gap_size_factor,
++                    "direction": direction,
++                    "reason_text": f"ORB breakout {direction} strike={option_strike} orb_h={self.orb_high} orb_l={self.orb_low}",
++                },
++                constraints_checked={"signal_id": signal_id, "paper_mode": self.paper},
++            )
++        except Exception as _trl_e:
++            log.debug(f"[TradeReasonLogger] ORBEngine entry log失敗（無視）: {_trl_e}")
+         return pos
+ 
+     def execute_entry_1dte(self, direction: str, signal_id: Optional[str] = None) -> Optional['ORBPosition']:
+@@ -8559,6 +8806,21 @@ class ORBEngine:
+             f" @ ${option_price:.2f}\nexp={expiry_1dte}"
+             f" TP=${tp_display:.2f}(+30%) SL=${sl_display:.2f}(-50%)",
+         )
++        # ── Trade Reason Logger ──────────────────────────────────────────────
++        try:
++            pos._trade_id = _trl_log_entry(
++                bot="atlas", engine="ORB1DTEEngine",
++                symbol=self.mkt.underlying_code if self.mkt else "US.SPY",
++                strike=option_strike, action=f"BUY_{direction}", qty=qty, price=option_price,
++                entry_reason={
++                    "vix": round(vix, 2), "expiry": expiry_1dte,
++                    "direction": direction, "delta_target": 0.40,
++                    "reason_text": f"ORB 1DTE {direction} strike={option_strike} expiry={expiry_1dte}",
++                },
++                constraints_checked={"signal_id": signal_id, "paper_mode": self.paper},
++            )
++        except Exception as _trl_e:
++            log.debug(f"[TradeReasonLogger] ORB1DTE entry log失敗（無視）: {_trl_e}")
+         return pos
+ 
+     def _calc_qty_1dte(self, cash: float, option_price: float) -> int:
+@@ -8740,6 +9002,18 @@ class ORBEngine:
+ 
+         self.position  = None
+         self.trade_done = True
++        # ── Trade Reason Logger ──────────────────────────────────────────────
++        try:
++            _trl_log_exit(
++                bot="atlas", engine="ORBEngine",
++                symbol=_sym, strike=None, action=f"SELL_{pos.direction}",
++                qty=remaining_qty, price=exit_price,
++                trade_id=getattr(pos, "_trade_id", None),
++                exit_reason={"reason": reason},
++                pnl=round(pnl_usd, 2),
++            )
++        except Exception as _trl_e:
++            log.debug(f"[TradeReasonLogger] ORBEngine exit log失敗（無視）: {_trl_e}")
+         return {"reason": reason, "exit_price": exit_price, "pnl_usd": pnl_usd}
+ 
+     # ── strategy_selector: ORBを使うべき環境か判定 ─────────────────────────
+@@ -9173,7 +9447,7 @@ class CalendarEngine:
+             log.exception("[spy_bot] suppressed exception (L8285)")  # AUDIT_FIX: was pass
+ 
+         self._record_pnl("entry", 0, direction, atm_strike, qty)
+-        return CalendarPosition(
++        _cal_pos = CalendarPosition(
+             front_code=front_code,
+             back_code=back_code,
+             strike=atm_strike,
+@@ -9183,6 +9457,24 @@ class CalendarEngine:
+             back_entry_price=back_mid,
+             front_iv=front_iv,
+         )
++        # ── Trade Reason Logger ──────────────────────────────────────────────
++        try:
++            _cal_pos._trade_id = _trl_log_entry(
++                bot="atlas", engine="CalendarEngine",
++                symbol=self.symbol or "US.SPY",
++                strike=atm_strike, action=f"CALL_SPREAD_{direction}", qty=qty,
++                price=net_debit,
++                entry_reason={
++                    "vix": round(self.today_vix or 0.0, 2),
++                    "front_iv": round(front_iv, 4), "net_debit": round(net_debit, 4),
++                    "front_expiry": front_expiry, "back_expiry": back_expiry,
++                    "reason_text": f"Calendar {direction} strike={atm_strike} debit={net_debit:.4f} front={front_expiry} back={back_expiry}",
++                },
++                constraints_checked={"signal_id": signal_id, "paper_mode": self.paper},
++            )
++        except Exception as _trl_e:
++            log.debug(f"[TradeReasonLogger] CalendarEngine entry log失敗（無視）: {_trl_e}")
++        return _cal_pos
+ 
+     # ── エグジット監視 ────────────────────────────────────────────────────────
+     def check_exit(self, intraday_monitor: Optional['IntradayMonitor'] = None) -> Optional[dict]:
+@@ -9321,6 +9613,18 @@ class CalendarEngine:
+             strategy="Calendar",
+             exit_type=_reason_to_exit_type(reason, allow_expiry=self.allow_expiry_pass_through),
+         )
++        # ── Trade Reason Logger ──────────────────────────────────────────────
++        try:
++            _trl_log_exit(
++                bot="atlas", engine="CalendarEngine",
++                symbol=self.symbol or "US.SPY", strike=pos.strike,
++                action="CLOSE", qty=pos.qty, price=0.0,
++                trade_id=getattr(pos, "_trade_id", None),
++                exit_reason={"reason": reason},
++                pnl=round(pnl_usd, 2),
++            )
++        except Exception as _trl_e:
++            log.debug(f"[TradeReasonLogger] CalendarEngine exit log失敗（無視）: {_trl_e}")
+         self.position  = None
+         self.trade_done = True
+         return {"reason": reason, "pnl_usd": pnl_usd}
+@@ -9359,7 +9663,9 @@ class CalendarEngine:
+             trades = existing.get("trades", [])
+             entry = {
+                 "event":     event,
++                "tactic":    "calendar_sell",  # Fix 1: tactic伝搬修復
+                 "date":      datetime.datetime.now(ET).strftime("%Y-%m-%d"),
++                "ts":        datetime.datetime.now(ET).isoformat(),
+                 "pnl_usd":   round(pnl_usd, 2),
+                 "direction": direction,
+                 "strike":    strike,
+@@ -9382,7 +9688,7 @@ GAMMA_SCALP_ENTRY_H          = 9      # ストラドルエントリー開始時
+ GAMMA_SCALP_ENTRY_M          = 45
+ GAMMA_SCALP_CUTOFF_H         = 10     # ストラドルエントリー締め切り(ET)
+ GAMMA_SCALP_CUTOFF_M         = 30
+-GAMMA_SCALP_ATR_TRIGGER      = 0.40   # ATR(14) × この係数以上の5分変動でスキャルプ発動
++GAMMA_SCALP_ATR_TRIGGER      = 0.40   # ATR(14) × この係数以上の5分変動でスキャルプ発動（フォールバック固定値）
+ GAMMA_SCALP_MAX_PER_DAY      = 5      # 1日のスキャルプ上限回数（手数料考慮）
+ GAMMA_SCALP_STOP_LOSS_PCT    = 0.50   # ストラドルコストの50%損失でストップ
+ GAMMA_SCALP_FORCE_CLOSE_H    = 15     # 強制クローズ時刻(ET): 15:30
+@@ -9392,6 +9698,57 @@ GAMMA_SCALP_PNL_FILE         = _BASE_DIR / "gamma_scalp_pnl.json"
+ ENABLE_GAMMA_SCALP           = True   # グローバルON/OFF
+ 
+ 
++def calc_dynamic_gamma_atr_trigger(vix: float) -> float:
++    """VIXレベルに応じたGammaScalp ATRトリガー係数を動的算出する。
++
++    設計根拠:
++      - VIX高 → 原資産の動きが大きい → より大きな閾値でないとノイズでスキャルプが多発
++      - VIX低 → 動きが小さい → 低い閾値でスキャルプ機会を捕捉する
++      - ただしVIX<20ではGammaScalp自体を無効化するため低域の微調整は不要
++    参照: common/gamma_scalping.py の DELTA_BAND_VIX_* 設計思想を踏襲
++
++    Args:
++        vix: 現在VIX指数
++
++    Returns:
++        ATR_TRIGGER係数 (0.25 〜 0.55)
++    """
++    if vix >= 40:
++        return 0.55   # 超高ボラ: ノイズ多発防止で高め
++    elif vix >= 30:
++        return 0.48   # 高ボラ
++    elif vix >= 25:
++        return 0.42   # 中高ボラ
++    elif vix >= 20:
++        return 0.35   # 中ボラ（標準エントリー環境）
++    else:
++        return GAMMA_SCALP_ATR_TRIGGER  # フォールバック（VIX<20は通常無効）
++
++
++def calc_dynamic_gamma_interval_min(vix: float) -> float:
++    """VIXレベルに応じたGammaScalp最小インターバル（分）を動的算出する。
++
++    VIX高 → 動きが速い → 短いインターバルで多く刈り取る
++    VIX低 → 動きが遅い → 長いインターバルでノイズ排除
++
++    Args:
++        vix: 現在VIX指数
++
++    Returns:
++        最小インターバル（分）: 5.0 〜 20.0
++    """
++    if vix >= 40:
++        return 5.0    # 超高ボラ: 頻繁にスキャルプ可能
++    elif vix >= 30:
++        return 7.0
++    elif vix >= 25:
++        return 10.0   # デフォルト
++    elif vix >= 20:
++        return 15.0
++    else:
++        return GAMMA_SCALP_MIN_INTERVAL_MIN  # フォールバック
++
++
+ def _gamma_scalp_load_pnl() -> list:
+     try:
+         if GAMMA_SCALP_PNL_FILE.exists():
+@@ -9492,11 +9849,13 @@ class StraddleEngine:
+     supports_1dte: bool = False
+ 
+     def __init__(self, mkt: 'MarketData', eng: 'TradeEngine',
+-                 paper: bool = False, dry_test: bool = False):
++                 paper: bool = False, dry_test: bool = False,
++                 symbol: str | None = None):
+         self.mkt      = mkt
+         self.eng      = eng
+         self.paper    = paper
+         self.dry_test = dry_test
++        self.symbol   = symbol or getattr(mkt, "underlying_code", "US.SPY")
+ 
+         self.position:   Optional[StraddlePosition] = None
+         self.entry_done: bool = False
+@@ -9534,6 +9893,15 @@ class StraddleEngine:
+             log.info(f"[StraddleEngine] skip: VIX={vix} <= {GAMMA_SCALP_VIX_MIN}")
+             return None
+ 
++        # P1修正: ペーパーバイパス後もVIX値の健全性を確認する。
++        # should_enter_today() がペーパーモードでバイパスした場合でも、
++        # VIX値が取得できていなければ est_premium 計算が不正になるためスキップ。
++        # ペーパー時は GAMMA_SCALP_VIX_MIN 未満でも許可するが、
++        # VIX=None / <=0 は データ欠落としてスキップする（STRADDLE_BUYと同一基準）。
++        if vix is None or vix <= 0:
++            log.warning(f"[StraddleEngine] VIX値不正({vix}) → エントリー中止 (paper={self.paper})")
++            return None
++
+         self.today_vix = vix
+         expiry = _get_expiry_today(datetime.datetime.now(ET))
+         spy_price = self.mkt.get_spy_current()
+@@ -9590,6 +9958,28 @@ class StraddleEngine:
+             pushover("[StraddleEngine] ストラドルエントリー(DRY-TEST)",
+                      f"SPY={spy_price:.2f} strike={atm_strike} qty={qty} "
+                      f"コスト概算${pos.total_cost:.0f}")
++            # ── Trade Reason Logger (Task1) ──────────────────────────────────
++            try:
++                pos._trade_id = _trl_log_entry(
++                    bot="atlas", engine="StraddleEngine",
++                    symbol=self.symbol or "US.SPY",
++                    strike=atm_strike, action="BUY",
++                    qty=qty, price=call_price,
++                    entry_reason={
++                        "vix": round(vix, 2) if vix else None,
++                        "regime": "dry_test",
++                        "reason_text": (
++                            f"GammaScalp経路/DRY-TEST/VIX={vix:.2f}/strike={atm_strike}"
++                        ),
++                    },
++                    constraints_checked={
++                        "straddle_vix_check": "dry_test_bypass",
++                        "dll_ok": True,
++                        "max_positions_ok": True,
++                    },
++                )
++            except Exception as _trl_e:
++                log.debug(f"[TradeReasonLogger] StraddleEngine DRY entry失敗: {_trl_e}")
+             return pos
+ 
+         # 本番/ペーパー
+@@ -9649,6 +10039,31 @@ class StraddleEngine:
+         pushover("[StraddleEngine] ストラドルエントリー",
+                  f"SPY={spy_price:.2f} strike={atm_strike} qty={qty} "
+                  f"CALL@{call_fill:.2f} PUT@{put_fill:.2f} コスト${pos.total_cost:.0f}")
++        # ── Trade Reason Logger (Task1) ───────────────────────────────────────
++        try:
++            _vix_bypass = "paper_bypass" if self.paper and (vix is not None and vix <= GAMMA_SCALP_VIX_MIN) else "not_bypassed"
++            pos._trade_id = _trl_log_entry(
++                bot="atlas", engine="StraddleEngine",
++                symbol=self.symbol or "US.SPY",
++                strike=atm_strike, action="BUY",
++                qty=qty, price=(call_fill + put_fill) / 2,
++                entry_reason={
++                    "vix": round(vix, 2) if vix else None,
++                    "regime": "live",
++                    "reason_text": (
++                        f"GammaScalp経路/VIX={vix:.2f}/"
++                        f"{'VIXバイパス(paper mode)/' if self.paper else ''}"
++                        f"strike=ATM({atm_strike})"
++                    ),
++                },
++                constraints_checked={
++                    "straddle_vix_check": _vix_bypass,
++                    "dll_ok": True,
++                    "max_positions_ok": True,
++                },
++            )
++        except Exception as _trl_e:
++            log.debug(f"[TradeReasonLogger] StraddleEngine entry失敗: {_trl_e}")
+         return pos
+ 
+     def close_straddle(self, pos: 'StraddlePosition', reason: str):
+@@ -9664,6 +10079,18 @@ class StraddleEngine:
+                 "event": "straddle_exit", "reason": reason,
+                 "spy_at_exit": spy_price, "scalp_count": pos.scalp_count, "dry_test": True,
+             })
++            try:
++                _trl_log_exit(
++                    bot="atlas", engine="StraddleEngine",
++                    symbol=self.symbol or "US.SPY",
++                    strike=getattr(pos, "call_code", None),
++                    action="SELL", qty=pos.call_qty,
++                    price=spy_price,
++                    trade_id=getattr(pos, "_trade_id", None),
++                    exit_reason={"reason_text": reason, "scalp_count": pos.scalp_count, "dry_test": True},
++                )
++            except Exception as _trl_e:
++                log.debug(f"[TradeReasonLogger] close_straddle DRY exit失敗: {_trl_e}")
+             self.position = None
+             return
+ 
+@@ -9685,6 +10112,18 @@ class StraddleEngine:
+         })
+         pushover("[StraddleEngine] ストラドルクローズ",
+                  f"reason={reason} SPY={spy_price:.2f} scalp_count={pos.scalp_count}")
++        try:
++            _trl_log_exit(
++                bot="atlas", engine="StraddleEngine",
++                symbol=self.symbol or "US.SPY",
++                strike=getattr(pos, "call_code", None),
++                action="SELL", qty=pos.call_qty,
++                price=spy_price,
++                trade_id=getattr(pos, "_trade_id", None),
++                exit_reason={"reason_text": reason, "scalp_count": pos.scalp_count},
++            )
++        except Exception as _trl_e:
++            log.debug(f"[TradeReasonLogger] close_straddle exit失敗: {_trl_e}")
+         self.position = None
+ 
+ 
+@@ -9717,15 +10156,17 @@ class GammaScalpEngine:
+         self._scalp_count_today: int = 0
+         self._last_scalp_ts:     Optional[datetime.datetime] = None
+         self._min_scalp_interval_min: float = GAMMA_SCALP_MIN_INTERVAL_MIN
++        self._current_vix:       Optional[float] = None  # VIX動的パラメータ用
+ 
+     def reset_daily(self):
+         self._spy_price_history  = []
+         self._atr14              = None
+         self._scalp_count_today  = 0
+         self._last_scalp_ts      = None
++        # VIXは日次リセット対象外（当日VIXは initialize_atr_with_vix で更新）
+ 
+     def initialize_atr(self):
+-        """起動時にSPY ATR(14)を計算して保持する。"""
++        """起動時にSPY ATR(14)を計算して保持する（VIX未取得フォールバック）。"""
+         closes = _fetch_spy_closes_for_atr(days=20)
+         self._atr14 = _calc_spy_atr14(closes)
+         if self._atr14 is not None:
+@@ -9733,6 +10174,38 @@ class GammaScalpEngine:
+         else:
+             log.warning("[GammaScalpEngine] ATR(14)計算失敗 → スキャルプは無効")
+ 
++    def initialize_atr_with_vix(self, vix: float):
++        """起動時にSPY ATR(14)とVIXを同時設定して動的パラメータを初期化する。
++
++        VIXに応じてATRトリガー係数・スキャルプインターバルを動的算出する。
++        (2026-04-21 動的パラメータ化)
++
++        Args:
++            vix: 当日VIX指数
++        """
++        self.initialize_atr()
++        self._current_vix = vix
++        # VIX依存パラメータを初期化
++        self._min_scalp_interval_min = calc_dynamic_gamma_interval_min(vix)
++        atr_trigger = calc_dynamic_gamma_atr_trigger(vix)
++        log.info(
++            f"[GammaScalpEngine] VIX={vix:.1f} → "
++            f"atr_trigger={atr_trigger:.2f} interval={self._min_scalp_interval_min:.0f}min"
++        )
++
++    def update_vix(self, vix: float):
++        """場中のVIX更新を受け取り動的パラメータを再計算する（30分ごと推奨）。"""
++        if self._current_vix == vix:
++            return
++        old_vix = self._current_vix
++        self._current_vix = vix
++        self._min_scalp_interval_min = calc_dynamic_gamma_interval_min(vix)
++        if old_vix is not None and abs(vix - old_vix) >= 2.0:
++            log.info(
++                f"[GammaScalpEngine] VIX更新 {old_vix:.1f}→{vix:.1f} "
++                f"→ interval={self._min_scalp_interval_min:.0f}min"
++            )
++
+     def update_price(self, spy_price: float):
+         """現在価格を履歴に追記する（60秒ごと）。直近30分分のみ保持。"""
+         now    = datetime.datetime.now(ET)
+@@ -9772,13 +10245,20 @@ class GammaScalpEngine:
+         if move is None:
+             return None
+ 
+-        threshold = self._atr14 * GAMMA_SCALP_ATR_TRIGGER
++        # ATRトリガー係数をVIXで動的算出（2026-04-21 動的パラメータ化）
++        atr_trigger = (
++            calc_dynamic_gamma_atr_trigger(self._current_vix)
++            if self._current_vix is not None
++            else GAMMA_SCALP_ATR_TRIGGER
++        )
++        threshold = self._atr14 * atr_trigger
+         if abs(move) < threshold:
+             return None
+ 
+         direction = "CALL" if move > 0 else "PUT"
+         log.info(
+             f"[GammaScalpEngine] opportunity: move={move:+.3f} thr={threshold:.3f} "
++            f"(vix={self._current_vix} atr_trigger={atr_trigger:.2f}) "
+             f"dir={direction} count={self._scalp_count_today}/{GAMMA_SCALP_MAX_PER_DAY}"
+         )
+         return direction
+@@ -9881,6 +10361,23 @@ class GammaScalpEngine:
+         pushover("[GammaScalpEngine] スキャルプ実行",
+                  f"{side_label}利確→新ATM SPY={spy_price:.2f} "
+                  f"strike={new_atm_strike} scalp#{self._scalp_count_today}")
++        # ── Trade Reason Logger ──────────────────────────────────────────────
++        try:
++            _trl_log_entry(
++                bot="atlas", engine="GammaScalpEngine",
++                symbol="US.SPY", strike=new_atm_strike,
++                action=f"SCALP_{direction}", qty=close_qty, price=0.0,
++                entry_reason={
++                    "direction": direction, "spy_price": round(spy_price, 2),
++                    "old_code": close_code, "new_code": new_code,
++                    "scalp_count_today": self._scalp_count_today,
++                    "atr14": self._atr14,
++                    "reason_text": f"GammaScalp {direction} close={close_code} -> open={new_code} SPY={spy_price:.2f}",
++                },
++                constraints_checked={"paper_mode": self.paper},
++            )
++        except Exception as _trl_e:
++            log.debug(f"[TradeReasonLogger] GammaScalp entry log失敗（無視）: {_trl_e}")
+         return True
+ 
+     def check_stop_loss(self) -> bool:
+@@ -10417,7 +10914,36 @@ class StraddleBuyEngine:
+                 return p if p > 0 else ORBEngine._get_fallback_price(sym_ticker)
+             except Exception:
+                 return ORBEngine._get_fallback_price(sym_ticker)
+-        return self.mkt.get_spy_current()  # underlying_code切替済みのため銘柄別に動作
++        # [マルチ銘柄修正 2026-04-21] get_spy_current()はFinnhubフォールバック時SPY固定価格を返す
++        # Futu PriceCacheに銘柄価格があればそれを使い、なければFinnhubで銘柄別に取得する
++        _sym_for_price = self.mkt.underlying_code if self.mkt else "US.SPY"
++        # PriceCacheから取得
++        if self.mkt:
++            _cached_p = self.mkt._price_cache.get(_sym_for_price, max_age_sec=10.0)
++            if _cached_p and _cached_p > 0:
++                return _cached_p
++            # Futu snapshot API試行
++            try:
++                if FUTU_AVAILABLE and self.mkt.quote_ctx:
++                    _ret_p, _snap_p = self.mkt.quote_ctx.get_market_snapshot([_sym_for_price])
++                    if _ret_p == RET_OK and not _snap_p.empty:
++                        _pv = float(_snap_p.iloc[0].get("last_price", 0) or 0)
++                        if _pv > 0:
++                            return _pv
++            except Exception:
++                log.exception("[spy_bot] futu snapshot error in current price fetch")
++        # Finnhubから銘柄別取得（SPY固定ではなく）
++        try:
++            _tk = sym_ticker or "SPY"
++            _r = requests.get(
++                "https://finnhub.io/api/v1/quote",
++                params={"symbol": _tk, "token": FINNHUB_API_KEY}, timeout=5)
++            _pf = float(_r.json().get("c") or 0)
++            if _pf > 0:
++                return _pf
++        except Exception:
++            log.exception("[spy_bot] finnhub current price fetch error")
++        return self.mkt.get_spy_current() if self.mkt else None
+ 
+     def _get_straddle_current_value(self, pos: StraddleBuyPosition) -> Optional[float]:
+         """ストラドルの現在価値（CALL+PUT合計）を1枚あたりで返す。"""
+@@ -11153,6 +11679,22 @@ class IVCrushEngine:
+                 f"premium=${entry_premium:.2f} IV={entry_iv:.3f} qty={qty} expiry={expiry}"
+             )
+             self._record_pnl("entry", 0.0, ticker, atm_strike, qty, "entry")
++            # ── Trade Reason Logger ──────────────────────────────────────────
++            try:
++                self.position._trade_id = _trl_log_entry(
++                    bot="atlas", engine="IVCrushEngine",
++                    symbol=futu_sym, strike=atm_strike,
++                    action="SELL_STRADDLE_IVCRUSH", qty=qty, price=entry_premium,
++                    entry_reason={
++                        "entry_iv": round(entry_iv, 4), "expiry": expiry,
++                        "earnings_date": (self._today_earnings_info or {}).get("date", ""),
++                        "earnings_hour": (self._today_earnings_info or {}).get("hour", ""),
++                        "reason_text": f"IVCrush straddle sell {ticker} strike={atm_strike} IV={entry_iv:.3f} premium={entry_premium:.2f}",
++                    },
++                    constraints_checked={"paper_mode": getattr(self, "paper", False)},
++                )
++            except Exception as _trl_e:
++                log.debug(f"[TradeReasonLogger] IVCrush entry log失敗（無視）: {_trl_e}")
+             return True
+         except Exception as e:
+             log.warning(f"[IVCrush] execute_entry エラー: {e}")
+@@ -11256,6 +11798,18 @@ class IVCrushEngine:
+             strategy="IVCrush",
+             exit_type=_reason_to_exit_type(reason, allow_expiry=self.allow_expiry_pass_through),
+         )
++        # ── Trade Reason Logger ──────────────────────────────────────────────
++        try:
++            _trl_log_exit(
++                bot="atlas", engine="IVCrushEngine",
++                symbol=str(pos.symbol), strike=pos.strike,
++                action="BUY_BACK_STRADDLE_IVCRUSH", qty=pos.qty, price=exit_premium or 0.0,
++                trade_id=getattr(pos, "_trade_id", None),
++                exit_reason={"reason": reason, "exit_premium": exit_premium},
++                pnl=round(pnl_usd, 2),
++            )
++        except Exception as _trl_e:
++            log.debug(f"[TradeReasonLogger] IVCrush exit log失敗（無視）: {_trl_e}")
+         self.position = None
+         self.trade_done = True
+         return {"reason": reason, "pnl_usd": pnl_usd}
+@@ -11263,9 +11817,13 @@ class IVCrushEngine:
+     def _record_pnl(self, event, pnl, symbol, strike, qty, reason):
+         try:
+             record = {
+-                "event": event, "symbol": str(symbol).replace("US.", ""),
++                "event": event, "tactic": "iv_crush",  # Fix 1: tactic伝搬修復
++                "symbol": str(symbol).replace("US.", ""),
+                 "strike": strike, "qty": qty, "pnl_usd": round(pnl, 2),
+-                "reason": reason, "timestamp": datetime.datetime.now(ET).isoformat(),
++                "reason": reason,
++                "date": datetime.datetime.now(ET).strftime("%Y-%m-%d"),
++                "ts": datetime.datetime.now(ET).isoformat(),
++                "timestamp": datetime.datetime.now(ET).isoformat(),
+             }
+             existing = []
+             if IV_CRUSH_PNL_FILE.exists():
+@@ -11674,6 +12232,23 @@ class StrangleSellEngine:
+             f"qty={qty} credit=${net_credit_total:.2f}",
+         )
+         self._record_pnl("entry", 0.0, pos)
++        # ── Trade Reason Logger ──────────────────────────────────────────────
++        try:
++            pos._trade_id = _trl_log_entry(
++                bot="atlas", engine="StrangleSellEngine",
++                symbol=str(self.symbol), strike=None,
++                action="SELL_STRANGLE", qty=qty, price=net_per_share,
++                entry_reason={
++                    "vix": round(vix, 2),
++                    "call_strike": call_strike, "put_strike": put_strike,
++                    "call_delta": round(call_delta, 3), "put_delta": round(put_delta, 3),
++                    "net_credit": round(net_credit_total, 2),
++                    "reason_text": f"StrangleSell CALL={call_strike}(d={call_delta:.3f}) PUT={put_strike}(d={put_delta:.3f}) credit={net_credit_total:.2f}",
++                },
++                constraints_checked={"paper_mode": self.paper, "signal_id": signal_id},
++            )
++        except Exception as _trl_e:
++            log.debug(f"[TradeReasonLogger] StrangleSell entry log失敗（無視）: {_trl_e}")
+         return pos
+ 
+     def check_exit(self) -> Optional[dict]:
+@@ -11788,6 +12363,18 @@ class StrangleSellEngine:
+             strategy="StrangleSell",
+             exit_type=_reason_to_exit_type(reason, allow_expiry=self.allow_expiry_pass_through),
+         )
++        # ── Trade Reason Logger ──────────────────────────────────────────────
++        try:
++            _trl_log_exit(
++                bot="atlas", engine="StrangleSellEngine",
++                symbol=str(pos.symbol), strike=None,
++                action="BUY_BACK_STRANGLE", qty=pos.qty, price=0.0,
++                trade_id=getattr(pos, "_trade_id", None),
++                exit_reason={"reason": reason},
++                pnl=round(pnl_usd, 2),
++            )
++        except Exception as _trl_e:
++            log.debug(f"[TradeReasonLogger] StrangleSell exit log失敗（無視）: {_trl_e}")
+         self.position   = None
+         self.trade_done = True
+         return {"reason": reason, "pnl_usd": pnl_usd}
+@@ -11798,6 +12385,7 @@ class StrangleSellEngine:
+         try:
+             record = {
+                 "event":       event,
++                "tactic":      "strangle_sell",  # Fix 1: tactic伝搬修復
+                 "symbol":      str(pos.symbol).replace("US.", ""),
+                 "call_strike": pos.call_strike,
+                 "put_strike":  pos.put_strike,
+@@ -11806,6 +12394,8 @@ class StrangleSellEngine:
+                 "pnl_usd":     round(pnl, 2),
+                 "reason":      reason,
+                 "timestamp":   datetime.datetime.now(ET).isoformat(),
++                "date":        datetime.datetime.now(ET).strftime("%Y-%m-%d"),
++                "ts":          datetime.datetime.now(ET).isoformat(),
+             }
+             existing: list = []
+             if STRANGLE_SELL_PNL_FILE.exists():
+@@ -11894,6 +12484,10 @@ class IronCondorSellEngine:
+     # True: EODタイムストップ = 満期消滅として記録（PDT不消費）
+     allow_expiry_pass_through: bool = True
+ 
++    # チェーン取得失敗バックオフ定数
++    _CHAIN_FAIL_MAX   = 3      # 連続失敗上限（これを超えたら当日skip）
++    _CHAIN_FAIL_DELAY = 300.0  # 連続失敗後の待機秒数 (5分)
++
+     def __init__(self, mkt, eng, paper=False, dry_test=False):
+         self.mkt      = mkt
+         self.eng      = eng
+@@ -11905,6 +12499,8 @@ class IronCondorSellEngine:
+         self.entry_done  = False
+         self._assessment = None
+         self._vix_spike_30 = False   # VIXスパイク+30%翌日フラグ
++        self._chain_fail_count: dict   = {}   # symbol -> 連続チェーン失敗カウント
++        self._chain_fail_skip_until: dict = {}  # symbol -> バックオフ終了時刻
+ 
+     def reset_daily(self):
+         self.today_vix  = None
+@@ -11913,6 +12509,8 @@ class IronCondorSellEngine:
+         self.entry_done = False
+         self._assessment = None
+         self._vix_spike_30 = False
++        self._chain_fail_count = {}
++        self._chain_fail_skip_until = {}
+ 
+     def _calc_dynamic_deltas(self, vix, ivr_pct):
+         """VIX と IVR パーセンタイルからデルタ目標を動的算出する。"""
+@@ -12049,7 +12647,15 @@ class IronCondorSellEngine:
+         if _is_past_entry_cutoff(dry_test=self.dry_test):
+             log.info(f"[IC_SELL] execute_entry: {LAST_ENTRY_H}:{LAST_ENTRY_M:02d} ET以降 → エントリー中止")
+             return None
++        # チェーン失敗バックオフ中はスキップ (シンボル別チェック)
++        _now_et = datetime.datetime.now(ET)
+         underlying = self.mkt.underlying_code if self.mkt else "US.SPY"
++        _sym_skip_until = self._chain_fail_skip_until.get(underlying)
++        if _sym_skip_until and _now_et < _sym_skip_until:
++            _wait_sec = (_sym_skip_until - _now_et).total_seconds()
++            log.info(f"[IC_SELL] {underlying} chain_fail backoff中 あと{_wait_sec:.0f}秒 → skip")
++            return None
++        # 当日上限超過は entry_done 済み (reset_dailyで毎朝リセット)
+         # BUG-6: signal_id が未指定なら決定的IDを生成
+         if signal_id is None:
+             import uuid as _uuid
+@@ -12144,8 +12750,24 @@ class IronCondorSellEngine:
+         put_chain  = self.mkt.get_option_chain_with_greeks(
+             today_str, "PUT", center_strike=float(_center) if _center else None)
+         if not call_chain or not put_chain:
+-            log.error("[IC_SELL] チェーン取得失敗")
+-            pushover("[Atlas][IC_SELL]", "チェーン取得失敗 -> エントリー中止")
++            # シンボル別連続失敗カウント
++            _fail_cnt = self._chain_fail_count.get(underlying, 0) + 1
++            self._chain_fail_count[underlying] = _fail_cnt
++            log.error(f"[IC_SELL] {underlying} チェーン取得失敗 (連続{_fail_cnt}回目)")
++            if _fail_cnt >= self._CHAIN_FAIL_MAX:
++                _skip_until = datetime.datetime.now(ET) + datetime.timedelta(
++                    seconds=self._CHAIN_FAIL_DELAY
++                )
++                self._chain_fail_skip_until[underlying] = _skip_until
++                log.warning(
++                    f"[IC_SELL] {underlying} 連続{_fail_cnt}回チェーン失敗 → "
++                    f"{self._CHAIN_FAIL_DELAY/60:.0f}分バックオフ "
++                    f"(次試行: {_skip_until.strftime('%H:%M:%S')} ET)"
++                )
++                self._chain_fail_count[underlying] = 0  # カウンタリセット
++                # Pushoverは月上限超過対策で1回のみ送信
++                pushover("[Atlas][IC_SELL]",
++                         f"{underlying} チェーン{_fail_cnt}回失敗 → {self._CHAIN_FAIL_DELAY/60:.0f}分backoff")
+             return None
+ 
+         call_sell_opt = self.mkt.find_by_delta(call_chain, call_delta)
+@@ -12364,6 +12986,24 @@ class IronCondorSellEngine:
+         self.entry_done = True
+         self.trade_done = True
+         self.position   = pos
++        # ── Trade Reason Logger ──────────────────────────────────────────────
++        try:
++            pos._trade_id = _trl_log_entry(
++                bot="atlas", engine="IronCondorSellEngine",
++                symbol=underlying, strike=None,
++                action="SELL_IC", qty=qty, price=pos.net_credit,
++                trade_id=trade_id,
++                entry_reason={
++                    "vix": round(vix, 2), "ivr_pct": round(ivr_pct, 1),
++                    "call_delta": round(call_delta, 3), "put_delta": round(put_delta, 3),
++                    "spread_width": spread_width, "capital_pct": round(capital_pct, 4),
++                    "vix_spike_30": self._vix_spike_30,
++                    "reason_text": f"IC CALL {call_sell_strike}/{call_buy_opt['strike_price']} PUT {put_sell_strike}/{put_buy_opt['strike_price']} credit={pos.net_credit:.4f}",
++                },
++                constraints_checked={"signal_id": signal_id, "paper_mode": self.paper},
++            )
++        except Exception as _trl_e:
++            log.debug(f"[TradeReasonLogger] IC_SELL entry log失敗（無視）: {_trl_e}")
+         return pos
+ 
+     # -- Phase 3: エグジット監視 -----------------------------------------------
+@@ -12530,6 +13170,18 @@ class IronCondorSellEngine:
+             strategy="IC",
+             exit_type=_reason_to_exit_type(reason, allow_expiry=self.allow_expiry_pass_through),
+         )
++        # ── Trade Reason Logger ──────────────────────────────────────────────
++        try:
++            _trl_log_exit(
++                bot="atlas", engine="IronCondorSellEngine",
++                symbol=str(pos.symbol), strike=None,
++                action="BUY_BACK_IC", qty=pos.qty, price=0.0,
++                trade_id=getattr(pos, "_trade_id", None),
++                exit_reason={"reason": reason, "close_ok": close_ok},
++                pnl=pnl_usd,
++            )
++        except Exception as _trl_e:
++            log.debug(f"[TradeReasonLogger] IC_SELL exit log失敗（無視）: {_trl_e}")
+         self.position   = None
+         self.trade_done = True
+         return close_ok
+@@ -13017,7 +13669,8 @@ class ButterflyEngine:
+                 f"K={atm_strike:.1f} w={wing_width} debit=${net_debit:.3f} qty={qty}"
+             )
+             _butterfly_append_pnl({
+-                "event": "entry", "symbol": symbol, "wing_type": wing_type,
++                "event": "entry", "tactic": "butterfly",  # Fix 1: tactic伝搬修復
++                "symbol": symbol, "wing_type": wing_type,
+                 "atm_strike": atm_strike, "wing_width": wing_width,
+                 "net_debit": net_debit, "qty": qty, "trade_id": trade_id,
+                 "expiry": expiry, "mode": "dry_test",
+@@ -13158,7 +13811,8 @@ class ButterflyEngine:
+         self.entry_done = True
+         log.info(f"[Butterfly] ENTRY完了: {self.position}")
+         _butterfly_append_pnl({
+-            "event": "entry", "symbol": symbol, "wing_type": wing_type,
++            "event": "entry", "tactic": "butterfly",  # Fix 1: tactic伝搬修復
++            "symbol": symbol, "wing_type": wing_type,
+             "atm_strike": atm_strike, "wing_width": wing_width,
+             "net_debit": net_debit, "qty": qty,
+             "lower_entry_price": lower_price,
+@@ -13174,6 +13828,22 @@ class ButterflyEngine:
+             f"debit=${net_debit:.3f} qty={qty}\n"
+             f"expiry={expiry}",
+         )
++        # ── Trade Reason Logger ──────────────────────────────────────────────
++        try:
++            self.position._trade_id = _trl_log_entry(
++                bot="atlas", engine="ButterflyEngine",
++                symbol=symbol, strike=atm_strike,
++                action=f"BUY_{wing_type}_BUTTERFLY", qty=qty, price=net_debit,
++                trade_id=trade_id,
++                entry_reason={
++                    "wing_type": wing_type, "wing_width": wing_width,
++                    "net_debit": round(net_debit, 4), "expiry": expiry,
++                    "reason_text": f"Butterfly {wing_type} K={atm_strike:.1f} w={wing_width} debit={net_debit:.4f}",
++                },
++                constraints_checked={"paper_mode": self.paper, "signal_id": _bf_signal_id},
++            )
++        except Exception as _trl_e:
++            log.debug(f"[TradeReasonLogger] ButterflyEngine entry log失敗（無視）: {_trl_e}")
+         return True
+ 
+     def check_exit(self) -> bool:
+@@ -13280,7 +13950,8 @@ class ButterflyEngine:
+                 log.info(f"[Butterfly] EXIT {label} 約定: oid={oid} fill={fill_method}")
+ 
+         _butterfly_append_pnl({
+-            "event": "exit", "symbol": pos.symbol, "wing_type": pos.wing_type,
++            "event": "exit", "tactic": "butterfly",  # Fix 1: tactic伝搬修復
++            "symbol": pos.symbol, "wing_type": pos.wing_type,
+             "atm_strike": pos.atm_strike, "wing_width": pos.wing_width,
+             "net_debit": pos.net_debit, "qty": pos.qty,
+             "exit_value": current_val, "pnl_usd": pnl_usd,
+@@ -13302,6 +13973,18 @@ class ButterflyEngine:
+             strategy="Butterfly",
+             exit_type=_reason_to_exit_type(reason, allow_expiry=self.allow_expiry_pass_through),
+         )
++        # ── Trade Reason Logger ──────────────────────────────────────────────
++        try:
++            _trl_log_exit(
++                bot="atlas", engine="ButterflyEngine",
++                symbol=str(pos.symbol), strike=pos.atm_strike,
++                action=f"CLOSE_{pos.wing_type}_BUTTERFLY", qty=pos.qty, price=current_val,
++                trade_id=getattr(pos, "_trade_id", None),
++                exit_reason={"reason": reason, "exit_value": round(current_val, 4)},
++                pnl=round(pnl_usd, 2),
++            )
++        except Exception as _trl_e:
++            log.debug(f"[TradeReasonLogger] ButterflyEngine exit log失敗（無視）: {_trl_e}")
+         self.position   = None
+         self.trade_done = True
+         return True
+@@ -14955,8 +15638,128 @@ class SPYCreditSpreadBot:
+                             f"execute_entry_1dte失敗 → スキップ"
+                         )
+ 
++                elif tactic == "ic_sell" and self.ic_sell_engine is not None:
++                    # ── IronCondor売り戦術 ────────────────────────────────────
++                    _ic_ok = self.ic_sell_engine.premarket_check()
++                    if not _ic_ok:
++                        log.debug(
++                            f"[MassVerify] {symbol.replace('US.','')}×ic_sell "
++                            f"premarket_check失敗 → スキップ"
++                        )
++                        return
++                    _ic_mv_pos = self.ic_sell_engine.execute_entry(bot=self)
++                    if _ic_mv_pos is not None:
++                        self._mass_verify_positions[key] = {
++                            "tactic": "ic_sell",
++                            "position": _ic_mv_pos,
++                            "engine": "ic",
++                            "entry_time": datetime.datetime.now(ET).isoformat(),
++                            "symbol": symbol,
++                        }
++                        append_pnl_entry({
++                            "event": "entry",
++                            "strategy": "mass_verify_ic_sell",
++                            "symbol": symbol.replace("US.", ""),
++                            "tactic": "ic_sell",
++                            "mass_verify_key": key,
++                        })
++                        log.info(
++                            f"[MassVerify] {symbol.replace('US.','')}×ic_sell "
++                            f"エントリー完了"
++                        )
++                    else:
++                        log.debug(
++                            f"[MassVerify] {symbol.replace('US.','')}×ic_sell "
++                            f"execute_entry失敗 → スキップ"
++                        )
++
++                elif tactic == "strangle_sell" and self.strangle_sell_engine is not None:
++                    # ── Strangle売り戦術 ──────────────────────────────────────
++                    _mv_vix_ss = self.mkt.get_vix() or 20.0
++                    _mv_ivr_ss = self.mkt.calc_ivr(_mv_vix_ss) or 0.0
++                    _mv_spy_ss = self.mkt.get_spy_current() or 0.0
++                    if _mv_spy_ss <= 0:
++                        log.debug(
++                            f"[MassVerify] {symbol.replace('US.','')}×strangle_sell "
++                            f"価格取得失敗 → スキップ"
++                        )
++                        return
++                    _mv_ivr_pct = self.mkt.get_ivr_percentiles() or (30.0, 30.0)
++                    _mv_ivr_hi = (_mv_ivr_pct[1] if isinstance(_mv_ivr_pct, tuple)
++                                  else _mv_ivr_pct.get("p70", 30.0))
++                    if not StrangleSellEngine.should_trade_today(
++                        self.strangle_sell_engine.symbol,
++                        _mv_vix_ss, _mv_ivr_ss, _mv_ivr_hi, paper=self.paper,
++                    ):
++                        log.debug(
++                            f"[MassVerify] {symbol.replace('US.','')}×strangle_sell "
++                            f"should_trade_today=False → スキップ"
++                        )
++                        return
++                    _ss_mv_pos = self.strangle_sell_engine.execute_entry(_mv_spy_ss, _mv_vix_ss)
++                    if _ss_mv_pos is not None:
++                        self._mass_verify_positions[key] = {
++                            "tactic": "strangle_sell",
++                            "position": _ss_mv_pos,
++                            "engine": "strangle",
++                            "entry_time": datetime.datetime.now(ET).isoformat(),
++                            "symbol": symbol,
++                        }
++                        append_pnl_entry({
++                            "event": "entry",
++                            "strategy": "mass_verify_strangle_sell",
++                            "symbol": symbol.replace("US.", ""),
++                            "tactic": "strangle_sell",
++                            "mass_verify_key": key,
++                        })
++                        log.info(
++                            f"[MassVerify] {symbol.replace('US.','')}×strangle_sell "
++                            f"エントリー完了"
++                        )
++                    else:
++                        log.debug(
++                            f"[MassVerify] {symbol.replace('US.','')}×strangle_sell "
++                            f"execute_entry失敗 → スキップ"
++                        )
++
++                elif tactic == "calendar_sell" and self.calendar_engine is not None:
++                    # ── Calendar Spread戦術 ───────────────────────────────────
++                    _mv_vix_cal = self.mkt.get_vix() or 20.0
++                    _mv_spy_cal = self.mkt.get_spy_current() or 0.0
++                    if _mv_spy_cal <= 0:
++                        log.debug(
++                            f"[MassVerify] {symbol.replace('US.','')}×calendar_sell "
++                            f"価格取得失敗 → スキップ"
++                        )
++                        return
++                    _cal_mv_pos = self.calendar_engine.execute_entry(_mv_spy_cal, _mv_vix_cal)
++                    if _cal_mv_pos:
++                        self._mass_verify_positions[key] = {
++                            "tactic": "calendar_sell",
++                            "position": _cal_mv_pos,
++                            "engine": "calendar",
++                            "entry_time": datetime.datetime.now(ET).isoformat(),
++                            "symbol": symbol,
++                        }
++                        append_pnl_entry({
++                            "event": "entry",
++                            "strategy": "mass_verify_calendar_sell",
++                            "symbol": symbol.replace("US.", ""),
++                            "tactic": "calendar_sell",
++                            "mass_verify_key": key,
++                        })
++                        log.info(
++                            f"[MassVerify] {symbol.replace('US.','')}×calendar_sell "
++                            f"エントリー完了 strike={_cal_mv_pos.strike}"
++                        )
++                    else:
++                        log.debug(
++                            f"[MassVerify] {symbol.replace('US.','')}×calendar_sell "
++                            f"execute_entry失敗 → スキップ"
++                        )
++
+                 else:
+-                    # ── CS売り戦術（デフォルト）──────────────────────────────
++                    # ── CS売り戦術（デフォルト: cs_sell および未対応戦術）────
+                     _mv_vix = self.mkt.get_vix() or 20.0
+                     _mv_params = get_params(_mv_vix, STANDARD_PARAMS)
+                     if _mv_params is None:
+@@ -15954,10 +16757,25 @@ class SPYCreditSpreadBot:
+                         f"[GammaEarlyExit] {spread_key_str}: 15:00 ET以降 かつ "
+                         f"含み益{pl_ratio:.1%} < 50% → ガンマリスク回避のため早期クローズ"
+                     )
+-                    self.eng.close_all_positions("gamma_early_exit")
++                    _ok_gee = self.eng.close_all_positions("gamma_early_exit")
+                     _gee_fill_stats = _exit_fill_stats(
+                         self.eng._last_exit_fills if hasattr(self.eng, "_last_exit_fills") else {}
+                     )
++                    if not _ok_gee:
++                        # FIX-Task9: close失敗時は_on_position_closedを呼ばない
++                        # internal stateをクリアせず次ループで再試行させる
++                        log.error(
++                            f"[GammaEarlyExit] close_all_positions FAILED ({spread_key_str}) "
++                            f"→ 部分決済の可能性あり。_on_position_closed スキップ・再試行待機"
++                        )
++                        pushover_alert(
++                            "[Atlas/ALERT] GammaEarlyExit close失敗",
++                            f"{spread_key_str}: close_all_positions=False\n"
++                            f"broker残留ポジションあり。手動確認または次ループで再試行",
++                            priority=1,
++                        )
++                        # _gamma_exit_pendingのフラグはそのまま維持（再発射防止継続）
++                        break
+                     pushover("SPY CS",
+                              f"15:00早期Exit {pl_ratio:.0%} (ガンマリスク回避)", priority=0)
+                     append_pnl_entry({
+@@ -15982,10 +16800,22 @@ class SPYCreditSpreadBot:
+                 if pl_ratio >= _dynamic_pt:
+                     log.info(f"PT {pl_ratio:.1%} >= {_dynamic_pt:.0%} "
+                              f"→ スプレッド全体クローズ {spread_key_str} {leg_codes}")
+-                    self.eng.close_all_positions("profit_target")
++                    _ok_pt = self.eng.close_all_positions("profit_target")
+                     _pt_fill_stats = _exit_fill_stats(
+                         self.eng._last_exit_fills if hasattr(self.eng, "_last_exit_fills") else {}
+                     )
++                    if not _ok_pt:
++                        # FIX-Task9: close失敗時は_on_position_closedを呼ばない
++                        log.error(
++                            f"[PT] close_all_positions FAILED ({spread_key_str}) "
++                            f"→ 部分決済の可能性あり。_on_position_closed スキップ"
++                        )
++                        pushover_alert(
++                            "[Atlas/ALERT] PT close失敗",
++                            f"{spread_key_str}: close_all_positions=False\n手動確認要",
++                            priority=1,
++                        )
++                        break
+                     pushover("SPY CS", f"利確 {pl_ratio:.0%} (PT {_dynamic_pt:.0%})")
+                     append_pnl_entry({
+                         "event": "exit", "reason": "profit_target",
+@@ -16011,10 +16841,22 @@ class SPYCreditSpreadBot:
+                         regime_info = f" regime={self.intraday_monitor.current_regime}"
+                     log.info(f"SL {pl_ratio:.1%} <= -{active_stop:.2f}{regime_info} "
+                              f"→ スプレッド全体クローズ {spread_key_str} {leg_codes}")
+-                    self.eng.close_all_positions("stop_loss")
++                    _ok_sl = self.eng.close_all_positions("stop_loss")
+                     _sl_fill_stats = _exit_fill_stats(
+                         self.eng._last_exit_fills if hasattr(self.eng, "_last_exit_fills") else {}
+                     )
++                    if not _ok_sl:
++                        # FIX-Task9: close失敗時は_on_position_closedを呼ばない
++                        log.error(
++                            f"[SL] close_all_positions FAILED ({spread_key_str}) "
++                            f"→ 部分決済の可能性あり。_on_position_closed スキップ"
++                        )
++                        pushover_alert(
++                            "[Atlas/ALERT] SL close失敗",
++                            f"{spread_key_str}: close_all_positions=False\n手動確認要",
++                            priority=1,
++                        )
++                        break
+                     pushover("SPY CS",
+                              f"損切 {pl_ratio:.0%} (SL {active_stop:.0%}{regime_info})",
+                              priority=1)
+@@ -16657,6 +17499,20 @@ class SPYCreditSpreadBot:
+             save_failures(0)
+             log.info("OpenD connected")
+ 
++            # FIX-Task9: 起動時 stale pending order cleanup
++            # 前回セッションで約定確認できなかった SUBMITTED/WAITING_SUBMIT 状態の注文をキャンセルする。
++            # これにより broker側の「88注文」乖離の原因となるゾンビ注文を除去する。
++            if not DRY_TEST and FUTU_AVAILABLE:
++                try:
++                    _stale_canceled = self.eng.cancel_all_open_orders(reason="startup_stale_cleanup")
++                    if _stale_canceled > 0:
++                        log.warning(
++                            f"[StartupCleanup] 起動時stale注文キャンセル: {_stale_canceled}件 "
++                            f"→ 前回セッションの未約定注文を除去しました"
++                        )
++                except Exception as _sc_e:
++                    log.warning(f"[StartupCleanup] stale order cancel失敗（無視）: {_sc_e}")
++
+             # CRITICAL-8: 前回 _pending_close に残留した未決済 leg を再試行
+             if self.eng._pending_close:
+                 log.warning(f"[SyncBarrier] startup: _pending_close 残留 {self.eng._pending_close} → 再決済試行")
+@@ -16781,6 +17637,18 @@ class SPYCreditSpreadBot:
+                         f"ペーパーモード: 除外して新規検証継続",
+                         priority=0,
+                     )
++                    # P2修正: 既存ポジション件数を当日エントリー済みとしてカウントに反映。
++                    # traded_today=False のまま（新規エントリーは許可する）だが、
++                    # _standard_entry_done=True にして既存エントリーを「今回エントリー済み」と認識させる。
++                    # これにより再起動直後の即時2重エントリーを防ぎ、
++                    # ペーパー90分インターバル（_paper_last_standard_entry_et）のリセットも行う。
++                    self._standard_entry_done = True
++                    self._paper_last_standard_entry_et = datetime.datetime.now(ET)
++                    log.info(
++                        f"[P2修正] 起動時既存ポジション{len(active_at_startup)}件 → "
++                        f"_standard_entry_done=True, _paper_last_standard_entry_et=now "
++                        f"(90分後に再エントリー許可)"
++                    )
+                     # traded_today は False のまま維持（新規エントリーを許可）
+                 else:
+                     log.warning(f"起動時に既存ポジション{len(active_at_startup)}件検出 → 監視再開・本日エントリーなし")
+@@ -17166,6 +18034,9 @@ class SPYCreditSpreadBot:
+                         log.info(f"[DRY-TEST] GammaScalp straddle entry ({_elapsed_min:.1f}min after start)")
+                         self._gamma_scalp_entry_attempted = True
+                         _vix_for_scalp = self.mkt.get_vix()
++                        # VIX動的パラメータ更新 (2026-04-21)
++                        if _vix_for_scalp is not None and self.gamma_scalp_engine is not None:
++                            self.gamma_scalp_engine.update_vix(_vix_for_scalp)
+                         if self.straddle_engine.should_enter_today(_vix_for_scalp):
+                             self.straddle_engine.execute_entry()
+                         else:
+@@ -17181,6 +18052,9 @@ class SPYCreditSpreadBot:
+                     if _gs_entry_start <= _gs_min < _gs_cutoff:
+                         self._gamma_scalp_entry_attempted = True
+                         _vix_for_scalp = self.mkt.get_vix()
++                        # VIX動的パラメータ更新 (2026-04-21)
++                        if _vix_for_scalp is not None and self.gamma_scalp_engine is not None:
++                            self.gamma_scalp_engine.update_vix(_vix_for_scalp)
+                         if self.straddle_engine.should_enter_today(_vix_for_scalp):
+                             self.straddle_engine.execute_entry()
+                         else:
+@@ -17338,8 +18212,9 @@ class SPYCreditSpreadBot:
+                     )
+                     if _ss_in_window:
+                         _vix_ss = self.mkt.get_vix() or 20.0
+-                        _ivr_ss = self.mkt.calc_ivr() or 0.0
+-                        _ivr_hi = (self.mkt.get_ivr_percentiles() or {}).get("p70", STRANGLE_SELL_IVR_MIN)
++                        _ivr_ss = self.mkt.calc_ivr(_vix_ss) or 0.0
++                        _ivr_pct = self.mkt.get_ivr_percentiles() or (STRANGLE_SELL_IVR_MIN, STRANGLE_SELL_IVR_MIN)
++                        _ivr_hi = _ivr_pct[1] if isinstance(_ivr_pct, tuple) else _ivr_pct.get("p70", STRANGLE_SELL_IVR_MIN)
+                         _sym_ss = self.strangle_sell_engine.symbol
+                         if StrangleSellEngine.should_trade_today(
+                             _sym_ss, _vix_ss, _ivr_ss, _ivr_hi, paper=self.paper
+@@ -17386,6 +18261,11 @@ class SPYCreditSpreadBot:
+                                 f"PUT {_ic_pos.put_sell_strike:.0f}/{_ic_pos.put_buy_strike:.0f} "
+                                 f"credit=${_ic_pos.net_credit:.2f} x{_ic_pos.qty}"
+                             )
++                        else:
++                            # バックオフ中はNoneが返るが次ティックでまた呼ばれる設計を維持。
++                            # バックオフ終了後に自動で再試行する。
++                            # entry_attempted は立てない → バックオフ解除後に試行再開できる。
++                            pass
+ 
+                 # エグジット監視: ポジション保有中
+                 if self.ic_sell_engine.is_active():
+@@ -17638,13 +18518,38 @@ class SPYCreditSpreadBot:
+                 if self._intraday_tick_count >= _ticks_per_60s:  # _sleep_sec × _ticks_per_60s = 60秒
+                     self._intraday_tick_count = 0
+                     self.intraday_monitor.tick()
+-                    # [VIXBand] ATM subscribe: 場中のみSPY価格でATMを追跡
++                    # [VIXBand] ATM subscribe: 場中のみunderlying価格でATMを追跡
++                    # [FIX 2026-04-21] SPXの場合はget_spy_snapshotでなくYahoo ^GSPCで取得
++                    # get_spy_snapshotは常にSPY価格(~709)を返すためSPXのATMがずれる
+                     _now_et_atm = datetime.datetime.now(ET)
+                     if not DRY_TEST and FUTU_AVAILABLE and 9 <= _now_et_atm.hour < 16:
+                         try:
+-                            _spy_snap = self.mkt.get_spy_snapshot()
+-                            if _spy_snap and _spy_snap.get("last_price", 0) > 0:
+-                                self.mkt.update_atm_subscribe(_spy_snap["last_price"])
++                            _uc = self.mkt.underlying_code if self.mkt else "US.SPY"
++                            if _uc == "US..SPX":
++                                # SPXの実価格をYahoo ^GSPCから取得
++                                try:
++                                    import requests as _req2
++                                    _r2 = _req2.get(
++                                        "https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC",
++                                        params={"period1": int(datetime.datetime.now().timestamp()) - 60,
++                                                "period2": int(datetime.datetime.now().timestamp()),
++                                                "interval": "1m"},
++                                        headers={"User-Agent": "Mozilla/5.0"},
++                                        timeout=5,
++                                    )
++                                    _d2 = _r2.json()
++                                    _meta2 = _d2["chart"]["result"][0]["meta"]
++                                    _spx_price = float(_meta2.get("regularMarketPrice") or 0)
++                                except Exception:
++                                    _spx_price = 0.0
++                                if _spx_price > 1000:  # SPXは必ず1000超
++                                    self.mkt.update_atm_subscribe(_spx_price)
++                                else:
++                                    log.debug(f"[ATMSubscribe] SPX価格取得失敗: {_spx_price} → スキップ")
++                            else:
++                                _spy_snap = self.mkt.get_spy_snapshot()
++                                if _spy_snap and _spy_snap.get("last_price", 0) > 0:
++                                    self.mkt.update_atm_subscribe(_spy_snap["last_price"])
+                         except Exception as _atm_e:
+                             log.debug(f"[ATMSubscribe] tick更新スキップ: {_atm_e}")
+ 

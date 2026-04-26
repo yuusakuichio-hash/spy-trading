@@ -1,0 +1,84 @@
+# common/market_specs.yaml — 市場セッション仕様 Single Source of Truth
+#
+# このファイルは全 Bot・Agent・Watchdog が参照する唯一の正典。
+# 時間帯・市場仕様を変更する場合は必ずここを先に更新する。
+# Python API: common/market_specs.py
+# 実装: common/market_calendar.py (market_specs.py 経由で値を取得)
+#
+# 公式ソース:
+#   NYSE: https://www.nyse.com/markets/hours-calendars
+#   CME:  https://www.cmegroup.com/markets/equities/sp/e-mini-sandp500.contractSpecs.html
+
+version: "2026-04-20"
+
+markets:
+  spx_options:
+    description: "SPX/SPY 米株オプション (0DTE・Atlas 専用)"
+    used_by:
+      - atlas
+      - spy_bot
+      - atlas_agent
+      - atlas_watchdog
+    # ET (Eastern Time) セッション
+    session_et:
+      - {open: "09:30", close: "16:00"}
+    # Atlas の市場監視窓 (JST・夏時間 EDT +13h)
+    session_jst_edt:
+      - {open: "22:30", close: "05:00", note: "日跨ぎ。監視窓は 22:20-05:10 を含む広め"}
+    session_jst_est:
+      - {open: "23:30", close: "06:00", note: "冬時間 (11月第1日曜〜3月第2日曜)"}
+    # Atlas 実装の監視窓 (market_calendar.py の定数と一致させること)
+    atlas_window_jst_edt:
+      start: "22:20"
+      end:   "05:10"
+    closed_days:
+      - saturday
+      - sunday
+    holidays_source: NYSE
+    official_url: "https://www.nyse.com/markets/hours-calendars"
+
+  cme_futures_equity:
+    description: "CME E-mini / Micro 先物 (ES/MES/NQ/MNQ) — Chronos 専用"
+    used_by:
+      - chronos
+      - chronos_bot
+      - chronos_agent
+      - chronos_watchdog
+    # CME Globex セッション
+    session_et:
+      - {open_day: "sunday 18:00", close_day: "friday 17:00", note: "ほぼ24時間連続"}
+    daily_break_et:
+      - {start: "17:00", end: "18:00", note: "毎日1時間の休止"}
+    # JST 夏時間 (EDT +13h) — 2026年は 3/8〜11/1
+    session_jst_edt:
+      - {open_day: "monday 07:00", close_day: "saturday 06:00"}
+    daily_break_jst_edt:
+      - {start: "06:00", end: "07:00"}
+    # JST 冬時間 (EST +14h) — 2026年は 11/1〜2027/3/8
+    session_jst_est:
+      - {open_day: "monday 08:00", close_day: "saturday 07:00"}
+    daily_break_jst_est:
+      - {start: "07:00", end: "08:00"}
+    closed_days:
+      - saturday_from_06_jst_edt
+      - sunday_all_day
+      - monday_before_07_jst_edt
+    official_url: "https://www.cmegroup.com/markets/equities/sp/e-mini-sandp500.contractSpecs.html"
+
+# ── DST (夏冬時間) スイッチスケジュール ──────────────────────────────────────
+dst_schedule:
+  2026:
+    edt_start: "2026-03-08"  # 3月第2日曜
+    est_start: "2026-11-01"  # 11月第1日曜
+  2027:
+    edt_start: "2027-03-14"
+    est_start: "2027-11-07"
+
+# ── 混同防止チェックリスト ────────────────────────────────────────────────────
+# Chronos と Atlas を編集するときは必ず確認する
+confusion_prevention:
+  - "Chronos = CME 先物 = ほぼ 24 時間 (月 07:00〜土 06:00 JST/EDT)"
+  - "Atlas = SPX/SPY オプション = 22:20〜05:10 JST/EDT (日跨ぎ・平日のみ)"
+  - "Atlas の時間帯を Chronos にコピーしてはいけない (逆も同様)"
+  - "時間帯を変更する前に必ず common/market_specs.yaml を参照する"
+  - "DST 切替 (11/1 と 3/8) のたびに daily_break 時刻が 1 時間ずれる"

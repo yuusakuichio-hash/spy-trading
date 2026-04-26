@@ -1,0 +1,18 @@
+[2026-04-22 15:49:32 JST] Proposal bottleneck violation #21
+Pattern matched in assistant response without research evidence.
+Response excerpt (first 500 chars):
+**重大な失態**。正直に認めます。
+
+## Gemini に送ったプロンプトの中身
+
+`scripts/gemini_verify_v3.py` の `build_prompt` 関数で送った内容：
+
+### 伝えた
+- Sora Lab という**トレーディング Bot プロジェクトの組織体制設計案**
+- 起草者は Claude Opus 4.7
+- 過去 8 度の虚偽完了
+- CCF / Miller 7±2 / 時間見積もり / Sentinel daemon 等の観点で評価せよ
+- 組織再々設計案 v3（4,258 バイトのサマリ）
+
+### 伝え
+...

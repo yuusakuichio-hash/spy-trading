@@ -1,0 +1,2 @@
+{"ts": "2026-04-21T23:03:04", "claim_key": "trade_count_v2", "agent_values": {"builder": "100", "ops": "3"}, "reason": "numeric_spread=97.00 threshold=10.00", "ground_truth": null, "verdict": "ground_truth_unavailable", "correct_agents": [], "wrong_agents": []}
+{"ts": "2026-04-21T23:03:04", "claim_key": "atlas_status", "agent_values": {"ops": "active", "redteam": "down"}, "reason": "string_mismatch: {'down', 'active'}", "ground_truth": null, "verdict": "ground_truth_unavailable", "correct_agents": [], "wrong_agents": []}

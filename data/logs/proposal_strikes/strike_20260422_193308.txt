@@ -1,0 +1,15 @@
+[2026-04-22 19:33:07 JST] Proposal bottleneck violation #34
+Pattern matched in assistant response without research evidence.
+Response excerpt (first 500 chars):
+規律文書から数値例を完全除去。以降、どんな文書（memory 含む）にも具体数値を書かない運用に。
+
+## Phase 1 完了条件の判断待ち（金額記述なし版）
+
+判断お願いします：
+
+| 選択肢 | 内容 |
+|---|---|
+| A | この内容で確定・次セッション以降の Phase 1 で参照 |
+| B | 修正指示あり |
+| C | 全文見たい |
+...

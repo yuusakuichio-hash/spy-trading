@@ -1,0 +1,519 @@
+# chronos_rules.yaml — Chronos Bot 戦略パラメータ・リスクルール (Sora Lab / Chronos)
+#
+# 数値の出典（公式確認済み・2026-04-19）:
+#   MFFU Flex $50K: https://myfundedfutures.com/blog/myfundedfutures-mffu-flex-plan
+#   CME Exchange Margin: https://www.ampfutures.com/trading-info/margins/
+#     (AmpFuturesはCME/NYMEX/COMEX公式のExchange Marginをそのまま掲示)
+#
+# atlas_rules.yaml（Atlas Watchdog用）とは別ファイル。
+# 本ファイルは Chronos Bot の戦略パラメータ・リスク管理・MFFU制約を管理する。
+#
+# 参照元:
+#   - chronos_bot.py     : entry / exit / risk / symbols / schedule
+#   - chronos_agent.py   : agent / log_sources / watchdog
+#   - chronos_mffu_rules.py : mffu_compliance
+
+# ── 対象銘柄 ─────────────────────────────────────────────────────────────────
+symbols:
+  # 取引許可銘柄リスト（chronos_symbol_meta.py の FUTURES_META キーと一致させる）
+  allowed:
+    - ES    # E-mini S&P 500（証拠金大・Funded後スケール用）
+    - MES   # Micro E-mini S&P 500（証拠金最小・初期フォーカス）
+    - NQ    # E-mini NASDAQ-100
+    - MNQ   # Micro E-mini NASDAQ-100
+
+  # TODO: CL / GC は VIX-MR系で有効活用できるか戦術BTで確認後に追加
+  # - CL
+  # - GC
+
+  # 初期フォーカス銘柄（証拠金最小・リスク最小）
+  primary: MES
+
+# ── エントリールール ─────────────────────────────────────────────────────────
+entry:
+  # 有効な戦術
+  # Source: data/mffu_multi_strategy_design.md (backtest検証済み)
+  tactics_enabled:
+    - orb      # Futures ORB (VIX>=20のみ) — バックテスト済み
+    - vix_mr   # Overnight VIX Mean Reversion (Zscore>1.5) — バックテスト済み
+  # TODO: trend_follow / gap_fill は4/28追加予定
+
+  # 市場時間フィルタ（ET）
+  # Source: MFFU公式 How It Works / 業界標準
+  session:
+    regular_hours_only: true    # MFFU: RTH推奨（CME先物は23h取引だがprop firmはRTH中心）
+    rth_start_et: "09:30"
+    rth_end_et:   "16:00"
+    # VIX-MR overnight エントリー: 15:40-15:55 ET（RTH終了前）
+    vix_mr_window_start_et: "15:40"
+    vix_mr_window_end_et:   "15:55"
+
+  # 環境フィルタ（Atlas と同じ設計思想：固定閾値禁止・動的算出）
+  # Source: data/mffu_multi_strategy_design.md (11年BTより)
+  env_filters:
+    # ORB: VIX>=20でのみ有効（11年BTで<15は破滅的、15-20も期待値マイナス）
+    orb_vix_min: 20.0
+    # VIX-MR: ZScore>1.5でエントリー（20日SMAからの標準偏差）
+    vix_mr_zscore_min: 1.5
+    atr_min: null        # バックテスト後に設定
+    volume_min: null     # バックテスト後に設定
+
+# ── エグジットルール ─────────────────────────────────────────────────────────
+exit:
+  # ORB: TP/SL はORB幅ベースの動的設定（固定tick禁止）
+  # Source: data/mffu_multi_strategy_design.md (Familiar-Cry3355の9年NQ研究)
+  orb_sl_ratio: 0.25    # SL = ORB幅 × 25%
+  orb_tp_ratio: 2.50    # TP = ORB幅 × 250%（RR 1:10）
+  orb_time_stop_et: "15:30"  # ORBタイムストップ
+
+  # VIX-MR: 保有5営業日後強制クローズ
+  # Source: data/mffu_multi_strategy_design.md
+  vix_mr_sl_pct: 0.015  # SL: エントリー価格 -1.5%
+  vix_mr_tp_pct: 0.010  # TP: エントリー価格 +1.0%
+  vix_mr_max_hold_days: 5
+
+  # 週末ポジション禁止（MFFU規則）
+  # Source: MFFU公式 How It Works (confirmed 2026-04-19)
+  no_weekend_hold: true
+
+  # EOD強制クローズ（RTH終了15分前）
+  time_exit_minutes_before_rth_close: 15
+
+# ── リスク管理 ────────────────────────────────────────────────────────────────
+risk:
+  # 1トレードあたり最大損失（口座の X%）
+  # バックテスト後に設定（現時点はMES 1枚 = 初期$2,675証拠金を上限）
+  max_loss_per_trade_pct: null     # バックテスト後に設定
+
+  # 1日の最大損失（MFFU: 日次損失制限なし・MLL連動で運用）
+  # Source: MFFU公式 Flex Plan (confirmed 2026-04-19): "There is no daily loss limit"
+  max_daily_loss_usd: null         # MLL監視で代替（日次損失制限なし）
+
+  # 最大同時建玉枚数（初期: MES 1枚でリスク最小）
+  max_concurrent_contracts: 1
+
+  # Kelly基準（Atlas と同じ動的資金配分）
+  # バックテスト蓄積後に動的算出
+  kelly_fraction: null             # バックテスト後に設定
+  kelly_lookback_days: 20
+
+# ── MFFU 制約 ─────────────────────────────────────────────────────────────────
+# Source: https://myfundedfutures.com/blog/myfundedfutures-mffu-flex-plan
+#         (confirmed 2026-04-19)
+mffu_compliance:
+  # 使用プラン
+  plan: "flex_50k"   # MFFU Flex $50K プラン
+
+  # フェーズ定義
+  # phase: evaluation | sim_funded
+  # chronos_mffu_rules.py の is_consistency_applicable() で参照
+  phase: "evaluation"   # 初期: Evaluation。合格後に sim_funded に変更
+
+  # Profit Target（Evaluation通過条件）
+  # Source: MFFU公式 Flex Plan (confirmed 2026-04-19)
+  evaluation:
+    profit_target_usd: 3000       # $3,000 で通過
+    max_loss_limit_usd: 2000      # MLL: $2,000 (Trailing EOD)
+    daily_loss_limit_usd: 0       # なし
+    consistency_max_pct: 0.50     # 1日の利益が全利益の50%以内
+    min_trading_days: 2           # 最短2日
+
+  # Sim-Funded 制約
+  # Source: MFFU公式 Flex Plan (confirmed 2026-04-19)
+  sim_funded:
+    max_loss_limit_usd: 2000       # 初回ペイアウト前: $2,000
+    max_loss_after_payout_usd: 100 # 初回ペイアウト後: $100（大幅縮小）
+    daily_loss_limit_usd: 0        # なし
+    consistency_max_pct: 0.0       # Consistencyルールなし
+    # 残高連動コントラクト上限
+    contract_table:
+      - min_profit_usd: 0
+        max_mini: 2
+        max_micro: 20
+      - min_profit_usd: 1500
+        max_mini: 3
+        max_micro: 30
+      - min_profit_usd: 2000
+        max_mini: 5
+        max_micro: 50
+
+  # Payout 条件
+  # Source: MFFU公式 Flex Plan (confirmed 2026-04-19)
+  payout:
+    min_winning_days: 5            # 5勝利日
+    min_daily_profit_usd: 150      # 各日 $150以上の利益
+    min_net_profit_usd: 500        # 純利益 $500以上
+    min_withdrawal_usd: 250        # 最小出金 $250
+    max_withdrawal_pct: 0.50       # 利益の最大50%
+    max_withdrawal_cap_usd: 5000   # 上限 $5,000
+    profit_split_pct: 0.80         # トレーダー取り分 80%
+
+  # 共通制約
+  # Source: MFFU公式 Flex Plan / How It Works (confirmed 2026-04-19)
+  drawdown_mode: "EOD"             # End of Day基準（イントラデイ参照なし）
+  news_trading_allowed: true       # T1ニュース取引許可
+  weekend_holding_allowed: false   # 週末ポジション禁止
+
+  # Safety Buffer（MLL監視）
+  # chronos_mffu_rules.calc_safety_buffer() で計算
+  trailing_drawdown:
+    mode: "EOD"                    # 日次終了時にpeakを更新
+    trailing_from_peak: true
+
+# ── 銘柄別証拠金参照 ─────────────────────────────────────────────────────────
+# Source: https://www.ampfutures.com/trading-info/margins/
+#         (AmpFuturesはCME/NYMEX/COMEX公式のExchange Marginを掲示)
+#         (confirmed 2026-04-19)
+# NOTE: MFFU環境ではDay Trading Marginが適用される場合あり（ブローカー確認必須）
+exchange_margin:
+  MES:
+    name: "Micro E-mini S&P 500"
+    exchange: "CME"
+    maintenance_usd: 2675     # CME Exchange Maintenance Margin
+    day_trading_usd: 40       # AmpFutures Day Trading Margin (Intraday)
+  ES:
+    name: "E-mini S&P 500"
+    exchange: "CME"
+    maintenance_usd: 26750
+    day_trading_usd: 400
+  MNQ:
+    name: "Micro E-mini NASDAQ-100"
+    exchange: "CME"
+    maintenance_usd: 4062
+    day_trading_usd: 100
+  NQ:
+    name: "E-mini NASDAQ-100"
+    exchange: "CME"
+    maintenance_usd: 40621
+    day_trading_usd: 1000
+  CL:
+    name: "Crude Oil (WTI)"
+    exchange: "NYMEX"
+    maintenance_usd: 12690
+    day_trading_usd: 12690
+  GC:
+    name: "Gold"
+    exchange: "COMEX"
+    maintenance_usd: 37005
+    day_trading_usd: 9251    # Gold Day Trading Marginは低め
+
+# ── ニュースフィルター ────────────────────────────────────────────────────────
+# MFFU News Trading Policy (T1 Flex 全アカウント共通・2分窓)
+# Source: https://help.myfundedfutures.com/en/articles/8230009-news-trading-policy
+# "These protocols apply to all news releases"
+# "No new positions may be opened 2 minutes before or 2 minutes after"
+news_filter:
+  # 新規エントリー禁止窓（秒）: ±120秒 = 前後2分
+  blackout_window_sec: 120
+
+  # T1級指標リスト（MFFU T1に準拠）
+  t1_events:
+    - "FOMC"
+    - "CPI"
+    - "NFP"             # Non-Farm Payrolls
+    - "RETAIL_SALES"
+    - "PPI"
+    - "PCE"
+    - "GDP"
+    - "UNEMPLOYMENT"
+    - "ISM"
+    - "JOLTS"
+    - "FED_CHAIR"       # Fed Chair Speech
+    - "INTEREST_RATE"   # 金利決定
+
+  # 既存ポジションの扱い: ニュース窓内でもHold許可（新規エントリーのみ禁止）
+  hold_existing_positions: true
+
+  # カレンダーファイルパス
+  calendar_path: "data/econ_calendar.json"
+
+# ── Globex Maintenance Break Guard ────────────────────────────────────────────
+# CME Globex 毎日 ET 17:00-18:00 の清算窓（市場閉場）
+# Source: CME Group 公式 - Globex clearing/maintenance window 17:00-18:00 ET daily
+#         https://www.cmegroup.com/markets/equities/sp/micro-e-mini-sandp-500.contractSpecs.html
+maintenance_break:
+  # 清算窓 (ET)
+  start_et: "17:00"
+  end_et:   "18:00"
+
+  # 清算窓内は発注完全停止（既存ポジはhold許可）
+  block_new_orders: true
+
+  # 推奨: 16:50 ET 以降に新規ポジションを建てない（清算前バッファ10分）
+  pre_break_buffer_minutes: 10
+
+# ── 連敗サイズ制御・5連敗停止 ────────────────────────────────────────────────
+# 設計根拠: プロップファーム標準 + drawdown protection ベストプラクティス
+consecutive_loss_guard:
+  # 2連敗: サイズ 50% 削減 (例: 2枚→1枚)
+  streak_2_size_pct: 0.50
+
+  # 3連敗: サイズ 25% (最小単位の1枚を維持)
+  streak_3_size_pct: 0.25
+
+  # 5連敗: 当日完全停止 (kill_switch_day = True)
+  halt_streak: 5
+
+  # 日次リセット時刻 (ET)
+  daily_reset_et: "09:00"
+
+# ── Daily Soft Stop (F3: 4→5点改善) ─────────────────────────────────────────
+# 日次損失 $300 到達で size_pct を 50% 削減（エントリー禁止ではなくサイズ縮小）
+# 設計根拠: MFFU合格者ジャーナル標準 "daily soft stop $300 → reduce size 50%"
+#           既存 Intraday STOP_PCT (90%) は EOD MLL 連動の保護。soft stop は独立。
+# chronos_bot.py の run_forever() 内でこの値を参照して size 乗数を調整する。
+daily_soft_stop:
+  loss_threshold_usd: 300        # $300 到達でソフトストップ発動
+  action: reduce_size            # "reduce_size" | "halt" (将来拡張用)
+  size_reduction_pct: 50         # サイズを 50% 削減 (size_pct *= 0.5)
+  reset_on_new_day: true         # 翌日 daily_reset で自動解除
+
+# ── ATR Regime 動的閾値 (F10: 2→5点改善) ──────────────────────────────────────
+# get_atr_regime() の分類乗数設定
+# 乗数の数値根拠: 低ボラ縮小・高ボラ拡大・超高ボラ逆張り抑制（業界標準レジーム設定）
+# Source: chronos_strategy_selector.py:L269-295 apply_atr_regime_to_size()
+atr_regime_thresholds:
+  # p25/p75/p90 は get_atr_regime() 内で 60日履歴から動的算出（ここには書かない）
+  # ここでは size_pct 乗数のみ設定（固定閾値ハードコード禁止）
+  multipliers:
+    low:     0.8   # P25以下 → 低ボラ縮小
+    normal:  1.0   # P25-P75 → 通常
+    high:    1.2   # P75-P90 → 高ボラ拡大（ORBトレンド環境）
+    extreme: 0.5   # P90超  → 超高ボラ大幅縮小（逆張り抑制）
+  # レジーム別の atr_size_multiplier（size_pct × atr_size_mult）
+  # 参照: chronos_strategy_selector.apply_atr_regime_to_size()
+  atr_size_multiplier_low:     0.8   # low レジームの size 乗数
+  atr_size_multiplier_normal:  1.0   # normal レジームの size 乗数（変化なし）
+  atr_size_multiplier_high:    1.2   # high レジームの size 乗数
+  atr_size_multiplier_extreme: 0.5   # extreme レジームの size 乗数
+  # 履歴不足時のフォールバックレジーム
+  fallback_regime: "normal"
+  min_history_required: 5        # 5件未満は fallback_regime を使用
+
+# ── フェーズ別Consistencyルール ───────────────────────────────────────────────
+# Source: MFFU公式 Flex Plan
+#         "Consistency requirement applies only to the evaluation phase"
+phase_rules:
+  # 口座タイプ ("demo" | "mffu_eval" | "mffu_sim_funded" | "mffu_sim_funded_after_payout")
+  # "mffu_sim_funded_after_payout": 初回ペイアウト後 → survival_mode_after_payout 適用
+  account_type: "demo"   # 起動引数で上書き可能
+
+  # フェーズ遷移条件（chronos_mffu_rules.on_first_payout_received() が検知）
+  transitions:
+    evaluation_to_sim_funded: "profit_target_reached"
+    sim_funded_pre_payout_to_sim_funded_after_payout: "first_payout_received"
+
+  # Consistencyチェックを適用するフェーズ
+  consistency_phases:
+    - "mffu_eval"   # Evaluationのみ適用
+
+  # Sim-Fundedではスキップ（MFFU公式: Consistencyルールなし）
+  consistency_skip_phases:
+    - "demo"
+    - "mffu_sim_funded"
+    - "mffu_sim_funded_after_payout"
+
+# ── Survival Mode（初回ペイアウト後・Max Loss $100対応）────────────────────────
+# 設計思想: 優秀MESトレーダーの思考「勝とうとしない・口座を死なせない」
+#   Source: MFFU公式 (confirmed 2026-04-19): Sim-Funded初回ペイアウト後MLL=$100
+#   優秀トレーダー原則: 1日1トレード・A+セットアップのみ・ストップ$25以内・利確$150で即終了
+#
+# 全数値はこのyaml経由で参照（コード内ハードコード禁止・環境適応型設計規律）
+survival_mode_after_payout:
+  enabled: true
+
+  # 1トレードあたりの最大枚数（MES 1枚固定: リスク最小化）
+  # 優秀MESトレーダー原則: "1枚固定"
+  max_contracts_per_trade: 1
+
+  # 1日の最大損失上限（$100 MLL の 80%でバッファ設定）
+  # 優秀MESトレーダー原則: "負けないことに全振り" → MLL到達前に自動停止
+  max_daily_loss_usd: 80
+
+  # 1トレードあたりのストップ幅（USD）
+  # MES 1tick=$1.25 / 20tick=$25 → MLL$100の25%で1トレード損失を抑制
+  # 優秀MESトレーダー原則: "ストップ20tick($5)以内" → 実運用では$25を上限とする
+  per_trade_stop_usd: 25
+
+  # 利確ターゲット（USD）: 到達で即日終了
+  # 優秀MESトレーダー原則: "利確$150で即日終了"
+  profit_lock_usd: 150
+
+  # 1日の最大トレード数
+  # 優秀MESトレーダー原則: "1日1トレード"
+  max_trades_per_day: 1
+
+  # エントリー許可ウィンドウ（ET）: A+セットアップ帯のみ
+  # 根拠: data/research_mes_trader_day_20260419.md — ORB確定後・流動性安定帯
+  # 10:30〜11:00 ET: ORB確定後30分・ランダムウォーク排除
+  allowed_entry_windows_et:
+    - ["10:30", "11:00"]
+
+  # エントリー禁止ウィンドウ（ET）: 不確実時間完全回避
+  # 優秀MESトレーダー原則: "不確実時間完全回避"
+  # 09:30-09:45: オープン直後の乱高下 / 11:30-13:00: 薄商い昼間帯 / 15:45-16:00: 強制クローズ前
+  forbidden_windows_et:
+    - ["09:30", "09:45"]
+    - ["11:30", "13:00"]
+    - ["15:45", "16:00"]
+
+  # 最終敗北日から指定営業日はエントリー禁止（連敗ゼロ許容設計）
+  # 優秀MESトレーダー原則: "連敗ゼロ許容" → 負けた翌日は即停止せず3営業日冷却
+  post_loss_cooldown_days: 3
+
+  # エントリーに必要な最低セットアップスコア（0-100）
+  # 優秀MESトレーダー原則: "A+セットアップのみ（確率80%以上の局面）"
+  required_setup_score: 80
+
+  # 1日最大損失到達で即日kill_switch発動
+  kill_switch_on_daily_loss: true
+
+# ── Rate-limit ハンドラー ──────────────────────────────────────────────────────
+# API rate limit 対応 (exponential backoff)
+# 公式明示値なし。実践者報告による backoff 設定
+rate_limit_handler:
+  # 429 受信時の backoff 設定 (seconds)
+  backoff_base_sec: 1      # 初回
+  backoff_max_sec: 60      # 上限
+  # 連続 429 回数でその日の取引停止
+  consecutive_halt_count: 3
+
+# ── スケジュール ─────────────────────────────────────────────────────────────
+schedule:
+  # LaunchAgent 起動時刻（JST）
+  # Chronos (CME E-mini 先物) は月曜 07:00 JST 開場・土曜 06:00 JST 閉場
+  # 毎日 06:00-07:00 JST はデイリーメンテナンス休止
+  launchagent_start_jst: "07:00"   # 月曜 CME 開場
+  launchagent_stop_jst: "06:00"    # 土曜 CME 閉場
+
+  # Bot自動停止時刻（ET）
+  # RTH クローズ後 X 分で自動停止
+  auto_stop_minutes_after_rth_close: 5
+
+# ── Agent / Watchdog 設定 ─────────────────────────────────────────────────────
+agent:
+  # 監視ログパス
+  log_sources:
+    chronos: "data/logs/chronos.log"
+    chronos_agent: "data/logs/chronos_agent.log"
+
+  # LaunchAgent ラベル（chronos_agent.py が参照）
+  bot_launchagent: "com.soralab.chronos_bot"
+  agent_launchagent: "com.soralab.chronos_agent"
+
+  # PID ファイル
+  pid_files:
+    - "data/logs/chronos_bot.pid"
+    - "data/logs/chronos_agent.pid"
+
+  # ログ stale 判定（秒）
+  stale_log_sec: 180
+
+  # 監視ループ間隔（秒）
+  cycle_interval_sec: 30
+
+  # 市場時間窓 — CME E-mini 先物 (MES/MNQ) は24H市場のため cme_futures モードを使用する。
+  # 旧: start/end 固定値は SPX オプション時間帯のコピペ誤り（2026-04-20 修正）
+  market_window:
+    mode: "cme_futures"
+
+# ── Cumulative Delta 設定 (F12: 0→5点実装) ─────────────────────────────────────
+# 実装: chronos_cumulative_delta.py — CumulativeDelta クラス
+# データソース: Tradovate tick stream (aggressor side) または 1分足バー代替
+# 戦略連携: chronos_strategy_selector.py — env["cumulative_delta_bias"]
+cumulative_delta:
+  # δ-8 (2026-04-20): DEPRECATED — cycle4-12 redteam CRITICAL 4件未解消のため廃止。
+  # 復活条件: tick stream API接続確認 + unit test 全件合格 + redteam independent verification
+  # テスト側: tests/test_f12_f13_cycle6_20260419.py は enabled:false 前提で設計済み
+  enabled: false  # DEPRECATED: 復活は独立redteam合格後のみ
+
+  # バケット集計幅 (分)
+  # 5分 = ORB ウィンドウと同期・流動性の方向性を捉えやすい
+  bucket_minutes: 5
+
+  # 乖離検出感度 (0.0-1.0)
+  # 価格と delta の方向乖離を検出する閾値
+  # 0.3 = 30% 以上の乖離で bullish/bearish divergence と判定
+  divergence_threshold: 0.3
+
+  # 日次リセット時刻 (ET)
+  # RTH 開始と同期させる
+  daily_reset_et: "09:30"
+
+  # tick なしケースの代替実装 (1分足バー close-open 方向 × volume)
+  bar_approximation_enabled: true
+
+  # DOM bid/ask volume 比率プロキシ
+  # Tradovate MD WebSocket 経由で bid_volume / ask_volume を取得
+  dom_proxy_enabled: false  # Tradovate MD API 確認後に有効化
+
+  # バケット最大保持数 (RTH 6.5h / 5min = 78 バケット)
+  max_buckets: 78
+
+# ── Liquidity Sweep 設定 (F13: 0→5点実装) ───────────────────────────────────────
+# 実装: chronos_liquidity_sweep.py — LiquiditySweepDetector クラス
+# 定義: 大出来高で前日高安・VWAP・IB端を突破 → 即反転 (stop hunt reversal)
+# 戦略連携: chronos_strategy_selector.py — env["liquidity_sweep_signal"]
+liquidity_sweep:
+  # δ-8 (2026-04-20): DEPRECATED — cycle4-12 redteam CRITICAL 4件未解消のため廃止。
+  # 復活条件: Tradovate MD WebSocket 確認 + volume_multiplier実データ検証 + redteam合格
+  # テスト側: tests/test_f12_f13_cycle6_20260419.py は enabled:false 前提で設計済み
+  enabled: false  # DEPRECATED: 復活は独立redteam合格後のみ
+
+  # 有効突破の最低出来高倍率 (直近20分平均比)
+  # 2.0倍以上の出来高を伴う突破のみを有効とする
+  volume_multiplier: 2.0
+
+  # 反転確認に必要な最低 ATR 倍率
+  # 突破幅が ATR × 0.5 以上でないと反転と認定しない
+  reversal_atr_multiplier: 0.5
+
+  # sweep 後の反転監視窓 (秒)
+  # 30秒以内に反転しない場合はシグナルを無効化
+  post_sweep_window_sec: 30
+
+  # 反転確認に必要な最低バー数
+  # 2本以上の 1分足が level を回復しない方向に向かっていること
+  require_reversal_confirmation_bars: 2
+
+  # 追跡する liquidity levels
+  # 前日高安・前日 VWAP・IB 高安 を標準で追跡
+  track_levels:
+    - prev_high    # 前日高値
+    - prev_low     # 前日安値
+    - prev_vwap    # 前日 VWAP
+    - ib_high      # IB (9:30-10:30 ET) 高値
+    - ib_low       # IB 安値
+
+  # エントリー方向
+  # sweep_high → short (上への stop hunt 後の下落)
+  # sweep_low  → long  (下への stop hunt 後の上昇)
+  entry_on_sweep_high: "short"
+  entry_on_sweep_low:  "long"
+
+  # 最低信頼度 (0.0-1.0)
+  # confidence がこれを下回る場合はエントリーしない
+  min_confidence: 0.60
+
+# ── Anchored VWAP 設定 (F11: 3→5点改善) ────────────────────────────────────────
+# Brian Shannon AlphaTrends 流の複数アンカー VWAP 運用
+# Source: data/research_mes_trader_day_20260419.md §B-3
+# 実装: chronos_strategy_selector.py — calc_anchored_vwap() / get_anchored_vwap_set()
+anchored_vwap:
+  # 使用アンカー種別（3アンカー）
+  anchors:
+    - prev_day_high    # 前日高値形成時刻をアンカーとした AVWAP
+    - prev_day_low     # 前日安値形成時刻をアンカーとした AVWAP
+    - last_fomc        # 直近FOMC発表時刻をアンカーとした AVWAP
+
+  # VWAP Reclaim シグナル判定の許容乖離率（%）
+  # 価格が AVWAP を この率以上上回った → Reclaim (long)
+  # 価格が AVWAP を この率以上下回った → Break (short)
+  tolerance_pct: 0.001   # 0.1%（ノイズ排除用バッファ）
+
+  # VWAP Reclaim 戦術の size_pct（アンカーごとに同一サイズ）
+  size_pct: 0.4          # ORB (1.0) より控えめなサイズ
+
+  # 適用時間帯（ET）: IB確定後から RTH クローズ前まで
+  active_window_start_et: "10:30"
+  active_window_end_et:   "15:30"

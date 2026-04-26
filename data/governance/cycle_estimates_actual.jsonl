@@ -1,0 +1,2 @@
+{"ts": "2026-04-22T07:39:49.244571+00:00", "task": "llm_budget_py_impl", "estimated_minutes": 20, "actual_minutes": 45, "ratio": 2.25, "note": "20260422"}
+{"ts": "2026-04-22T07:39:49.391974+00:00", "task": "legacy_write_block_impl", "estimated_minutes": 30, "actual_minutes": 90, "ratio": 3.0, "note": "20260422"}

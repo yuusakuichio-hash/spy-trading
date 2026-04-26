@@ -1,0 +1,37 @@
+{
+  "account_id": "mffu_mes_paper",
+  "timestamp": "2026-04-20T07:44:06.205311-04:00",
+  "save_reason": "paper_exit_test",
+  "account_type": "demo",
+  "positions": [],
+  "weekly_dd_usd": 0.0,
+  "daily_pnl_usd": 0.0,
+  "consecutive_losses": 0,
+  "phase_flags": {
+    "survival_mode": false,
+    "kill_switch_day": false,
+    "daily_halt": false,
+    "daily_soft_stop_active": false,
+    "news_window_violation": false
+  },
+  "best_single_day_profit_usd": 500.0,
+  "total_profit_usd": 0.0,
+  "winning_days_count": 0,
+  "daily_trade_count": 2,
+  "f12_cumulative_delta_bias": "neutral",
+  "f13_liquidity_sweep_signal": null,
+  "_prev_day_high": null,
+  "_prev_day_low": null,
+  "_prev_day_vwap": null,
+  "paper_roundtrip_test": {
+    "entry_ts": "2026-04-20T11:44:05.694608+00:00",
+    "exit_ts": "2026-04-20T11:44:06.204944+00:00",
+    "symbol": "MESH5",
+    "side": "Long",
+    "qty": 1,
+    "entry_price": 5250.0,
+    "exit_price": 5255.0,
+    "pnl_usd": 25.0,
+    "trade_id": "PAPER_TEST_01"
+  }
+}

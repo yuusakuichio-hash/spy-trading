@@ -1,0 +1,8 @@
+{"anomaly_id": "smoke_atlas_001", "message": "Atlas agent heartbeat stale 5min", "source": "smoke_test", "detected_at": "2026-04-21T13:55:44.158273+00:00", "responded_at": "2026-04-21T13:10:44.161490+00:00", "resolved_at": "2026-04-21T14:11:44.161795+00:00"}
+{"anomaly_id": "smoke_atlas_001_r0", "message": "recurring test anomaly", "source": "smoke", "detected_at": "2026-04-21T14:11:44.161937+00:00", "responded_at": null, "resolved_at": "2026-04-21T14:11:44.162054+00:00"}
+{"anomaly_id": "smoke_atlas_001", "message": "recurring test anomaly re0", "source": "smoke", "detected_at": "2026-04-21T14:11:44.162167+00:00", "responded_at": null, "resolved_at": "2026-04-21T14:11:44.162277+00:00"}
+{"anomaly_id": "smoke_atlas_001_r1", "message": "recurring test anomaly", "source": "smoke", "detected_at": "2026-04-21T14:11:44.162378+00:00", "responded_at": null, "resolved_at": "2026-04-21T14:11:44.162485+00:00"}
+{"anomaly_id": "smoke_atlas_001", "message": "recurring test anomaly re1", "source": "smoke", "detected_at": "2026-04-21T14:11:44.162595+00:00", "responded_at": null, "resolved_at": "2026-04-21T14:11:44.162705+00:00"}
+{"anomaly_id": "smoke_atlas_001_r2", "message": "recurring test anomaly", "source": "smoke", "detected_at": "2026-04-21T14:11:44.162812+00:00", "responded_at": null, "resolved_at": "2026-04-21T14:11:44.162922+00:00"}
+{"anomaly_id": "smoke_atlas_001", "message": "recurring test anomaly re2", "source": "smoke", "detected_at": "2026-04-21T14:11:44.163028+00:00", "responded_at": null, "resolved_at": "2026-04-21T14:11:44.163141+00:00"}
+{"anomaly_id": "smoke_atlas_001", "message": "4th recurrence", "source": "smoke", "detected_at": "2026-04-21T14:11:44.163261+00:00", "responded_at": null, "resolved_at": null}

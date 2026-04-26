@@ -1,0 +1,12 @@
+{
+  "timestamp": "2026-04-21T08:45:10.479585+09:00",
+  "trigger": "manual",
+  "api_key_set": true,
+  "report_content_length": 6937,
+  "audit_result": {
+    "raw_text": "{\n  \"critical_issues\": [\n    {\n      \"id\": \"CRIT-001\",\n      \"title\": \"Complete Absence of Pytest Results Leading to False 'overall_pass'\",\n      \"description\": \"The `governance/scores.json` report indicates `checks.pytest.",
+    "parse_error": true
+  },
+  "error": null,
+  "status": "completed"
+}

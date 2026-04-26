@@ -1,0 +1,70 @@
+name: Chronos Quality Gate
+
+on:
+  pull_request:
+    paths:
+      - 'chronos_*.py'
+      - 'common/**.py'
+      - 'tests/**.py'
+  push:
+    branches:
+      - main
+
+jobs:
+  schema-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt || true
+          pip install pytest "mutmut==2.4.4"
+      - name: Schema contract tests (MUST PASS)
+        run: |
+          python3 -m pytest tests/test_chronos_schema_contract.py -v --tb=short
+      - name: Regression baseline
+        run: |
+          python3 -m pytest tests/ -q
+
+  mutation-testing:
+    runs-on: ubuntu-latest
+    needs: schema-contract
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install mutmut
+        run: pip install "mutmut==2.4.4" pytest
+      - name: Run mutation testing
+        id: mutation
+        run: |
+          # MF-8α fix: mutmut 3.5.0 では --tsv オプションが存在しない。
+          # `mutmut results` の出力形式を直接パースする。
+          # 出力例:
+          #   1. [Survived] def foo(...):
+          #   2. [Killed] def bar(...):
+          # ": killed" / ": survived" のパターンは不正確なため、
+          # "[Survived]" / "[Killed]" タグで集計する。
+          mutmut run --paths-to-mutate common/kelly_sizer.py,common/plan_id.py,common/prop_firm_rules.py,chronos_pre_trade_check.py
+          mutmut results 2>&1 | tee mutation_results.txt
+          # mutmut results 出力: "X. [Status] ..." 形式
+          KILLED=$(grep -c "\[Killed\]" mutation_results.txt || echo 0)
+          SURVIVED=$(grep -c "\[Survived\]" mutation_results.txt || echo 0)
+          TOTAL=$((KILLED + SURVIVED))
+          # ゼロ除算防止
+          if [ "$TOTAL" -eq 0 ]; then TOTAL=1; fi
+          SCORE=$(( KILLED * 100 / TOTAL ))
+          echo "killed=$KILLED survived=$SURVIVED total=$TOTAL score=$SCORE"
+          echo "score=$SCORE" >> $GITHUB_OUTPUT
+      - name: Fail if mutation score < 50%
+        run: |
+          SCORE="${{ steps.mutation.outputs.score }}"
+          if [ -z "$SCORE" ] || [ "$SCORE" -lt "50" ]; then
+            echo "Mutation score ${SCORE}% < 50% — FAIL"
+            exit 1
+          fi
+          echo "Mutation score ${SCORE}% — PASS"

@@ -1,0 +1,18 @@
+{
+  "_source": "memory/project_atlas_monthly_rate_v6.md",
+  "_note": "数値直書き禁止規律 (feedback_no_numeric_citation.md) に従い、このファイルが唯一の数値参照元。変更時は memory/project_atlas_monthly_rate_v6.md と整合確認が必要。",
+  "_updated": "2026-04-25",
+  "monthly_rate": {
+    "conservative": 0.036,
+    "central": 0.074,
+    "optimistic": 0.119
+  },
+  "sharpe_threshold": {
+    "_source": "data/research_v3/phase0a_baseline_criteria_draft_20260423.md § KPI閾値 (ゆうさくさん確定 2026-04-23)",
+    "value": 1.5
+  },
+  "initial_equity_usd": {
+    "_source": "data/configs/atlas_paper_risk.yaml コメント (仮想 $100,000)",
+    "value": 100000.0
+  }
+}

@@ -102,10 +102,19 @@ class TestGetEntryParams(unittest.TestCase):
         res = self.eng.get_entry_params("NVDA")
         self.assertIsInstance(res, EarningsEngineResult)
 
-    def test_tactic_is_straddle_sell(self):
-        """tactic が straddle_sell であること"""
-        res = self.eng.get_entry_params("META")
+    def test_tactic_is_straddle_sell_for_etf(self):
+        """SPY/QQQ（ETF）は tactic が straddle_sell であること"""
+        # 個別株(META等)は ic_sell になった(2026-04-20 マルチ銘柄拡大)
+        res = self.eng.get_entry_params("SPY")
         self.assertEqual(res.tactic, "straddle_sell")
+
+    def test_tactic_is_ic_sell_for_individual_stock(self):
+        """個別株(META等)は tactic が ic_sell であること（マルチ銘柄拡大）"""
+        from unittest.mock import patch
+        with patch.object(self.eng, "calc_ivr_individual", return_value=65.0), \
+             patch.object(self.eng, "calc_em_hm_ratio", return_value=1.3):
+            res = self.eng.get_entry_params("META")
+        self.assertEqual(res.tactic, "ic_sell")
 
     def test_full_code_format(self):
         """full_code が 'US.<SYMBOL>' 形式であること"""
@@ -118,9 +127,15 @@ class TestGetEntryParams(unittest.TestCase):
         self.assertEqual(res.entry_before_min, ENTRY_BEFORE_EARNINGS_MIN)
 
     def test_size_factor_consistent_with_crush_rate(self):
-        """size_factor が crush_rate に対して正しく算出されること"""
+        """size_factor が crush_rate に対して正しく算出されること
+
+        H-7: _calc_size_factor(crush_rate, symbol=symbol) でペナルティが適用されるため、
+        symbol を省略した _calc_size_factor(crush_rate) とは値が異なる場合がある。
+        テストは symbol 込みで計算した値と比較する。
+        """
         res = self.eng.get_entry_params("NVDA")
-        expected_sf = self.eng._calc_size_factor(res.iv_crush_rate)
+        # H-7: symbol 引数付きで計算（ペナルティ考慮）
+        expected_sf = self.eng._calc_size_factor(res.iv_crush_rate, symbol="NVDA")
         self.assertAlmostEqual(res.size_factor, expected_sf)
 
 
@@ -194,6 +209,16 @@ class TestEstimateAnnouncementDt(unittest.TestCase):
         self.assertIsNone(entry)
 
 
+def _today_et() -> str:
+    """ETタイムゾーンで今日の日付を返す。get_today_candidates の内部ロジックと一致させる。"""
+    try:
+        import zoneinfo
+        import datetime as _dt
+        return _dt.datetime.now(zoneinfo.ZoneInfo("America/New_York")).date().isoformat()
+    except Exception:
+        return datetime.date.today().isoformat()
+
+
 class TestGetTodayCandidatesWithMock(unittest.TestCase):
     """get_today_candidates のモックテスト"""
 
@@ -203,8 +228,8 @@ class TestGetTodayCandidatesWithMock(unittest.TestCase):
     @patch.object(EarningsEngine, "_fetch_earnings_calendar")
     def test_filters_by_date(self, mock_fetch):
         """当日の銘柄のみが返ること (他の日付は除外)"""
-        today = datetime.date.today().isoformat()
-        yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+        today = _today_et()
+        yesterday = (datetime.datetime.strptime(today, "%Y-%m-%d").date() - datetime.timedelta(days=1)).isoformat()
         mock_fetch.return_value = [
             {"symbol": "NVDA", "date": today, "hour": "amc"},
             {"symbol": "TSLA", "date": yesterday, "hour": "amc"},
@@ -218,7 +243,7 @@ class TestGetTodayCandidatesWithMock(unittest.TestCase):
     def test_filters_by_min_iv_crush_rate(self, mock_fetch):
         """min_iv_crush_rate 未満の銘柄は除外されること"""
         eng = EarningsEngine(api_key="test_key", min_iv_crush_rate=0.99)
-        today = datetime.date.today().isoformat()
+        today = _today_et()
         mock_fetch.return_value = [
             {"symbol": "NVDA", "date": today, "hour": "bmo"},
         ]
@@ -229,7 +254,7 @@ class TestGetTodayCandidatesWithMock(unittest.TestCase):
     @patch.object(EarningsEngine, "_fetch_earnings_calendar")
     def test_sorted_by_iv_crush_rate_desc(self, mock_fetch):
         """candidates が iv_crush_rate 降順にソートされること"""
-        today = datetime.date.today().isoformat()
+        today = _today_et()
         mock_fetch.return_value = [
             {"symbol": "AAPL", "date": today, "hour": "amc"},   # 0.30
             {"symbol": "NVDA", "date": today, "hour": "amc"},   # 0.40
@@ -242,15 +267,17 @@ class TestGetTodayCandidatesWithMock(unittest.TestCase):
     @patch.object(EarningsEngine, "_fetch_earnings_calendar")
     def test_empty_symbol_is_skipped(self, mock_fetch):
         """symbol が空の entry はスキップされること"""
-        today = datetime.date.today().isoformat()
+        # require_em_over_hm=False で EM/HMフィルタを無効化してETF銘柄で確認
+        eng = EarningsEngine(api_key="test_key", require_em_over_hm=False)
+        today = _today_et()
         mock_fetch.return_value = [
             {"symbol": "", "date": today, "hour": "amc"},
-            {"symbol": "META", "date": today, "hour": "bmo"},
+            {"symbol": "SPY", "date": today, "hour": "bmo"},   # ETFはフィルタ対象外
         ]
-        candidates = self.eng.get_today_candidates()
+        candidates = eng.get_today_candidates()
         syms = [c.symbol for c in candidates]
         self.assertNotIn("", syms)
-        self.assertIn("META", syms)
+        self.assertIn("SPY", syms)
 
 
 class TestShouldEnterNow(unittest.TestCase):

@@ -1,0 +1,20 @@
+[2026-04-22 19:46:14 JST] Proposal bottleneck violation #37
+Pattern matched in assistant response without research evidence.
+Response excerpt (first 500 chars):
+専門用語を説明なしで使った規律違反。失礼。
+
+## GREEN の意味
+
+**GREEN = 信号の緑** = 「その条件が達成されている・OK」
+
+- **GREEN**（緑）= 条件 OK・進行可
+- **RED**（赤）= NG・差し戻し
+- **YELLOW**（黄）= 警告・要注意
+
+「必須 GREEN 5 項目」= **「絶対に OK になっていなければいけない 5 項目」**という意味です。
+
+## 書き直し
+
+以降の応答では日本語に置換：
+- GREEN → **「達成」**
+...

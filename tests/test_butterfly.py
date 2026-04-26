@@ -220,13 +220,12 @@ class TestCalcButterflyQty(unittest.TestCase):
 # Test 6: ButterflyEngine.should_trade_today — エントリー環境条件
 # ══════════════════════════════════════════════════════════════════════════════
 class TestShouldTradeToday(unittest.TestCase):
-    def test_spx_no_longer_excluded(self):
-        # [4/17事故対応] EXCLUDED_SYMBOLS廃止。US.SPX は IVR条件を満たせば取引対象。
-        # 混入防止は validate_code_for_symbol() の物理ブロックで実施。
+    def test_spx_single_dot_not_in_whitelist(self):
+        # H-14修正: EXCLUDED_SYMBOLS廃止 -> ALLOWED_SYMBOLS(symbol_meta)参照に統一。
+        # "US.SPX" (ドット1つ) はfutuの正式コードではなく WHITELIST に存在しない。
+        # 正式コードは "US..SPX" (ドット2つ)。WHITELIST未登録はskip = 正しい動作。
         result = ButterflyEngine.should_trade_today("US.SPX", ivr=15.0, ivr_low_threshold=30.0)
-        # EXCLUDED_SYMBOLS が空setになったため、IVR条件のみで判定される
-        # ivr=15.0 < ivr_low_threshold=30.0 → エントリー候補
-        self.assertTrue(result)
+        self.assertFalse(result, "US.SPX (ドット1つ) はWHITELIST未登録のためスキップされるべき")
 
     def test_spx_double_dot_no_longer_excluded(self):
         # [4/17事故対応] EXCLUDED_SYMBOLS廃止。US..SPX も取引対象に復活。

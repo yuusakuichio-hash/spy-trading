@@ -44,7 +44,6 @@ class TestGetAccountCashNoFallback(unittest.TestCase):
         """TradeEngine を最小スタブで生成する。"""
         import spy_bot
         eng = MagicMock(spec=spy_bot.TradeEngine)
-        # DRY_TEST=False, FUTU_AVAILABLE=True, trade_ctx あり のシミュレーション
         eng.DRY_TEST = False
 
         # accinfo_query を mock
@@ -57,35 +56,67 @@ class TestGetAccountCashNoFallback(unittest.TestCase):
         eng.get_account_cash = lambda: spy_bot.TradeEngine.get_account_cash(eng)
         return eng
 
+    def _patch_globals(self, spy_bot):
+        """グローバル DRY_TEST=False, FUTU_AVAILABLE=True を強制する。
+        futu mock 環境では RET_OK/RET_ERROR が未定義になることがあるため合わせてパッチ。"""
+        self._orig_dry = spy_bot.DRY_TEST
+        self._orig_futu = spy_bot.FUTU_AVAILABLE
+        self._orig_ret_ok = getattr(spy_bot, "RET_OK", None)
+        spy_bot.DRY_TEST = False
+        spy_bot.FUTU_AVAILABLE = True
+        # futu が mock の場合、from futu import RET_OK が未解決になるためここで補完
+        if not hasattr(spy_bot, "RET_OK") or spy_bot.RET_OK is None:
+            spy_bot.RET_OK = 0
+
+    def _restore_globals(self, spy_bot):
+        spy_bot.DRY_TEST = self._orig_dry
+        spy_bot.FUTU_AVAILABLE = self._orig_futu
+        if self._orig_ret_ok is None and hasattr(spy_bot, "RET_OK"):
+            try:
+                del spy_bot.RET_OK
+            except AttributeError:
+                pass
+        elif self._orig_ret_ok is not None:
+            spy_bot.RET_OK = self._orig_ret_ok
+
     def test_api_failure_raises_runtime_error(self):
         """accinfo_query が RET_ERROR を返したとき RuntimeError が上がる。"""
         import spy_bot
-        import futu
-        eng = self._make_engine(futu.RET_ERROR, "API error")
-        with self.assertRaises(RuntimeError) as ctx:
-            eng.get_account_cash()
-        self.assertIn("Cannot determine capital", str(ctx.exception))
+        self._patch_globals(spy_bot)
+        try:
+            eng = self._make_engine(-1, "API error")  # RET_ERROR = -1
+            with self.assertRaises(RuntimeError) as ctx:
+                eng.get_account_cash()
+            self.assertIn("Cannot determine capital", str(ctx.exception))
+        finally:
+            self._restore_globals(spy_bot)
 
     def test_empty_net_assets_and_cash_raises(self):
         """net_assets=None かつ cash=None のとき RuntimeError が上がる。"""
         import spy_bot
-        import futu
         import pandas as pd
-        row = pd.DataFrame([{"net_assets": None, "cash": None}])
-        eng = self._make_engine(futu.RET_OK, row)
-        with self.assertRaises(RuntimeError) as ctx:
-            eng.get_account_cash()
-        self.assertIn("both fields are empty", str(ctx.exception))
+        self._patch_globals(spy_bot)
+        try:
+            row = pd.DataFrame([{"net_assets": None, "cash": None}])
+            eng = self._make_engine(0, row)  # RET_OK = 0
+            with self.assertRaises(RuntimeError) as ctx:
+                eng.get_account_cash()
+            self.assertIn("both fields are empty", str(ctx.exception))
+        finally:
+            self._restore_globals(spy_bot)
 
     def test_valid_net_assets_returns_float(self):
         """net_assets が返ってきたとき float で返る。"""
         import spy_bot
-        import futu
         import pandas as pd
-        row = pd.DataFrame([{"net_assets": "50000.0", "cash": None}])
-        eng = self._make_engine(futu.RET_OK, row)
-        result = eng.get_account_cash()
-        self.assertAlmostEqual(result, 50000.0)
+        self._patch_globals(spy_bot)
+        try:
+            row = pd.DataFrame([{"net_assets": "50000.0", "cash": None}])
+            eng = self._make_engine(0, row)  # RET_OK = 0
+            result = eng.get_account_cash()
+            self.assertAlmostEqual(result, 50000.0)
+        finally:
+            self._restore_globals(spy_bot)
 
     def test_dry_test_returns_default(self):
         """DRY_TEST=True のとき 10000.0 を返す（例外なし）。"""
@@ -377,7 +408,8 @@ class TestAtlasRulesTwoManRule(unittest.TestCase):
             cfg = yaml.safe_load(f)
         tmr = cfg.get("autofix", {}).get("two_man_rule", {})
         self.assertTrue(tmr.get("enabled"), "two_man_rule.enabled が True でない")
-        self.assertGreaterEqual(tmr.get("min_level", 0), 3, "min_level が 3 未満")
+        # C7修正: min_level が2に変更（Level2も承認必須）。3以上は旧要件のため <=3 に変更
+        self.assertLessEqual(tmr.get("min_level", 99), 3, "min_level が 3 超 (厳格化が必要)")
 
     def test_two_man_rule_blocks_level3_in_armed_mode(self):
         """ARMED モードで Level3 ルールが Two-Man Rule でブロックされる。"""

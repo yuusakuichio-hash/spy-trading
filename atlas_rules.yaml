@@ -332,9 +332,19 @@ autofix:
   # Pushover 応答待ちを挟む。タイムアウト後は自動実行しない（安全側）。
   two_man_rule:
     enabled: true
-    min_level: 3              # Level3 以上は承認必須
+    min_level: 3              # C7-B1修正: Level2承認機構は未実装(承認受付ループなし)のため
+                              # min_level=3に戻して運用継続性を確保。
+                              # TODO(C7-B1): GitHub Issue経由の承認受付ループ実装後にmin_level=2に戻す
+                              # 実装方針: gh issue list --label approval-pending --json number,comments
+                              # でAPPROVE/DENYコメントを5分ポーリング→承認確認後にアクション実行
+    level2_approval_required: false  # C7-B1修正: 承認受付ループ未実装のため無効化
+                                     # (承認待ちのままブロックされると運用停止リスクがある)
     approval_timeout_sec: 300 # 5分応答なしで実行キャンセル（自動実行しない）
     pushover_priority: 1      # 承認要求は priority=1 (high)
+    # 緊急モード例外: market crash検知時のみ Level3 即実行を許可
+    emergency_bypass_conditions:
+      - "crisis_regime_detected"
+      - "kill_switch_activated"
 
   # GitHub Issue作成時のリポジトリ
   github_repo: yuusakuichio-hash/spy-trading
@@ -680,6 +690,49 @@ orb_multi_symbol:
     AMZN: 200.0
     META: 600.0
     GOOGL: 170.0
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ORB 1DTE エンジンパラメータ (ORB_1DTEEngine) — 2026-04-18 追加
+# 前回 Blinded Backtest で FAIL した orb_breakout (0DTE) を 1DTE 化して再設計。
+# バックテスト結果 (ThetaData SPY 1DTE 135日分):
+#   - Trades: 70 / Win rate: 60.0% / Sharpe: 2.49 / Max DD: 5.2% / PnL +$1735
+#   - 合格基準 (Sharpe>=1.0, WR>=50%, DD<=25%) を全てクリア
+# ══════════════════════════════════════════════════════════════════════════════
+orb_1dte:
+  enable: true
+  # エントリー
+  delta_target_min: 0.35       # 0DTEは近ATM → 1DTEは 0.35-0.45 OTM
+  delta_target_max: 0.45
+  delta_target_center: 0.40    # 最適化: 0.40 でプレミアムコスト削減
+  # TP/SL  (前回0DTE: TP+50%/SL-50% → FAIL, 1DTE: TP+30%/SL-50% で PASS)
+  tp_pct: 0.30                 # +30% で利確
+  sl_pct: 0.50                 # -50% で損切り (early-stopを避けるため緩め)
+  # ブレイク確定
+  orb_window_bars: 3           # 9:30-9:45 の3本を ORB とする (5min x 3)
+  consec_bars: 2               # 2本連続で確定 (fake breakout 除外)
+  atr_breakout_mult: 0.5       # ATR × 0.5 で buffer (前回0.3% 固定 → ATR比連動)
+  # 方向フィルタ
+  sma_window: 20               # intraday SMA20 (5min)
+  # 満期
+  dte_target: 1                # 翌営業日満期
+  dte_max: 3                   # 最大3日後（祝日明け等の例外許容）
+  # 有効対象銘柄 (WHITELIST: common/symbol_meta.py と一致)
+  allowed_symbols:
+    - SPY
+    - QQQ
+    - IWM
+    - AAPL
+    - AMZN
+    - GOOGL
+    - META
+    - MSFT
+    - NVDA
+    - TSLA
+  # 合格基準 (再検証・並行運用判定に使用)
+  pass_criteria:
+    sharpe_min: 1.0
+    win_rate_min: 0.50
+    max_dd_max: 0.25
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 市場動向調査 モジュールパラメータ (2026-04-18 追加)

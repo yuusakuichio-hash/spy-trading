@@ -1,0 +1,18 @@
+[2026-04-22 10:38:49 JST] Proposal bottleneck violation #8
+Pattern matched in assistant response without research evidence.
+Response excerpt (first 500 chars):
+規律追加完了。判断材料の要点を抽象表現で再掲します：
+
+## 判断材料（% 表記なし版）
+
+### ゆうさくさんの目標
+- 自動化比率を高く（介入は極小で快諾）
+- バグなし品質
+- 市場/仕様/戦略の自動追随
+- 最高成績
+
+### 根拠ファイル（内部実測ベース）
+- `data/research/codebase_metrics_20260422.md`（MI/CC/silent except 実測）
+- `data/research/test_reliability_20260422.md`（pytest カバレッジ実測）
+- `dat
+...

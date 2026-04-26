@@ -1,0 +1,31 @@
+{
+  "memory_as_completion": {
+    "trigger": "memory file created without matching code commit within deadline",
+    "severity": "HIGH",
+    "description": "メモリ保存を対策完了扱いにする認知バイアス。コード変更なしにfeedback/project違反メモを作成した場合に発火。",
+    "deadline_minutes_market_hours": 10,
+    "deadline_minutes_daytime": 20,
+    "deadline_minutes_maintenance": 60,
+    "deadline_minutes_weekend": 120,
+    "escalate_at_market_hours": 3,
+    "escalate_at_default": 2
+  },
+  "schedule_delay": {
+    "trigger": "phrases indicating postponement in agent prompts",
+    "severity": "MEDIUM",
+    "escalate_at": 3,
+    "description": "月曜から・後日・来週等の先延ばし語彙使用。discipline_guard.shでも検知するが重複記録で強化。"
+  },
+  "unnecessary_confirmation": {
+    "trigger": "confirmation phrases in response",
+    "severity": "MEDIUM",
+    "escalate_at": 3,
+    "description": "進めていい？・どれからやる？等の不要確認。discipline_guard.shでも検知。"
+  },
+  "pushover_omission": {
+    "trigger": "CRITICAL keyword in conversation without Pushover call within 5min",
+    "severity": "HIGH",
+    "escalate_at": 2,
+    "description": "CRITICALと言いながらPushover通知を出さないパターン。"
+  }
+}

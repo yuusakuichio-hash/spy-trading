@@ -1,0 +1,2 @@
+{"ts": "2026-04-21T23:27:28.315160+09:00", "claim_id": "test001", "claim_hash": "1d53ed960c2b5f16", "claim_text": "Atlas monthly rate is 8.89%", "source": "user_query", "status": "pending_verification"}
+{"ts": "2026-04-21T23:27:28.315749+09:00", "claim_id": "test001", "agent_count": 3, "majority_count": 2, "agreement_ratio": 0.667, "threshold": 0.6666666666666666, "passed": true, "disagreement_responses": [], "status": "verified"}

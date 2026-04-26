@@ -1,0 +1,12 @@
+[2026-04-23 09:25:22 JST] Proposal bottleneck violation #45
+Pattern matched in assistant response without research evidence.
+Response excerpt (first 500 chars):
+Redteam r4 → r3 CRITICAL 3 件は塞がり確認、ただし **新規 CRITICAL 2 件**（C4/C5）。ループ化の兆候が続いているので、ここで**判断必要事項**として一度報告します。
+
+## ★ Redteam r4 残存 CRITICAL
+
+| # | 指摘 | エッジケース頻度 |
+|---|---|---|
+| **C4** | `lines[-10000:]` 上限超え（10001 行以上前）の境界は未検出 → `lines[-200:]` fallback で C2 対応が崩れる | 長時間 compact 後 session のみ |
+| **C5** | f
+...

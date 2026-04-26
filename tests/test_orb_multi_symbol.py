@@ -29,6 +29,22 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from spy_bot import ORBEngine, ORBPosition
 
 
+# 2026-04-25: full-suite で別 test の monkeypatch leak (spy_bot.requests / cache 等) を
+# autouse fixture で毎テスト reset・xfail 削除可能化
+@pytest.fixture(autouse=True)
+def _reset_spy_bot_state(monkeypatch):
+    """spy_bot module の monkeypatch leak を毎テスト開始時に reset."""
+    try:
+        import spy_bot
+        import requests as real_requests
+        # spy_bot.requests を real requests に強制差し戻し
+        if hasattr(spy_bot, "requests"):
+            monkeypatch.setattr(spy_bot, "requests", real_requests, raising=False)
+    except ImportError:
+        pass
+    yield
+
+
 # ── ヘルパー ─────────────────────────────────────────────────────────────────
 
 FALLBACK_PRICES = {

@@ -10,11 +10,18 @@ from common.pre_trade_check import check_order, OrderContext
 from common import kill_switch
 
 
+import common.pre_trade_check as _ptc
+
 @pytest.fixture(autouse=True)
 def _reset_kill_switch():
     kill_switch.deactivate()
+    # H-1修正: テスト間で _recent_orders/_recent_keys の状態が持ち越されないようにクリア
+    _ptc._recent_orders.clear()
+    _ptc._recent_keys.clear()
     yield
     kill_switch.deactivate()
+    _ptc._recent_orders.clear()
+    _ptc._recent_keys.clear()
 
 
 def _normal_ctx(**overrides):

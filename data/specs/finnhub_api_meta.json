@@ -1,0 +1,10 @@
+{
+  "last_checked": "2026-04-14",
+  "version": "free plan (無料プラン)",
+  "endpoints_cached": [
+    "GET /v1/quote",
+    "GET /v1/stock/candle",
+    "GET /v1/forex/rates"
+  ],
+  "notes": "rate_limit=60req/min(free). /v1/quoteはSPY現在値フォールバック。/v1/stock/candleはSPY日足(SMA20/VRP計算)フォールバック。/v1/forex/ratesはUSDJPY月次CSV用。futuが使えない場合のみ呼ばれる。"
+}

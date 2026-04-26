@@ -1,0 +1,12 @@
+[2026-04-22 10:48:07 JST] Proposal bottleneck violation #9
+Pattern matched in assistant response without research evidence.
+Response excerpt (first 500 chars):
+正直に答えると **リスクあります**。過去にも今朝の TOP 100 agent 並列で 109件中 CRITICAL 19件が噴出しました。並列設計次第で増やすも減らすもあり得ます。
+
+## 並列で起きうるバグ（今日起こりうる具体）
+
+| 原因 | 起きるバグ |
+|---|---|
+| 同じファイル編集競合 | 後書き勝ちで別 agent の修正消滅 |
+| 仕様認識のズレ | agent A の戦術ロジックと agent B の戦術ロジックで銘柄フィル
+...

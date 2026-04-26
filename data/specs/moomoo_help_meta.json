@@ -1,0 +1,16 @@
+{
+  "last_checked": "2026-04-14",
+  "version": "futu_api 10.2.6218 / OpenD Mac Port 11111",
+  "endpoints_cached": [
+    "OpenQuoteContext.get_market_snapshot",
+    "OpenQuoteContext.request_history_kline",
+    "OpenQuoteContext.get_option_chain",
+    "OpenSecTradeContext.get_acc_list",
+    "OpenSecTradeContext.accinfo_query",
+    "OpenSecTradeContext.place_order",
+    "OpenSecTradeContext.order_list_query",
+    "OpenSecTradeContext.position_list_query",
+    "OpenSecTradeContext.unlock_trade"
+  ],
+  "notes": "security_firm=FUTUJP, filter_trdmarket=US。SIMULATE口座はunlock不要。US Securities相場権限(us_qot_right)がないとSPYスナップショットが失敗→Finnhubフォールバック。VIXはUS.VIX。オプションチェーンはstart==endで単一DTE指定。"
+}

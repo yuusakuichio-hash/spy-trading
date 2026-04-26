@@ -1,0 +1,223 @@
+"""atlas_v3/bots/main.py — subprocess 境界 spy_bot.py launcher。
+
+設計方針（Redteam 対案 2026-04-25 採択）
+-----------------------------------------
+- delegate 禁止: spy_bot.py を import して SPYCreditSpreadBot を直接呼ぶ実装は却下。
+- subprocess 境界: sys.executable + spy_bot.py を Popen で起動し、プロセス間を
+  完全に隔離する。logger / env / PID はすべて spy_bot プロセス側で完結する。
+- SIGTERM forward: launchd が atlas_v3.bots プロセスを停止するとき、
+  子プロセス (spy_bot) にも SIGTERM を転送して二重プロセス残留を防ぐ。
+- exit code 透過: spy_bot の終了コードをそのまま sys.exit() に渡す。
+- spy_bot.py 書換ゼロ: このモジュールは spy_bot.py を一切変更しない。
+
+使用例
+------
+    python3 -m atlas_v3.bots --mode paper
+    python3 -m atlas_v3.bots --mode paper --dry-run
+    python3 -m atlas_v3.bots --mode paper --test-connect
+    python3 -m atlas_v3.bots --mode live
+    python3 -m atlas_v3.bots --mode paper --no-orb --no-calendar --no-multi
+
+argv → spy_bot.py argv 変換表
+------------------------------
+    --mode paper        → --paper
+    --mode live         → (フラグなし、spy_bot のデフォルト)
+    --mode dry          → --paper --dry-test   (dry は paper + dry-test の組合せ)
+    --mode test-connect → --paper --test-connect
+    --dry-run           → --dry-test
+    --test-connect      → --test-connect
+    --no-orb            → --no-orb
+    --no-calendar       → --no-calendar
+    --no-multi          → --no-multi
+"""
+from __future__ import annotations
+
+import argparse
+import logging
+import os
+import pathlib
+import signal
+import subprocess
+import sys
+from typing import Optional
+
+log = logging.getLogger("atlas.bots.main")
+
+# spy_bot.py は trading リポジトリルートに存在する（schg lock で変更不可）
+_TRADING_ROOT = pathlib.Path(__file__).resolve().parents[3]  # atlas_v3/bots/ → root
+_SPY_BOT_PATH = _TRADING_ROOT / "spy_bot.py"
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """ArgumentParser を構築して返す（テストから単体呼び出し可能）。"""
+    parser = argparse.ArgumentParser(
+        prog="python3 -m atlas_v3.bots",
+        description="atlas_v3.bots — subprocess 境界で spy_bot.py を起動する薄い launcher",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["paper", "live", "dry", "test-connect"],
+        required=True,
+        help=(
+            "実行モード: "
+            "paper=ペーパートレード / "
+            "live=本番 / "
+            "dry=paper+dry-test (futu 接続なし) / "
+            "test-connect=接続テストのみ"
+        ),
+    )
+    parser.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        help="futu 接続なし・市場時間外でも全ロジックをテスト (spy_bot --dry-test 相当)",
+    )
+    parser.add_argument(
+        "--no-orb",
+        dest="no_orb",
+        action="store_true",
+        help="ORB 買い戦略を無効化（spy_bot --no-orb に転送）",
+    )
+    parser.add_argument(
+        "--no-calendar",
+        dest="no_calendar",
+        action="store_true",
+        help="カレンダースプレッド戦略を無効化（spy_bot --no-calendar に転送）",
+    )
+    parser.add_argument(
+        "--no-multi",
+        dest="no_multi",
+        action="store_true",
+        help="マルチ銘柄同時運用を無効化（spy_bot --no-multi に転送）",
+    )
+    return parser
+
+
+def build_spy_bot_argv(args: argparse.Namespace) -> list[str]:
+    """parser 解析済み args から spy_bot.py に渡す argv を構築する。
+
+    Returns
+    -------
+    list[str]
+        spy_bot.py 以降の引数リスト（sys.executable と spy_bot パスは含まない）。
+    """
+    spy_argv: list[str] = []
+
+    # --mode 変換
+    if args.mode == "paper":
+        spy_argv.append("--paper")
+    elif args.mode == "live":
+        pass  # spy_bot のデフォルトが live
+    elif args.mode == "dry":
+        spy_argv.extend(["--paper", "--dry-test"])
+    elif args.mode == "test-connect":
+        spy_argv.extend(["--paper", "--test-connect"])
+
+    # --dry-run は --dry-test に変換（mode=dry と重複しても idempotent）
+    if args.dry_run and "--dry-test" not in spy_argv:
+        spy_argv.append("--dry-test")
+
+    # フラグは名前変換なしでそのまま転送
+    if args.no_orb:
+        spy_argv.append("--no-orb")
+    if args.no_calendar:
+        spy_argv.append("--no-calendar")
+    if args.no_multi:
+        spy_argv.append("--no-multi")
+
+    return spy_argv
+
+
+def launch_spy_bot(
+    spy_argv: list[str],
+    spy_bot_path: pathlib.Path = _SPY_BOT_PATH,
+    inherit_stdio: bool = True,
+) -> subprocess.Popen:
+    """spy_bot.py を subprocess で起動して Popen オブジェクトを返す。
+
+    Parameters
+    ----------
+    spy_argv : list[str]
+        spy_bot.py に渡す引数リスト（build_spy_bot_argv の返値）。
+    spy_bot_path : pathlib.Path
+        spy_bot.py の絶対パス。テストで差し替え可能。
+    inherit_stdio : bool
+        True のとき stdout/stderr を親プロセスに継承する（launchd 運用時）。
+        False のとき PIPE にする（テスト用）。
+    """
+    cmd = [sys.executable, str(spy_bot_path)] + spy_argv
+    log.info("launch_spy_bot: cmd=%s", cmd)
+
+    kwargs: dict = {
+        "cwd": str(spy_bot_path.parent),
+        "env": os.environ.copy(),
+    }
+    if inherit_stdio:
+        kwargs["stdout"] = None  # 継承
+        kwargs["stderr"] = None  # 継承
+    else:
+        kwargs["stdout"] = subprocess.PIPE
+        kwargs["stderr"] = subprocess.PIPE
+
+    return subprocess.Popen(cmd, **kwargs)
+
+
+def _setup_sigterm_forward(proc: subprocess.Popen) -> None:
+    """SIGTERM を受け取ったら子プロセスにも転送するハンドラを登録する。
+
+    launchd が親プロセスに SIGTERM を送ると、このハンドラが子プロセスにも
+    SIGTERM を転送し、二重プロセス残留を防ぐ。
+    """
+    def _forward(signum: int, frame: object) -> None:  # noqa: ANN001
+        log.info("SIGTERM 受信 → spy_bot (pid=%d) に転送", proc.pid)
+        try:
+            proc.send_signal(signal.SIGTERM)
+        except (ProcessLookupError, OSError):
+            pass  # すでに終了していれば無視
+
+    signal.signal(signal.SIGTERM, _forward)
+    log.info("SIGTERM forward 登録完了 (spy_bot pid=%d)", proc.pid)
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    """CLI エントリポイント。spy_bot の終了コードを返す。
+
+    Parameters
+    ----------
+    argv : list[str] | None
+        引数リスト（None のとき sys.argv[1:] を使用）。テストから直接渡せる。
+    """
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    spy_argv = build_spy_bot_argv(args)
+    log.info(
+        "atlas_v3.bots.main: mode=%s dry_run=%s no_orb=%s no_calendar=%s no_multi=%s "
+        "→ spy_argv=%s",
+        args.mode, args.dry_run, args.no_orb, args.no_calendar, args.no_multi,
+        spy_argv,
+    )
+
+    proc = launch_spy_bot(spy_argv, inherit_stdio=True)
+    _setup_sigterm_forward(proc)
+
+    log.info("spy_bot 起動完了 (pid=%d) — 終了を待機", proc.pid)
+    try:
+        proc.wait()
+    except KeyboardInterrupt:
+        log.info("KeyboardInterrupt — spy_bot (pid=%d) に SIGTERM 送信", proc.pid)
+        proc.send_signal(signal.SIGTERM)
+        proc.wait()
+
+    rc = proc.returncode
+    log.info("spy_bot 終了 (pid=%d, rc=%d)", proc.pid, rc)
+    return rc if rc is not None else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

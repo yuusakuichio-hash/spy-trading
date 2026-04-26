@@ -1,0 +1,12 @@
+[2026-04-22 17:09:29 JST] Proposal bottleneck violation #26
+Pattern matched in assistant response without research evidence.
+Response excerpt (first 500 chars):
+**完全に同意・必須です**。これをやらないと今日作ったもの自体が新たな負債になります。
+
+## 同意の理由
+
+今日作成したものが既に**他に同じパターンを生んでいる証拠**：
+- `scripts/deadman.py` を新規作成 → 既存 `scripts/dead_man_switch.py` と重複（途中で発覚・削除済）
+- inventory script が「今日作成 memory を死コード判定」 → mtime フィルタで修正
+- これらは **「既存確認せず新
+...

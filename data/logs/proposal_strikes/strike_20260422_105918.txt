@@ -1,0 +1,13 @@
+[2026-04-22 10:59:17 JST] Proposal bottleneck violation #10
+Pattern matched in assistant response without research evidence.
+Response excerpt (first 500 chars):
+両方とも重要な指摘。正直に答えます。
+
+## 1. Chronos もマルチ銘柄マルチ戦術
+
+**Yes、そうすべきです**。
+
+現状設計は ORB + MES/MNQ に限定されてますが、本来的には：
+- **銘柄**: MES / MNQ / M2K / ES / NQ / RTY / MYM 等（CME E-mini 先物）
+- **戦術**: `chronos_strategy_selector.py` に既に 11 戦術骨格あり（ORB / VIX term structure / ES-NQ spread / session strategy / asia range fade / gap fill / volume profile / economic event 
+...

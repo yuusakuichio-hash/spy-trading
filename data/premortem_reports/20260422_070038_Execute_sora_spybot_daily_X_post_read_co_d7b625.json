@@ -1,0 +1,178 @@
+{
+  "task": "Execute @sora_spybot daily X post: read condor_pnl.json for previous ET day exit events, generate fact-only post under 268 X-chars, invoke sns_daily_post.py post_to_x(), save to data/sns/daily_20260422.txt, Pushover report",
+  "files": [
+    "data/condor_pnl.json",
+    "sns_daily_post.py"
+  ],
+  "generated_at": "2026-04-22T07:00:38",
+  "source": "fallback",
+  "data": {
+    "scenarios": [
+      {
+        "id": "F01",
+        "title": "Bearer トークン期限切れで全リクエスト401",
+        "scenario": "Execute @sora_spybot daily X post: read condor_pnl.json for ... に対し『Bearer トークン期限切れで全リクエスト401』が発生し、復旧不能または無音で不正動作する。",
+        "probability": "high",
+        "impact": "catastrophic",
+        "detection": "ログ監視 / smoke test / assert",
+        "mitigation": "事前バックアップ・DRY_RUN・pre-check・段階リリース"
+      },
+      {
+        "id": "F02",
+        "title": "エンドポイントURL変更で silent 404",
+        "scenario": "Execute @sora_spybot daily X post: read condor_pnl.json for ... に対し『エンドポイントURL変更で silent 404』が発生し、復旧不能または無音で不正動作する。",
+        "probability": "medium",
+        "impact": "high",
+        "detection": "ログ監視 / smoke test / assert",
+        "mitigation": "事前バックアップ・DRY_RUN・pre-check・段階リリース"
+      },
+      {
+        "id": "F03",
+        "title": "レート制限429で発注ループが詰まる",
+        "scenario": "Execute @sora_spybot daily X post: read condor_pnl.json for ... に対し『レート制限429で発注ループが詰まる』が発生し、復旧不能または無音で不正動作する。",
+        "probability": "medium",
+        "impact": "high",
+        "detection": "ログ監視 / smoke test / assert",
+        "mitigation": "事前バックアップ・DRY_RUN・pre-check・段階リリース"
+      },
+      {
+        "id": "F04",
+        "title": "タイムアウト未設定でスレッドが永久ブロック",
+        "scenario": "Execute @sora_spybot daily X post: read condor_pnl.json for ... に対し『タイムアウト未設定でスレッドが永久ブロック』が発生し、復旧不能または無音で不正動作する。",
+        "probability": "medium",
+        "impact": "high",
+        "detection": "ログ監視 / smoke test / assert",
+        "mitigation": "事前バックアップ・DRY_RUN・pre-check・段階リリース"
+      },
+      {
+        "id": "F05",
+        "title": "リプレイ攻撃でべき等でない操作が二重実行",
+        "scenario": "Execute @sora_spybot daily X post: read condor_pnl.json for ... に対し『リプレイ攻撃でべき等でない操作が二重実行』が発生し、復旧不能または無音で不正動作する。",
+        "probability": "low",
+        "impact": "catastrophic",
+        "detection": "ログ監視 / smoke test / assert",
+        "mitigation": "事前バックアップ・DRY_RUN・pre-check・段階リリース"
+      },
+      {
+        "id": "F06",
+        "title": "TLS証明書期限切れで接続拒否",
+        "scenario": "Execute @sora_spybot daily X post: read condor_pnl.json for ... に対し『TLS証明書期限切れで接続拒否』が発生し、復旧不能または無音で不正動作する。",
+        "probability": "low",
+        "impact": "high",
+        "detection": "ログ監視 / smoke test / assert",
+        "mitigation": "事前バックアップ・DRY_RUN・pre-check・段階リリース"
+      },
+      {
+        "id": "F07",
+        "title": "JSONレスポンスのフィールド名変更で KeyError",
+        "scenario": "Execute @sora_spybot daily X post: read condor_pnl.json for ... に対し『JSONレスポンスのフィールド名変更で KeyError』が発生し、復旧不能または無音で不正動作する。",
+        "probability": "medium",
+        "impact": "high",
+        "detection": "ログ監視 / smoke test / assert",
+        "mitigation": "事前バックアップ・DRY_RUN・pre-check・段階リリース"
+      },
+      {
+        "id": "F08",
+        "title": "ネットワーク瞬断でリトライなし→発注欠落",
+        "scenario": "Execute @sora_spybot daily X post: read condor_pnl.json for ... に対し『ネットワーク瞬断でリトライなし→発注欠落』が発生し、復旧不能または無音で不正動作する。",
+        "probability": "medium",
+        "impact": "high",
+        "detection": "ログ監視 / smoke test / assert",
+        "mitigation": "事前バックアップ・DRY_RUN・pre-check・段階リリース"
+      }
+    ],
+    "hazop": [
+      {
+        "word": "No/None",
+        "risk": "No/None適用時の逸脱",
+        "mitigation": "その要素が完全に欠落したら？"
+      },
+      {
+        "word": "More",
+        "risk": "More適用時の逸脱",
+        "mitigation": "想定より多すぎる/大きすぎる/速すぎる場合は？"
+      },
+      {
+        "word": "Less",
+        "risk": "Less適用時の逸脱",
+        "mitigation": "想定より少ない/小さい/遅い場合は？"
+      },
+      {
+        "word": "As well as",
+        "risk": "As well as適用時の逸脱",
+        "mitigation": "想定外の追加が混入したら？"
+      },
+      {
+        "word": "Part of",
+        "risk": "Part of適用時の逸脱",
+        "mitigation": "一部だけ成立・残りが欠落したら？"
+      },
+      {
+        "word": "Reverse",
+        "risk": "Reverse適用時の逸脱",
+        "mitigation": "逆方向・真逆の動作が起きたら？"
+      },
+      {
+        "word": "Other than / Instead of",
+        "risk": "Other than / Instead of適用時の逸脱",
+        "mitigation": "全く別のものに置き換わったら？"
+      },
+      {
+        "word": "Early",
+        "risk": "Early適用時の逸脱",
+        "mitigation": "想定より早く起きたら？"
+      },
+      {
+        "word": "Late",
+        "risk": "Late適用時の逸脱",
+        "mitigation": "想定より遅く起きたら？"
+      },
+      {
+        "word": "Before",
+        "risk": "Before適用時の逸脱",
+        "mitigation": "前工程より前に発火したら？"
+      },
+      {
+        "word": "After",
+        "risk": "After適用時の逸脱",
+        "mitigation": "後続が先に終わったら？"
+      }
+    ],
+    "competing_hypotheses": [
+      {
+        "hypothesis": "実装は意図通り動く",
+        "evidence_for": "仕様書通り",
+        "evidence_against": "本番未検証",
+        "test": "smoke test"
+      },
+      {
+        "hypothesis": "隠れた副作用がある",
+        "evidence_for": "既存コードとの結合部",
+        "evidence_against": "なし",
+        "test": "既存回帰テスト"
+      },
+      {
+        "hypothesis": "前提条件が既に壊れている",
+        "evidence_for": "依存サービスの稼働状況不明",
+        "evidence_against": "直近稼働ログあり",
+        "test": "依存 healthcheck"
+      }
+    ],
+    "judgment": {
+      "overall_risk": "medium",
+      "go_no_go": "CONDITIONAL_GO",
+      "top3_blockers": [
+        "F01",
+        "F04",
+        "F05"
+      ],
+      "required_gates": [
+        "Auth smoke test (401確認)",
+        "Retry/timeout 設定確認",
+        "冪等性・べき等ガード実装"
+      ]
+    },
+    "_fallback_reason": "no_api_key",
+    "_category": "web_api"
+  }
+}

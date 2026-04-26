@@ -1,0 +1,15 @@
+[2026-04-23 18:47:36 JST] Proposal bottleneck violation #51
+Pattern matched in assistant response without research evidence.
+Response excerpt (first 500 chars):
+Strategist 到着：**現提案は不十分**、severity cap + ラウンド上限 + Sprint 閉鎖 gate 物理化必須。
+
+## ★ Strategist 推奨（より洗練）
+
+| 手法 | 内容 |
+|---|---|
+| Severity cap | 1 ラウンド High 以上のみ物理限定 |
+| Round limit | ラウンド上限 2 回で打切り |
+| Finding budget | 新規 CRITICAL 上限設定・超過分は強制 carryover |
+| Fixed scope contract | Sprint 冒頭で監査範囲凍結 |
+| **Sprint 閉鎖 gate 物理化** | **ca
+...

@@ -1,0 +1,16 @@
+[settings]
+# MF-8/MF-9 fix: prop_firm_rules.py と chronos_pre_trade_check.py を対象に追加
+paths_to_mutate = [
+    "common/kelly_sizer.py",
+    "common/plan_id.py",
+    "common/prop_firm_rules.py",
+    "chronos_pre_trade_check.py"
+]
+# MF-8 fix: tests_dir は mutmut 3.x の stats collection で pytest に渡されるディレクトリ/ファイル。
+# tests/test_prop_firm_rules.py のみを指定してコアロジックのカバレッジを収集する。
+tests_dir = "tests/test_prop_firm_rules.py"
+also_copy = [
+    "common",
+    "conftest.py"
+]
+runner = "python3 -m pytest tests/test_chronos_schema_contract.py tests/test_prop_firm_rules.py tests/test_audit_high_phase2.py tests/test_critical_7_8_10.py -q --tb=no"

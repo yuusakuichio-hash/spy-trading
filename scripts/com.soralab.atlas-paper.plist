@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Atlas v3 Paper MonitorDaemon — 独立 entry point (判断 1) / C1 fix 2026-04-23 -->
+    <!-- C-R7-5 fix: scripts/ に PLIST_SRC として配置 (install_atlas_paper_daemon.sh 参照用) -->
+    <!-- 起動: bash scripts/install_atlas_paper_daemon.sh -->
+    <!-- 停止: launchctl bootout gui/$UID/com.soralab.atlas-paper -->
+    <!-- ログ: /Users/yuusakuichio/trading/data/state_v3/atlas-paper-stdout.log -->
+
+    <key>Label</key>
+    <string>com.soralab.atlas-paper</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/python3</string>
+        <string>-m</string>
+        <string>atlas_v3.main</string>
+        <string>--mode</string>
+        <string>paper</string>
+        <!-- 2026-04-24 23:45 JST: yfinance → moomoo 切替 (案 F 完成後) -->
+        <!-- OpenD preemptive relogin 稼働中のため認証期限切れは自動更新される -->
+        <!-- 認証失敗時は ADR-015 B で yfinance auto-fallback (safety net) -->
+        <string>--provider</string>
+        <string>moomoo</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/yuusakuichio/trading</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>ATLAS_MODE</key>
+        <string>paper</string>
+        <key>MOOMOO_TRD_ENV</key>
+        <string>SIMULATE</string>
+        <key>PYTHONPATH</key>
+        <string>/Users/yuusakuichio/trading</string>
+        <!-- C1 fix: TZ 明示でタイムゾーン混乱を排除 -->
+        <key>TZ</key>
+        <string>America/New_York</string>
+    </dict>
+
+    <!-- C1 fix: StartCalendarInterval を削除し KeepAlive=true 常駐 daemon に変更
+         理由: StartCalendarInterval の Hour はローカルタイム(JST)ではなくシステムクロック依存。
+               Hour=0 の記述とコメント「JST 09:00」は矛盾（UTC 00:00 != JST 09:00 を
+               CalendarInterval が JST で解釈しない）。
+               さらに macOS スリープ中は CalendarInterval イベントが失火する。
+               24h 監視 daemon は常駐化が正しい設計。
+         C1 fix: TZ=America/New_York を EnvironmentVariables に追加 -->
+
+    <!-- 常駐 daemon: プロセス死亡時に即時再起動 (max 60s 間隔) -->
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>60</integer>
+
+    <!-- stdout / stderr ログ -->
+    <key>StandardOutPath</key>
+    <string>/Users/yuusakuichio/trading/data/state_v3/atlas-paper-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/yuusakuichio/trading/data/state_v3/atlas-paper-stderr.log</string>
+
+    <!-- macOS: プロセスが終了したらシステムが kill する時間 -->
+    <key>ExitTimeout</key>
+    <integer>30</integer>
+
+    <!-- HIGH-R6-4 fix: OOM で Mac 全停止防止のためリソース制限を追加
+         SoftResourceLimits: 超えると SIGXCPU/SIGXFSZ が送信（graceful stop の機会あり）
+         HardResourceLimits: 超えると SIGKILL（即死）
+         RSS (Resident Set Size): 物理メモリ使用量上限
+         NumberOfFiles: ファイルディスクリプタ上限
+         参考: launchd.plist(5) man page のリソース制限セクション -->
+    <key>SoftResourceLimits</key>
+    <dict>
+        <!-- RSS 上限 400MB (ソフト) -->
+        <key>ResidentSetSize</key>
+        <integer>419430400</integer>
+        <!-- ファイルディスクリプタ上限 1024 -->
+        <key>NumberOfFiles</key>
+        <integer>1024</integer>
+    </dict>
+    <key>HardResourceLimits</key>
+    <dict>
+        <!-- RSS 上限 500MB (ハード) — OOM kill で Mac 全体に影響しないよう上限設定 -->
+        <key>ResidentSetSize</key>
+        <integer>524288000</integer>
+        <!-- ファイルディスクリプタ上限 2048 (ハード) -->
+        <key>NumberOfFiles</key>
+        <integer>2048</integer>
+    </dict>
+</dict>
+</plist>

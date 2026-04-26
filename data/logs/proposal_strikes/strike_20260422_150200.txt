@@ -1,0 +1,14 @@
+[2026-04-22 15:01:59 JST] Proposal bottleneck violation #14
+Pattern matched in assistant response without research evidence.
+Response excerpt (first 500 chars):
+**重要な発見**: `gemini-2.5-pro` は **Free Tier で使用不可**（quota limit 0）。先ほどの費用試算の前提が崩れました。
+
+## 検証結果
+
+| Model | Free Tier | 動作 |
+|---|---|---|
+| `gemini-flash-latest`（2.5 Flash） | ✅ 利用可 | 応答成功（`SORA_LAB_TEST_OK`・トークン正常） |
+| `gemini-2.5-pro` | ❌ **限度 0** | 429 Quota exceeded・Free Tier では呼べない |
+
+agent レポートの前提（「Gemini 2.5 Pro を Free Tier で Navigator / A
+...
