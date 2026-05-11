@@ -1,0 +1,10 @@
+.env
+.env.local
+data/logs/*.log
+data/logs/*.jsonl
+data/claim_ledger.jsonl
+data/logs/pending_proposal_violations.md
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
